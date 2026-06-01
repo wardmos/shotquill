@@ -27,6 +27,9 @@ class MacHotkeyManager(HotkeyManager):
     def unregister(self, combo: str) -> None:
         self._bindings.pop(combo, None)
 
+    def clear(self) -> None:
+        self._bindings.clear()
+
     def start(self) -> None:
         self.stop()
         if not self._bindings:

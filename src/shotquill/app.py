@@ -3,8 +3,7 @@
 """Application entry point: a menu-bar-resident Qt app.
 
 Full-screen (``⌥S``) and region (``⌥A``) capture both open the annotation
-editor — region capture first lets the user drag a selection on a frozen,
-dimmed screenshot.
+editor. Hotkeys, save directory, and image format are editable in Settings.
 """
 
 import subprocess
@@ -12,17 +11,25 @@ import sys
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
+from shotquill import __version__
 from shotquill.capture.macos import MacScreenCapturer
 from shotquill.config import Config, human_readable_hotkey
 from shotquill.hotkeys.macos import MacHotkeyManager
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow
 from shotquill.ui.overlay import RegionOverlay
+from shotquill.ui.settings import SettingsDialog
 
 _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+)
+_ABOUT = (
+    f"<b>Shotquill</b> {__version__}<br><br>"
+    "截图与标注工具。<br>"
+    "© 2026 wardmos · Apache-2.0<br>"
+    "基于 Qt (PySide6, LGPLv3)。"
 )
 
 
@@ -67,40 +74,55 @@ class ShotquillApp:
         self._bridge.region_requested.connect(self._capture_region)
         self._bridge.fullscreen_requested.connect(self._capture_fullscreen)
 
+        self._region_action: QAction | None = None
+        self._fullscreen_action: QAction | None = None
         self._tray = self._build_tray()
-        self._register_hotkeys()
+        self._apply_hotkeys()
 
     def _build_tray(self) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(_build_icon(), self._app)
         tray.setToolTip("Shotquill")
 
         menu = QMenu()
-        region_key = human_readable_hotkey(self._config.hotkey("region_capture"))
-        fullscreen_key = human_readable_hotkey(self._config.hotkey("fullscreen_capture"))
+        self._region_action = QAction(menu)
+        self._region_action.triggered.connect(self._capture_region)
+        self._fullscreen_action = QAction(menu)
+        self._fullscreen_action.triggered.connect(self._capture_fullscreen)
+        self._refresh_shortcut_labels()
 
-        region = QAction(f"区域截图\t{region_key}", menu)
-        region.triggered.connect(self._capture_region)
-
-        fullscreen = QAction(f"全屏截图\t{fullscreen_key}", menu)
-        fullscreen.triggered.connect(self._capture_fullscreen)
-
+        settings = QAction("设置…", menu)
+        settings.triggered.connect(self._open_settings)
+        about = QAction("关于 Shotquill", menu)
+        about.triggered.connect(self._show_about)
         permissions = QAction("打开屏幕录制权限设置…", menu)
         permissions.triggered.connect(self._open_privacy_settings)
-
         quit_action = QAction("退出 Shotquill", menu)
         quit_action.triggered.connect(self._app.quit)
 
-        menu.addAction(region)
-        menu.addAction(fullscreen)
+        menu.addAction(self._region_action)
+        menu.addAction(self._fullscreen_action)
         menu.addSeparator()
+        menu.addAction(settings)
         menu.addAction(permissions)
+        menu.addAction(about)
+        menu.addSeparator()
         menu.addAction(quit_action)
 
         tray.setContextMenu(menu)
         tray.show()
         return tray
 
-    def _register_hotkeys(self) -> None:
+    def _refresh_shortcut_labels(self) -> None:
+        region_key = human_readable_hotkey(self._config.hotkey("region_capture"))
+        fullscreen_key = human_readable_hotkey(self._config.hotkey("fullscreen_capture"))
+        if self._region_action is not None:
+            self._region_action.setText(f"区域截图\t{region_key}")
+        if self._fullscreen_action is not None:
+            self._fullscreen_action.setText(f"全屏截图\t{fullscreen_key}")
+
+    def _apply_hotkeys(self) -> None:
+        self._hotkeys.stop()
+        self._hotkeys.clear()
         self._hotkeys.register(
             self._config.hotkey("region_capture"),
             self._bridge.region_requested.emit,
@@ -146,6 +168,15 @@ class ShotquillApp:
         editor.show()
         editor.raise_()
         editor.activateWindow()
+
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self._config)
+        if dialog.exec():
+            self._apply_hotkeys()
+            self._refresh_shortcut_labels()
+
+    def _show_about(self) -> None:
+        QMessageBox.about(None, "关于 Shotquill", _ABOUT)
 
     def _track(self, window: object) -> None:
         self._windows.append(window)

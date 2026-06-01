@@ -49,5 +49,11 @@ class Config:
     def image_format(self) -> str:
         return str(self._settings.value("output/format", DEFAULT_IMAGE_FORMAT))
 
+    def set_image_format(self, image_format: str) -> None:
+        self._settings.setValue("output/format", image_format)
+
     def save_dir(self) -> str:
         return str(self._settings.value("output/save_dir", DEFAULT_SAVE_DIR))
+
+    def set_save_dir(self, directory: str) -> None:
+        self._settings.setValue("output/save_dir", directory)

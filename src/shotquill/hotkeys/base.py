@@ -24,6 +24,10 @@ class HotkeyManager(ABC):
         """Remove a previously registered combo."""
 
     @abstractmethod
+    def clear(self) -> None:
+        """Remove all registered combos (used before re-applying settings)."""
+
+    @abstractmethod
     def start(self) -> None:
         """Begin listening for hotkeys (non-blocking)."""
 
