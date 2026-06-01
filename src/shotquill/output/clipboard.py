@@ -23,3 +23,10 @@ def copy_qimage(image: QImage) -> None:
 def copy_image(result: CaptureResult) -> None:
     """Place a raw capture on the clipboard."""
     copy_qimage(result_to_qimage(result))
+
+
+def copy_text(text: str) -> None:
+    """Place plain text on the clipboard (used for OCR results)."""
+    from PySide6.QtGui import QGuiApplication
+
+    QGuiApplication.clipboard().setText(text)

@@ -88,6 +88,10 @@ class AnnotationCanvas(QGraphicsView):
     def undo_stack(self) -> QUndoStack:
         return self._undo
 
+    def background_image(self) -> QImage:
+        """The original (un-annotated) screenshot, for OCR."""
+        return self._background_pixmap.toImage()
+
     def color(self) -> QColor:
         return QColor(self._color)
 
