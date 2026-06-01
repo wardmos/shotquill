@@ -1,5 +1,7 @@
 # shotquill
 
+[![CI](https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg)](https://github.com/wardmos/shotquill/actions/workflows/ci.yml)
+
 A fast, privacy-respecting screenshot & annotation tool. **macOS first**, with a
 cross-platform architecture (Windows / Linux planned).
 
