@@ -50,3 +50,22 @@ def test_tiny_click_is_discarded(qtbot):
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(20, 20))
     assert canvas.undo_stack().count() == 0
+
+
+def test_drawing_a_mosaic_pushes_one_undo_command(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.MOSAIC)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+    assert canvas.undo_stack().count() == 1
+
+
+def test_pixelate_preserves_dimensions():
+    from shotquill.ui.items.mosaic import pixelate
+
+    source = QPixmap(40, 30)
+    source.fill(QColor("red"))
+    out = pixelate(source, 8)
+    assert (out.width(), out.height()) == (40, 30)

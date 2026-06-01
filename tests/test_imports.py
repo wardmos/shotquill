@@ -33,6 +33,7 @@ _MODULES = [
     "shotquill.ui.settings",
     "shotquill.ui.items.geometry",
     "shotquill.ui.items.arrow",
+    "shotquill.ui.items.mosaic",
 ]
 
 

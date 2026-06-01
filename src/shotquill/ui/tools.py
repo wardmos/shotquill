@@ -15,4 +15,5 @@ class Tool(Enum):
     LINE = auto()
     PEN = auto()
     HIGHLIGHTER = auto()
+    MOSAIC = auto()
     TEXT = auto()

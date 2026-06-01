@@ -23,6 +23,7 @@ _TOOLS: list[tuple[str, Tool]] = [
     ("直线", Tool.LINE),
     ("画笔", Tool.PEN),
     ("荧光笔", Tool.HIGHLIGHTER),
+    ("马赛克", Tool.MOSAIC),
     ("文字", Tool.TEXT),
 ]
 

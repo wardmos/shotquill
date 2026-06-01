@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
+    QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsTextItem,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from shotquill.ui.items.arrow import ArrowItem
+from shotquill.ui.items.mosaic import MosaicItem
 from shotquill.ui.tools import Tool
 
 _DEFAULT_COLOR = "#ff3b30"
@@ -63,6 +65,7 @@ class AnnotationCanvas(QGraphicsView):
         super().__init__()
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
+        self._background_pixmap = background
         self._background = self._scene.addPixmap(background)
         self._background.setZValue(-1000)
         self._scene.setSceneRect(QRectF(background.rect()))
@@ -169,6 +172,8 @@ class AnnotationCanvas(QGraphicsView):
             arrow_item = ArrowItem(QLineF(self._start, self._start))
             arrow_item.setPen(self._pen())
             item = arrow_item
+        elif tool == Tool.MOSAIC:
+            item = MosaicItem(self._background_pixmap)
 
         if item is not None:
             item.setZValue(self._next_z())
@@ -189,6 +194,8 @@ class AnnotationCanvas(QGraphicsView):
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))
+        elif tool == Tool.MOSAIC:
+            self._temp_item.update_rect(QRectF(self._start, pos).normalized().toRect())
 
     def mouseReleaseEvent(self, event) -> None:
         if self._temp_item is None:
@@ -227,7 +234,7 @@ class AnnotationCanvas(QGraphicsView):
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
         if isinstance(item, QGraphicsLineItem):  # also covers ArrowItem
             return item.line().length() < _NEGLIGIBLE
-        if isinstance(item, QGraphicsPathItem):
+        if isinstance(item, (QGraphicsPathItem, QGraphicsPixmapItem)):
             rect = item.boundingRect()
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
         return False

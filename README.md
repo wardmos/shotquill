@@ -11,7 +11,7 @@ cross-platform architecture (Windows / Linux planned).
 
 - Global hotkeys for **region** (`⌥A`) and **full-screen** (`⌥S`) capture — customizable
 - On-screen annotation: rectangles, circles, arrows, lines, freehand, text,
-  and highlighter
+  highlighter, and mosaic for redaction
 - Copy to clipboard or save to disk
 - Menu-bar resident, no Dock clutter
 
