@@ -6,6 +6,8 @@ Full-screen (``⌥S``) and region (``⌥A``) capture both open the annotation
 editor. Hotkeys, save directory, and image format are editable in Settings.
 """
 
+from __future__ import annotations
+
 import subprocess
 import sys
 
