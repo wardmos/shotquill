@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pyinstaller
+      - name: Build .app + DMG
+        run: bash packaging/macos/build_dmg.sh "${{ github.ref_name }}"
+      - name: Compute SHA256
+        id: sha
+        run: echo "sha=$(shasum -a 256 dist/Shotquill-*.dmg | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Shotquill-*.dmg
+          generate_release_notes: true
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: bash packaging/macos/update_tap.sh "${{ github.ref_name }}" "${{ steps.sha.outputs.sha }}"

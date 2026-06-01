@@ -3,15 +3,37 @@
 A fast, privacy-respecting screenshot & annotation tool. **macOS first**, with a
 cross-platform architecture (Windows / Linux planned).
 
-> Status: early development (Phase 0 — project skeleton).
+> Status: early development.
 
-## Features (planned)
+## Features
 
 - Global hotkeys for **region** (`⌥A`) and **full-screen** (`⌥S`) capture — customizable
 - On-screen annotation: rectangles, circles, arrows, lines, freehand, text,
-  highlighter, and mosaic/blur for redaction
+  and highlighter
 - Copy to clipboard or save to disk
 - Menu-bar resident, no Dock clutter
+
+## Install
+
+**Homebrew (recommended):**
+
+```bash
+brew install --cask wardmos/tap/shotquill
+```
+
+**Direct download:** grab the `.dmg` from
+[Releases](https://github.com/wardmos/shotquill/releases), open it, and drag
+Shotquill to Applications.
+
+> Shotquill is open source and **ad-hoc signed (not notarized)** to keep the
+> developer anonymous. On first launch macOS Gatekeeper will warn it can't
+> verify the developer — **right-click the app → Open** once, or run:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Shotquill.app
+> ```
+>
+> The Homebrew cask strips quarantine automatically.
 
 ## Tech stack
 
