@@ -2,15 +2,16 @@
 # Copyright (C) 2026 wardmos
 """Application entry point: a menu-bar-resident Qt app.
 
-Full-screen capture (hotkey ``⌥S`` + menu) opens the annotation editor. Region
-capture (``⌥A``) lands in Phase 2.
+Full-screen (``⌥S``) and region (``⌥A``) capture both open the annotation
+editor — region capture first lets the user drag a selection on a frozen,
+dimmed screenshot.
 """
 
 import subprocess
 import sys
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from shotquill.capture.macos import MacScreenCapturer
@@ -18,6 +19,7 @@ from shotquill.config import Config, human_readable_hotkey
 from shotquill.hotkeys.macos import MacHotkeyManager
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow
+from shotquill.ui.overlay import RegionOverlay
 
 _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
@@ -46,21 +48,23 @@ def _build_icon() -> QIcon:
 class _HotkeyBridge(QObject):
     """Marshals hotkey events from the pynput listener thread onto the Qt main thread."""
 
+    region_requested = Signal()
     fullscreen_requested = Signal()
 
 
 class ShotquillApp:
-    """Owns the tray icon, hotkeys, capturer, and editor windows."""
+    """Owns the tray icon, hotkeys, capturer, overlays, and editor windows."""
 
     def __init__(self, app: QApplication) -> None:
         self._app = app
         self._config = Config()
         self._capturer = MacScreenCapturer()
         self._hotkeys = MacHotkeyManager()
-        self._editors: list[EditorWindow] = []
+        self._windows: list[object] = []  # keep overlays/editors alive
 
         self._bridge = _HotkeyBridge()
-        # Queued (cross-thread) connection: the slot runs on the main thread.
+        # Queued (cross-thread) connections: slots run on the main thread.
+        self._bridge.region_requested.connect(self._capture_region)
         self._bridge.fullscreen_requested.connect(self._capture_fullscreen)
 
         self._tray = self._build_tray()
@@ -75,7 +79,7 @@ class ShotquillApp:
         fullscreen_key = human_readable_hotkey(self._config.hotkey("fullscreen_capture"))
 
         region = QAction(f"区域截图\t{region_key}", menu)
-        region.setEnabled(False)  # wired in Phase 2
+        region.triggered.connect(self._capture_region)
 
         fullscreen = QAction(f"全屏截图\t{fullscreen_key}", menu)
         fullscreen.triggered.connect(self._capture_fullscreen)
@@ -98,12 +102,33 @@ class ShotquillApp:
 
     def _register_hotkeys(self) -> None:
         self._hotkeys.register(
+            self._config.hotkey("region_capture"),
+            self._bridge.region_requested.emit,
+        )
+        self._hotkeys.register(
             self._config.hotkey("fullscreen_capture"),
             self._bridge.fullscreen_requested.emit,
         )
         self._hotkeys.start()
 
     def _capture_fullscreen(self) -> None:
+        screenshot = self._grab()
+        if screenshot is not None:
+            self._open_editor(screenshot)
+
+    def _capture_region(self) -> None:
+        screenshot = self._grab()
+        if screenshot is None:
+            return
+        overlay = RegionOverlay(screenshot, self._app.primaryScreen().virtualGeometry())
+        overlay.region_selected.connect(self._open_editor)
+        self._track(overlay)
+        overlay.show()
+        overlay.raise_()
+        overlay.activateWindow()
+        overlay.setFocus()
+
+    def _grab(self) -> QImage | None:
         try:
             result = self._capturer.capture_fullscreen()
         except Exception as exc:
@@ -112,20 +137,23 @@ class ShotquillApp:
                 f"截图失败：{exc}",
                 QSystemTrayIcon.MessageIcon.Critical,
             )
-            return
-        self._open_editor(result_to_qimage(result))
+            return None
+        return result_to_qimage(result)
 
-    def _open_editor(self, image) -> None:
+    def _open_editor(self, image: QImage) -> None:
         editor = EditorWindow(image, self._config)
-        self._editors.append(editor)
-        editor.destroyed.connect(lambda: self._forget_editor(editor))
+        self._track(editor)
         editor.show()
         editor.raise_()
         editor.activateWindow()
 
-    def _forget_editor(self, editor: EditorWindow) -> None:
-        if editor in self._editors:
-            self._editors.remove(editor)
+    def _track(self, window: object) -> None:
+        self._windows.append(window)
+        window.destroyed.connect(lambda: self._forget(window))
+
+    def _forget(self, window: object) -> None:
+        if window in self._windows:
+            self._windows.remove(window)
 
     def _open_privacy_settings(self) -> None:
         subprocess.run(["open", _PRIVACY_SCREEN_CAPTURE], check=False)
