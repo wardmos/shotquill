@@ -2,8 +2,8 @@
 # Copyright (C) 2026 wardmos
 """Application entry point: a menu-bar-resident Qt app.
 
-Phase 1 wires full-screen capture (hotkey ``⌥S`` + menu item). Region capture
-(``⌥A``) lands in Phase 2.
+Full-screen capture (hotkey ``⌥S`` + menu) opens the annotation editor. Region
+capture (``⌥A``) lands in Phase 2.
 """
 
 import subprocess
@@ -16,8 +16,8 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from shotquill.capture.macos import MacScreenCapturer
 from shotquill.config import Config, human_readable_hotkey
 from shotquill.hotkeys.macos import MacHotkeyManager
-from shotquill.output.clipboard import copy_image
-from shotquill.output.saver import save
+from shotquill.imaging import result_to_qimage
+from shotquill.ui.editor import EditorWindow
 
 _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
@@ -50,13 +50,14 @@ class _HotkeyBridge(QObject):
 
 
 class ShotquillApp:
-    """Owns the tray icon, hotkeys, capturer, and output wiring."""
+    """Owns the tray icon, hotkeys, capturer, and editor windows."""
 
     def __init__(self, app: QApplication) -> None:
         self._app = app
         self._config = Config()
         self._capturer = MacScreenCapturer()
         self._hotkeys = MacHotkeyManager()
+        self._editors: list[EditorWindow] = []
 
         self._bridge = _HotkeyBridge()
         # Queued (cross-thread) connection: the slot runs on the main thread.
@@ -105,8 +106,6 @@ class ShotquillApp:
     def _capture_fullscreen(self) -> None:
         try:
             result = self._capturer.capture_fullscreen()
-            path = save(result, self._config.save_dir(), self._config.image_format())
-            copy_image(result)
         except Exception as exc:
             self._tray.showMessage(
                 "Shotquill",
@@ -114,7 +113,19 @@ class ShotquillApp:
                 QSystemTrayIcon.MessageIcon.Critical,
             )
             return
-        self._tray.showMessage("Shotquill", f"已保存并复制：{path.name}")
+        self._open_editor(result_to_qimage(result))
+
+    def _open_editor(self, image) -> None:
+        editor = EditorWindow(image, self._config)
+        self._editors.append(editor)
+        editor.destroyed.connect(lambda: self._forget_editor(editor))
+        editor.show()
+        editor.raise_()
+        editor.activateWindow()
+
+    def _forget_editor(self, editor: EditorWindow) -> None:
+        if editor in self._editors:
+            self._editors.remove(editor)
 
     def _open_privacy_settings(self) -> None:
         subprocess.run(["open", _PRIVACY_SCREEN_CAPTURE], check=False)
