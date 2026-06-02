@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shotquill"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Cross-platform screenshot & annotation tool (macOS first)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,9 +41,13 @@ shotquill = "shotquill.app:run"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { attr = "shotquill.__version__" }
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]

@@ -45,3 +45,58 @@ def test_to_bool_parses_qsettings_strings():
     assert _to_bool("1", False) is True
     assert _to_bool("0", True) is False
     assert _to_bool(True, False) is True
+
+
+def test_human_readable_hotkey_ignores_blank_segments():
+    assert human_readable_hotkey("") == ""
+    assert human_readable_hotkey("<alt>++a") == "⌥A"
+
+
+# --- Config (backed by an isolated temp QSettings via the `config` fixture) ---
+
+
+def test_config_returns_defaults_when_unset(config):
+    assert config.hotkey("region_capture") == DEFAULT_HOTKEYS["region_capture"]
+    assert config.hotkey("fullscreen_capture") == DEFAULT_HOTKEYS["fullscreen_capture"]
+    assert config.image_format() == DEFAULT_IMAGE_FORMAT
+    assert config.save_dir().endswith("ShotQuill")
+    assert config.language() == "en"
+    assert config.flash_on_capture() is DEFAULT_FLASH
+    assert config.sound_on_capture() is DEFAULT_SOUND
+    assert config.autostart() is DEFAULT_AUTOSTART
+
+
+def test_config_hotkey_round_trip(config):
+    config.set_hotkey("region_capture", "<cmd>+<shift>+a")
+    assert config.hotkey("region_capture") == "<cmd>+<shift>+a"
+    # The other action is untouched.
+    assert config.hotkey("fullscreen_capture") == DEFAULT_HOTKEYS["fullscreen_capture"]
+
+
+def test_config_scalar_round_trips(config):
+    config.set_image_format("jpg")
+    config.set_save_dir("/tmp/shots")
+    config.set_language("zh")
+    assert config.image_format() == "jpg"
+    assert config.save_dir() == "/tmp/shots"
+    assert config.language() == "zh"
+
+
+def test_config_bool_round_trips(config):
+    config.set_flash_on_capture(False)
+    config.set_sound_on_capture(True)
+    config.set_autostart(True)
+    assert config.flash_on_capture() is False
+    assert config.sound_on_capture() is True
+    assert config.autostart() is True
+
+
+def test_config_persists_across_instances(config):
+    from shotquill.config import Config
+
+    config.set_language("zh")
+    config.set_image_format("jpg")
+    # A fresh wrapper reads the same backing store.
+    reopened = Config()
+    assert reopened.language() == "zh"
+    assert reopened.image_format() == "jpg"

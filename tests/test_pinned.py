@@ -61,3 +61,70 @@ def test_escape_closes_the_pin(qtbot):
     # sendEvent routes straight to keyPressEvent regardless of offscreen focus.
     QApplication.sendEvent(window, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
     assert not window.isVisible()
+
+
+def test_double_click_closes_the_pin(qtbot):
+    from PySide6.QtCore import QEvent as _QEvent
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    window = PinnedWindow(_image(100, 80))
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    pos = QPointF(5, 5)
+    event = QMouseEvent(
+        _QEvent.MouseButtonDblClick, pos, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier
+    )
+    QApplication.sendEvent(window, event)
+    assert not window.isVisible()
+
+
+def test_fit_pixmap_caps_oversized_image_to_screen_fraction(qtbot):
+    from PySide6.QtGui import QGuiApplication
+
+    from shotquill.ui.pinned import _MAX_SCREEN_FRACTION, _fit_pixmap
+
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+    huge = _image(avail.width() * 4, avail.height() * 4)
+    pixmap = _fit_pixmap(huge)
+    logical_w = pixmap.width() / dpr
+    logical_h = pixmap.height() / dpr
+    assert logical_w <= avail.width() * _MAX_SCREEN_FRACTION + 1
+    assert logical_h <= avail.height() * _MAX_SCREEN_FRACTION + 1
+
+
+def test_fit_pixmap_tags_device_pixel_ratio(qtbot):
+    from PySide6.QtGui import QGuiApplication
+
+    from shotquill.ui.pinned import _fit_pixmap
+
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+    pixmap = _fit_pixmap(_image(50, 40))
+    assert pixmap.devicePixelRatio() == dpr
+
+
+def test_drag_moves_the_window(qtbot):
+    from PySide6.QtCore import QEvent as _QEvent
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    window = PinnedWindow(_image(100, 80))
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(window)
+    window.move(0, 0)
+
+    pos = QPointF(5, 5)
+    press = QMouseEvent(
+        _QEvent.MouseButtonPress, pos, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier
+    )
+    QApplication.sendEvent(window, press)
+    assert window._drag_offset is not None
+
+    release = QMouseEvent(
+        _QEvent.MouseButtonRelease, pos, pos, Qt.LeftButton, Qt.NoButton, Qt.NoModifier
+    )
+    QApplication.sendEvent(window, release)
+    assert window._drag_offset is None
