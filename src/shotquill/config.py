@@ -10,6 +10,8 @@ without a running QApplication.
 
 from __future__ import annotations
 
+from shotquill.i18n import DEFAULT_LANGUAGE
+
 DEFAULT_HOTKEYS: dict[str, str] = {
     "region_capture": "<alt>+a",
     "fullscreen_capture": "<alt>+s",
@@ -57,3 +59,9 @@ class Config:
 
     def set_save_dir(self, directory: str) -> None:
         self._settings.setValue("output/save_dir", directory)
+
+    def language(self) -> str:
+        return str(self._settings.value("ui/language", DEFAULT_LANGUAGE))
+
+    def set_language(self, language: str) -> None:
+        self._settings.setValue("ui/language", language)

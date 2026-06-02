@@ -16,6 +16,7 @@ _MODULES = [
     "shotquill",
     "shotquill.app",
     "shotquill.config",
+    "shotquill.i18n",
     "shotquill.imaging",
     "shotquill.capture.base",
     "shotquill.capture.macos",
@@ -34,6 +35,8 @@ _MODULES = [
     "shotquill.ui.items.geometry",
     "shotquill.ui.items.arrow",
     "shotquill.ui.items.mosaic",
+    "shotquill.ocr.base",
+    "shotquill.ocr.macos",
 ]
 
 

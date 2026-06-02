@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Settings dialog: save directory, image format, and custom hotkeys."""
+"""Settings dialog: language, save directory, image format, and custom hotkeys."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from shotquill.hotkeys.combo import parse_combo, to_pynput_combo
+from shotquill.i18n import LANGUAGE_NAMES, LANGUAGES, t
 
 if TYPE_CHECKING:
     from shotquill.config import Config
@@ -71,31 +72,39 @@ class SettingsDialog(QDialog):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
-        self.setWindowTitle("Shotquill 设置")
+        self.setWindowTitle(t("settings.title"))
 
         form = QFormLayout()
 
+        self._language = QComboBox()
+        for code in LANGUAGES:
+            self._language.addItem(LANGUAGE_NAMES[code], code)
+        lang_index = self._language.findData(config.language())
+        if lang_index >= 0:
+            self._language.setCurrentIndex(lang_index)
+        form.addRow(t("settings.language"), self._language)
+
         self._save_dir = QLineEdit(config.save_dir())
-        browse = QPushButton("浏览…")
+        browse = QPushButton(t("settings.browse"))
         browse.clicked.connect(self._browse)
         dir_row = QWidget()
         dir_layout = QHBoxLayout(dir_row)
         dir_layout.setContentsMargins(0, 0, 0, 0)
         dir_layout.addWidget(self._save_dir)
         dir_layout.addWidget(browse)
-        form.addRow("保存目录", dir_row)
+        form.addRow(t("settings.save_dir"), dir_row)
 
         self._format = QComboBox()
         self._format.addItems(_FORMATS)
         format_index = self._format.findText(config.image_format().lower())
         if format_index >= 0:
             self._format.setCurrentIndex(format_index)
-        form.addRow("图片格式", self._format)
+        form.addRow(t("settings.format"), self._format)
 
         self._region = _HotkeyRow(config.hotkey("region_capture"))
         self._fullscreen = _HotkeyRow(config.hotkey("fullscreen_capture"))
-        form.addRow("区域截图", self._region)
-        form.addRow("全屏截图", self._fullscreen)
+        form.addRow(t("settings.region"), self._region)
+        form.addRow(t("settings.fullscreen"), self._fullscreen)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
@@ -106,11 +115,14 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
 
     def _browse(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择保存目录", self._save_dir.text())
+        path = QFileDialog.getExistingDirectory(
+            self, t("settings.choose_dir"), self._save_dir.text()
+        )
         if path:
             self._save_dir.setText(path)
 
     def _save_and_accept(self) -> None:
+        self._config.set_language(self._language.currentData())
         self._config.set_save_dir(self._save_dir.text())
         self._config.set_image_format(self._format.currentText())
         self._config.set_hotkey("region_capture", self._region.combo())

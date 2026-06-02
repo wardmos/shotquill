@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Builds the editor toolbar: tool picker, color, width, undo/redo, copy/save."""
+"""Builds the editor toolbar: tool picker, color, width, undo/redo, OCR, copy/save."""
 
 from __future__ import annotations
 
@@ -10,26 +10,27 @@ from typing import TYPE_CHECKING
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QColorDialog, QSpinBox, QToolBar
 
+from shotquill.i18n import t
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
     from shotquill.ui.canvas import AnnotationCanvas
 
 _TOOLS: list[tuple[str, Tool]] = [
-    ("选择", Tool.SELECT),
-    ("矩形", Tool.RECT),
-    ("圆", Tool.ELLIPSE),
-    ("箭头", Tool.ARROW),
-    ("直线", Tool.LINE),
-    ("画笔", Tool.PEN),
-    ("荧光笔", Tool.HIGHLIGHTER),
-    ("马赛克", Tool.MOSAIC),
-    ("文字", Tool.TEXT),
+    ("tool.select", Tool.SELECT),
+    ("tool.rect", Tool.RECT),
+    ("tool.ellipse", Tool.ELLIPSE),
+    ("tool.arrow", Tool.ARROW),
+    ("tool.line", Tool.LINE),
+    ("tool.pen", Tool.PEN),
+    ("tool.highlighter", Tool.HIGHLIGHTER),
+    ("tool.mosaic", Tool.MOSAIC),
+    ("tool.text", Tool.TEXT),
 ]
 
 
 def _pick_color(canvas: AnnotationCanvas) -> None:
-    color = QColorDialog.getColor(canvas.color(), None, "选择颜色")
+    color = QColorDialog.getColor(canvas.color(), None, t("dialog.pick_color"))
     if color.isValid():
         canvas.set_color(color)
 
@@ -38,49 +39,55 @@ def create_toolbar(
     canvas: AnnotationCanvas,
     on_copy: Callable[[], None],
     on_save: Callable[[], None],
+    on_ocr: Callable[[], None],
 ) -> QToolBar:
-    toolbar = QToolBar("工具")
+    toolbar = QToolBar()
     group = QActionGroup(toolbar)
     group.setExclusive(True)
 
-    for label, tool in _TOOLS:
-        action = QAction(label, toolbar)
+    for key, tool in _TOOLS:
+        action = QAction(t(key), toolbar)
         action.setCheckable(True)
         action.setChecked(tool == Tool.SELECT)
-        action.triggered.connect(lambda _checked=False, t=tool: canvas.set_tool(t))
+        action.triggered.connect(lambda _checked=False, bound=tool: canvas.set_tool(bound))
         group.addAction(action)
         toolbar.addAction(action)
 
     toolbar.addSeparator()
 
-    color_action = QAction("颜色", toolbar)
+    color_action = QAction(t("toolbar.color"), toolbar)
     color_action.triggered.connect(lambda: _pick_color(canvas))
     toolbar.addAction(color_action)
 
     width = QSpinBox()
     width.setRange(1, 40)
     width.setValue(canvas.width())
-    width.setPrefix("粗细 ")
+    width.setPrefix(t("toolbar.width"))
     width.valueChanged.connect(canvas.set_width)
     toolbar.addWidget(width)
 
     toolbar.addSeparator()
 
-    undo_action = canvas.undo_stack().createUndoAction(toolbar, "撤销")
+    undo_action = canvas.undo_stack().createUndoAction(toolbar, t("toolbar.undo"))
     undo_action.setShortcut(QKeySequence.Undo)
-    redo_action = canvas.undo_stack().createRedoAction(toolbar, "重做")
+    redo_action = canvas.undo_stack().createRedoAction(toolbar, t("toolbar.redo"))
     redo_action.setShortcut(QKeySequence.Redo)
     toolbar.addAction(undo_action)
     toolbar.addAction(redo_action)
 
     toolbar.addSeparator()
 
-    copy_action = QAction("复制", toolbar)
+    ocr_action = QAction(t("toolbar.ocr"), toolbar)
+    ocr_action.setToolTip(t("toolbar.ocr_tip"))
+    ocr_action.triggered.connect(on_ocr)
+    toolbar.addAction(ocr_action)
+
+    copy_action = QAction(t("toolbar.copy"), toolbar)
     copy_action.setShortcut(QKeySequence.Copy)
     copy_action.triggered.connect(on_copy)
     toolbar.addAction(copy_action)
 
-    save_action = QAction("保存", toolbar)
+    save_action = QAction(t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
     save_action.triggered.connect(on_save)
     toolbar.addAction(save_action)

@@ -12,7 +12,9 @@ cross-platform architecture (Windows / Linux planned).
 - Global hotkeys for **region** (`⌥A`) and **full-screen** (`⌥S`) capture — customizable
 - On-screen annotation: rectangles, circles, arrows, lines, freehand, text,
   highlighter, and mosaic for redaction
+- On-device OCR (Apple Vision) — extract text from a capture, fully offline
 - Copy to clipboard or save to disk
+- English / 中文 interface (switchable in Settings; defaults to English)
 - Menu-bar resident, no Dock clutter
 
 ## Install

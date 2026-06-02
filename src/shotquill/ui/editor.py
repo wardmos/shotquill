@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QMainWindow
 
+from shotquill.i18n import t
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.toolbar import create_toolbar
 
@@ -26,13 +27,13 @@ class EditorWindow(QMainWindow):
     def __init__(self, image: QImage, config: Config) -> None:
         super().__init__()
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowTitle("Shotquill — 标注")
+        self.setWindowTitle(t("title.annotate"))
         self._config = config
 
         pixmap = QPixmap.fromImage(image)
         self._canvas = AnnotationCanvas(pixmap)
         self.setCentralWidget(self._canvas)
-        self.addToolBar(create_toolbar(self._canvas, self._copy, self._save))
+        self.addToolBar(create_toolbar(self._canvas, self._copy, self._save, self._ocr))
 
         self.resize(
             min(pixmap.width(), _MAX_INITIAL_WIDTH) + 40,
@@ -50,7 +51,7 @@ class EditorWindow(QMainWindow):
         from shotquill.output.clipboard import copy_qimage
 
         copy_qimage(self._canvas.export_image())
-        self.setWindowTitle("Shotquill — 已复制到剪贴板")
+        self.setWindowTitle(t("title.copied"))
 
     def _save(self) -> None:
         from shotquill.output.saver import save_qimage
@@ -60,4 +61,19 @@ class EditorWindow(QMainWindow):
             self._config.save_dir(),
             self._config.image_format(),
         )
-        self.setWindowTitle(f"Shotquill — 已保存 {path.name}")
+        self.setWindowTitle(t("title.saved").format(name=path.name))
+
+    def _ocr(self) -> None:
+        from shotquill.ocr.macos import VisionTextRecognizer
+        from shotquill.output.clipboard import copy_text
+
+        try:
+            lines = VisionTextRecognizer().recognize(self._canvas.background_image())
+        except Exception as exc:
+            self.setWindowTitle(t("title.ocr_failed").format(error=exc))
+            return
+        if lines:
+            copy_text("\n".join(lines))
+            self.setWindowTitle(t("title.ocr_copied").format(count=len(lines)))
+        else:
+            self.setWindowTitle(t("title.ocr_empty"))
