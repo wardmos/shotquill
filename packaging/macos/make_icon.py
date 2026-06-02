@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the Shotquill app icon master PNG.
+"""Render the ShotQuill app icon master PNG.
 
 Produces a 1024x1024 PNG matching the menu-bar mark (blue rounded tile + white
 "S"), following Apple's icon grid (~10% transparent margin around the tile).
@@ -73,16 +73,15 @@ def render(out: Path) -> None:
     tile.putalpha(_rounded_mask(tile_w, tile_h, RADIUS * SS))
     canvas.alpha_composite(tile, (m, m))
 
-    draw = ImageDraw.Draw(canvas)
     font = _load_font(int(560 * SS))
-    # Center the glyph on its actual ink bounds, not the font's line box.
-    w, h = font.getsize("S")
-    ox, oy = font.getoffset("S")
-    draw.text(
-        ((big - w) / 2 - ox, (big - h) / 2 - oy),
-        "S",
-        font=font,
-        fill=(255, 255, 255, 255),
+    # Center the glyph on its actual ink bounds, not the font's line box
+    # (which includes ascender/descender padding and pushes the "S" off-center).
+    glyph = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    ImageDraw.Draw(glyph).text((0, 0), "S", font=font, fill=(255, 255, 255, 255))
+    left, top, right, bottom = glyph.getbbox()
+    canvas.alpha_composite(
+        glyph,
+        (round(big / 2 - (left + right) / 2), round(big / 2 - (top + bottom) / 2)),
     )
 
     canvas.resize((SIZE, SIZE), Image.LANCZOS).save(out)
