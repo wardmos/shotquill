@@ -39,6 +39,10 @@ pyinstaller --noconfirm --windowed --name Shotquill \
   packaging/entry.py
 
 # Menu-bar agent app (no Dock icon) + screen-recording prompt text + version.
+# CFBundleDisplayName is what Launchpad/Finder show; the bundle/file name stays
+# "Shotquill" (matches the bundle id and Homebrew cask).
+"$PB" -c "Add :CFBundleDisplayName string ShotQuill" "$PLIST" 2>/dev/null \
+  || "$PB" -c "Set :CFBundleDisplayName ShotQuill" "$PLIST"
 "$PB" -c "Add :LSUIElement bool true" "$PLIST" 2>/dev/null \
   || "$PB" -c "Set :LSUIElement true" "$PLIST"
 "$PB" -c "Add :NSScreenCaptureUsageDescription string 'Shotquill captures your screen to take screenshots.'" "$PLIST" 2>/dev/null \

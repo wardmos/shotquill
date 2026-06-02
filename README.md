@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="packaging/macos/icon.png" alt="Shotquill icon" width="128" height="128">
+  <img src="packaging/macos/icon.png" alt="ShotQuill icon" width="128" height="128">
 </p>
 
-# shotquill
+# ShotQuill
 
 [![CI](https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg)](https://github.com/wardmos/shotquill/actions/workflows/ci.yml)
 
@@ -31,9 +31,9 @@ brew install --cask wardmos/tap/shotquill
 
 **Direct download:** grab the `.dmg` from
 [Releases](https://github.com/wardmos/shotquill/releases), open it, and drag
-Shotquill to Applications.
+ShotQuill to Applications.
 
-> Shotquill is open source and **ad-hoc signed (not notarized)** to keep the
+> ShotQuill is open source and **ad-hoc signed (not notarized)** to keep the
 > developer anonymous. On first launch macOS Gatekeeper will warn it can't
 > verify the developer — **right-click the app → Open** once, or run:
 >
