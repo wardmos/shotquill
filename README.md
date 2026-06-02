@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="packaging/macos/icon.png" alt="Shotquill icon" width="128" height="128">
+</p>
+
 # shotquill
 
 [![CI](https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg)](https://github.com/wardmos/shotquill/actions/workflows/ci.yml)

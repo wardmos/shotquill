@@ -17,8 +17,24 @@ PB="/usr/libexec/PlistBuddy"
 
 rm -rf build dist
 
+# Build Shotquill.icns from the committed master PNG so the Launchpad / Finder
+# icon matches the menu-bar mark (sips + iconutil are built into macOS).
+ICON_PNG="packaging/macos/icon.png"
+ICONSET="build/Shotquill.iconset"
+ICNS="build/Shotquill.icns"
+mkdir -p "$ICONSET"
+for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" \
+            "128:128x128" "256:128x128@2x" "256:256x256" "512:256x256@2x" \
+            "512:512x512" "1024:512x512@2x"; do
+  px="${spec%%:*}"
+  name="${spec##*:}"
+  sips -z "$px" "$px" "$ICON_PNG" --out "$ICONSET/icon_$name.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$ICNS"
+
 pyinstaller --noconfirm --windowed --name Shotquill \
   --osx-bundle-identifier com.wardmos.shotquill \
+  --icon "$ICNS" \
   --paths src \
   packaging/entry.py
 
