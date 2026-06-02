@@ -18,7 +18,10 @@ REPO="wardmos/homebrew-tap"
 URL="https://github.com/wardmos/shotquill/releases/download/v${VERSION}/Shotquill-${VERSION}.dmg"
 
 WORK="$(mktemp -d)"
-git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${REPO}.git" "$WORK"
+# Authenticate with an HTTP header passed per-command, never embedded in the
+# remote URL, so the token is never written to the clone's .git/config.
+AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 | tr -d '\n')"
+git -c http.extraHeader="$AUTH_HEADER" clone --depth 1 "https://github.com/${REPO}.git" "$WORK"
 mkdir -p "$WORK/Casks"
 
 cat > "$WORK/Casks/shotquill.rb" <<EOF
@@ -46,5 +49,5 @@ git add Casks/shotquill.rb
 git -c user.name="shotquill-release" \
     -c user.email="release@users.noreply.github.com" \
     commit -m "shotquill ${VERSION}"
-git push
+git -c http.extraHeader="$AUTH_HEADER" push
 echo "Updated ${REPO} cask to ${VERSION}"
