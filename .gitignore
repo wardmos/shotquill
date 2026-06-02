@@ -21,3 +21,16 @@ venv/
 
 # OS
 .DS_Store
+
+# Local scratch
+tmp/
+
+# PyInstaller
+*.spec
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
