@@ -33,6 +33,7 @@ _MODULES = [
     "shotquill.ui.toolbar",
     "shotquill.ui.settings",
     "shotquill.ui.feedback",
+    "shotquill.ui.pinned",
     "shotquill.autostart.base",
     "shotquill.autostart.macos",
     "shotquill.ui.items.geometry",

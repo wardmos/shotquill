@@ -59,6 +59,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "toolbar.redo": {"en": "Redo", "zh": "重做"},
     "toolbar.ocr": {"en": "Copy Text", "zh": "取字"},
     "toolbar.ocr_tip": {"en": "Recognize and copy text (OCR)", "zh": "识别图中文字并复制（OCR）"},
+    "toolbar.pin": {"en": "Pin", "zh": "钉屏"},
+    "toolbar.pin_tip": {
+        "en": "Pin this shot on top of the screen",
+        "zh": "把截图钉在屏幕最前",
+    },
+    "pin.tip": {
+        "en": "Drag to move · double-click or Esc to close",
+        "zh": "拖动移动 · 双击或 Esc 关闭",
+    },
     "toolbar.copy": {"en": "Copy", "zh": "复制"},
     "toolbar.save": {"en": "Save", "zh": "保存"},
     "dialog.pick_color": {"en": "Select Color", "zh": "选择颜色"},

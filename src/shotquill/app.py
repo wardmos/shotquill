@@ -26,6 +26,7 @@ from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow
 from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.overlay import RegionOverlay
+from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
 
 _PRIVACY_SCREEN_CAPTURE = (
@@ -161,10 +162,17 @@ class ShotquillApp:
     def _open_editor(self, image: QImage) -> None:
         self._signal_capture()
         editor = EditorWindow(image, self._config)
+        editor.pin_requested.connect(self._pin_image)
         self._track(editor)
         editor.show()
         editor.raise_()
         editor.activateWindow()
+
+    def _pin_image(self, image: QImage) -> None:
+        pinned = PinnedWindow(image)
+        self._track(pinned)
+        pinned.show()
+        pinned.raise_()
 
     def _signal_capture(self) -> None:
         """Flash the screen and/or play a sound to confirm a shot was taken."""

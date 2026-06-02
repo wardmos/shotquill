@@ -40,6 +40,7 @@ def create_toolbar(
     on_copy: Callable[[], None],
     on_save: Callable[[], None],
     on_ocr: Callable[[], None],
+    on_pin: Callable[[], None],
 ) -> QToolBar:
     toolbar = QToolBar()
     group = QActionGroup(toolbar)
@@ -81,6 +82,11 @@ def create_toolbar(
     ocr_action.setToolTip(t("toolbar.ocr_tip"))
     ocr_action.triggered.connect(on_ocr)
     toolbar.addAction(ocr_action)
+
+    pin_action = QAction(t("toolbar.pin"), toolbar)
+    pin_action.setToolTip(t("toolbar.pin_tip"))
+    pin_action.triggered.connect(on_pin)
+    toolbar.addAction(pin_action)
 
     copy_action = QAction(t("toolbar.copy"), toolbar)
     copy_action.setShortcut(QKeySequence.Copy)
