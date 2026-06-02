@@ -36,22 +36,34 @@ _PRIVACY_SCREEN_CAPTURE = (
 
 
 def _build_icon() -> QIcon:
-    """Draw a simple placeholder menu-bar icon (no external asset needed yet)."""
+    """Build the menu-bar mark as a macOS *template* image.
+
+    Template images are monochrome: only the alpha channel matters, and macOS
+    tints the opaque pixels to match the menu bar (white on dark, dark on light)
+    like its own status items. We draw the brand tile in solid black with the
+    "S" knocked out, then flag it as a mask. The colored Launchpad icon is a
+    separate ``.icns`` and is unaffected.
+    """
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor("#2d7ff9"))
+    painter.setBrush(QColor("black"))
     painter.drawRoundedRect(6, 6, 52, 52, 14, 14)
+    # Erase the "S" from the tile so it shows the menu-bar colour through.
+    painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
     font = QFont()
     font.setBold(True)
     font.setPointSize(28)
     painter.setFont(font)
-    painter.setPen(QColor("white"))
+    painter.setPen(QColor("black"))
     painter.drawText(pixmap.rect(), Qt.AlignCenter, "S")
     painter.end()
-    return QIcon(pixmap)
+
+    icon = QIcon(pixmap)
+    icon.setIsMask(True)  # tell macOS to render it as a template image
+    return icon
 
 
 class _HotkeyBridge(QObject):
