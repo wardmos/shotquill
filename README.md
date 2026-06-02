@@ -38,7 +38,7 @@ ShotQuill to Applications.
 > verify the developer — **right-click the app → Open** once, or run:
 >
 > ```bash
-> xattr -dr com.apple.quarantine /Applications/Shotquill.app
+> xattr -dr com.apple.quarantine /Applications/ShotQuill.app
 > ```
 >
 > The Homebrew cask strips quarantine automatically.

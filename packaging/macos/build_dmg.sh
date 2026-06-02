@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Shotquill.app and a drag-to-Applications DMG.
+# Build ShotQuill.app and a drag-to-Applications DMG.
 # Ad-hoc signed (anonymous, no Apple account, no notarization).
 #
 # Usage: packaging/macos/build_dmg.sh <version-or-tag>
@@ -11,17 +11,17 @@ VERSION="${VERSION#v}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-APP="dist/Shotquill.app"
+APP="dist/ShotQuill.app"
 PLIST="$APP/Contents/Info.plist"
 PB="/usr/libexec/PlistBuddy"
 
 rm -rf build dist
 
-# Build Shotquill.icns from the committed master PNG so the Launchpad / Finder
+# Build ShotQuill.icns from the committed master PNG so the Launchpad / Finder
 # icon matches the menu-bar mark (sips + iconutil are built into macOS).
 ICON_PNG="packaging/macos/icon.png"
-ICONSET="build/Shotquill.iconset"
-ICNS="build/Shotquill.icns"
+ICONSET="build/ShotQuill.iconset"
+ICNS="build/ShotQuill.icns"
 mkdir -p "$ICONSET"
 for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" \
             "128:128x128" "256:128x128@2x" "256:256x256" "512:256x256@2x" \
@@ -32,20 +32,16 @@ for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" \
 done
 iconutil -c icns "$ICONSET" -o "$ICNS"
 
-pyinstaller --noconfirm --windowed --name Shotquill \
+pyinstaller --noconfirm --windowed --name ShotQuill \
   --osx-bundle-identifier com.wardmos.shotquill \
   --icon "$ICNS" \
   --paths src \
   packaging/entry.py
 
 # Menu-bar agent app (no Dock icon) + screen-recording prompt text + version.
-# CFBundleDisplayName is what Launchpad/Finder show; the bundle/file name stays
-# "Shotquill" (matches the bundle id and Homebrew cask).
-"$PB" -c "Add :CFBundleDisplayName string ShotQuill" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Set :CFBundleDisplayName ShotQuill" "$PLIST"
 "$PB" -c "Add :LSUIElement bool true" "$PLIST" 2>/dev/null \
   || "$PB" -c "Set :LSUIElement true" "$PLIST"
-"$PB" -c "Add :NSScreenCaptureUsageDescription string 'Shotquill captures your screen to take screenshots.'" "$PLIST" 2>/dev/null \
+"$PB" -c "Add :NSScreenCaptureUsageDescription string 'ShotQuill captures your screen to take screenshots.'" "$PLIST" 2>/dev/null \
   || true
 "$PB" -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" 2>/dev/null \
   || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"
@@ -62,8 +58,8 @@ mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 
-DMG="dist/Shotquill-$VERSION.dmg"
-hdiutil create -volname "Shotquill $VERSION" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+DMG="dist/ShotQuill-$VERSION.dmg"
+hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
 rm -rf "$STAGING"
 
 echo "Built $DMG"

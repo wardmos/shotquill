@@ -18,7 +18,7 @@ DEFAULT_HOTKEYS: dict[str, str] = {
 }
 
 DEFAULT_IMAGE_FORMAT = "png"
-DEFAULT_SAVE_DIR = "~/Pictures/Shotquill"
+DEFAULT_SAVE_DIR = "~/Pictures/ShotQuill"
 
 # Capture feedback: a brief screen flash is on by default; the shutter sound is
 # off by default (opt-in, to stay quiet and unobtrusive).
@@ -59,7 +59,7 @@ class Config:
     def __init__(self) -> None:
         from PySide6.QtCore import QSettings
 
-        self._settings = QSettings("wardmos", "Shotquill")
+        self._settings = QSettings("wardmos", "ShotQuill")
 
     def hotkey(self, action: str) -> str:
         return str(self._settings.value(f"hotkeys/{action}", DEFAULT_HOTKEYS[action]))

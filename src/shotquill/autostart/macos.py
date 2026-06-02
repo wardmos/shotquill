@@ -3,7 +3,7 @@
 """macOS launch-at-login via a per-user LaunchAgent.
 
 Enabling writes ``~/Library/LaunchAgents/<label>.plist`` with ``RunAtLoad`` so
-launchd starts Shotquill at login; disabling removes it. We keep the plist body
+launchd starts ShotQuill at login; disabling removes it. We keep the plist body
 and the launch command in pure helpers so they can be unit-tested without
 touching the filesystem or a real ``.app`` bundle.
 """

@@ -41,4 +41,4 @@ def test_invalid_language_falls_back_to_default():
 
 def test_placeholder_templates_are_formattable():
     i18n.set_language("zh")
-    assert i18n.t("title.saved").format(name="a.png") == "Shotquill — 已保存 a.png"
+    assert i18n.t("title.saved").format(name="a.png") == "ShotQuill — 已保存 a.png"

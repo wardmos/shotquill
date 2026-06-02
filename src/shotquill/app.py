@@ -81,7 +81,7 @@ class ShotquillApp:
         self._bridge.fullscreen_requested.connect(self._capture_fullscreen)
 
         self._tray = QSystemTrayIcon(_build_icon(), self._app)
-        self._tray.setToolTip("Shotquill")
+        self._tray.setToolTip("ShotQuill")
         self._rebuild_menu()
         self._tray.show()
         self._apply_hotkeys()
@@ -152,7 +152,7 @@ class ShotquillApp:
             result = self._capturer.capture_fullscreen()
         except Exception as exc:
             self._tray.showMessage(
-                "Shotquill",
+                "ShotQuill",
                 t("notify.capture_failed").format(error=exc),
                 QSystemTrayIcon.MessageIcon.Critical,
             )
@@ -199,7 +199,7 @@ class ShotquillApp:
 
     def _show_about(self) -> None:
         body = (
-            f"<b>Shotquill</b> {__version__}<br><br>"
+            f"<b>ShotQuill</b> {__version__}<br><br>"
             f"{t('about.body')}<br>"
             "© 2026 wardmos · Apache-2.0<br>"
             "Built with Qt (PySide6, LGPLv3)."
@@ -223,7 +223,7 @@ class ShotquillApp:
 
 def run() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Shotquill")
+    app.setApplicationName("ShotQuill")
     app.setQuitOnLastWindowClosed(False)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():

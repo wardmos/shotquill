@@ -24,7 +24,7 @@ def build_output_path(directory: str, image_format: str = "png") -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = "jpg" if image_format.lower() in _JPEG_FORMATS else "png"
     stamp = dt.datetime.now().strftime("%Y-%m-%d at %H.%M.%S")
-    return out_dir / f"Shotquill {stamp}.{ext}"
+    return out_dir / f"ShotQuill {stamp}.{ext}"
 
 
 def save(result: CaptureResult, directory: str, image_format: str = "png") -> Path:

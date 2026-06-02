@@ -31,7 +31,7 @@ jobs:
       - name: Compute SHA256
         id: sha
         run: |
-          dmg=$(ls dist/Shotquill-*.dmg)
+          dmg=$(ls dist/ShotQuill-*.dmg)
           # Sidecar checksum file (shasum -c compatible) shipped with the release.
           ( cd dist && shasum -a 256 "$(basename "$dmg")" > "$(basename "$dmg").sha256" )
           echo "sha=$(awk '{print $1}' "$dmg.sha256")" >> "$GITHUB_OUTPUT"
@@ -40,8 +40,8 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           files: |
-            dist/Shotquill-*.dmg
-            dist/Shotquill-*.dmg.sha256
+            dist/ShotQuill-*.dmg
+            dist/ShotQuill-*.dmg.sha256
           generate_release_notes: true
       - name: Update Homebrew tap
         env:

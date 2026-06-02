@@ -15,7 +15,7 @@ if [ -z "${TAP_TOKEN:-}" ]; then
 fi
 
 REPO="wardmos/homebrew-tap"
-URL="https://github.com/wardmos/shotquill/releases/download/v${VERSION}/Shotquill-${VERSION}.dmg"
+URL="https://github.com/wardmos/shotquill/releases/download/v${VERSION}/ShotQuill-${VERSION}.dmg"
 
 WORK="$(mktemp -d)"
 # Authenticate with an HTTP header passed per-command, never embedded in the
@@ -30,16 +30,16 @@ cask "shotquill" do
   sha256 "${SHA}"
 
   url "${URL}"
-  name "Shotquill"
+  name "ShotQuill"
   desc "Screenshot and annotation tool"
   homepage "https://github.com/wardmos/shotquill"
 
-  app "Shotquill.app"
+  app "ShotQuill.app"
 
   # Ad-hoc-signed build: drop the quarantine flag so it opens without a warning.
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Shotquill.app"]
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/ShotQuill.app"]
   end
 end
 EOF

@@ -20,28 +20,28 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.region": {"en": "Region Capture", "zh": "区域截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
-    "menu.about": {"en": "About Shotquill", "zh": "关于 Shotquill"},
+    "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
     "menu.permissions": {
         "en": "Open Screen Recording Settings…",
         "zh": "打开屏幕录制权限设置…",
     },
-    "menu.quit": {"en": "Quit Shotquill", "zh": "退出 Shotquill"},
+    "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
     "about.body": {"en": "Screenshot & annotation tool.", "zh": "截图与标注工具。"},
     # Editor window titles
-    "title.annotate": {"en": "Shotquill — Annotate", "zh": "Shotquill — 标注"},
-    "title.copied": {"en": "Shotquill — Copied to clipboard", "zh": "Shotquill — 已复制到剪贴板"},
-    "title.saved": {"en": "Shotquill — Saved {name}", "zh": "Shotquill — 已保存 {name}"},
+    "title.annotate": {"en": "ShotQuill — Annotate", "zh": "ShotQuill — 标注"},
+    "title.copied": {"en": "ShotQuill — Copied to clipboard", "zh": "ShotQuill — 已复制到剪贴板"},
+    "title.saved": {"en": "ShotQuill — Saved {name}", "zh": "ShotQuill — 已保存 {name}"},
     "title.ocr_failed": {
-        "en": "Shotquill — OCR failed: {error}",
-        "zh": "Shotquill — OCR 失败：{error}",
+        "en": "ShotQuill — OCR failed: {error}",
+        "zh": "ShotQuill — OCR 失败：{error}",
     },
     "title.ocr_copied": {
-        "en": "Shotquill — Copied {count} line(s)",
-        "zh": "Shotquill — 已复制 {count} 行文字",
+        "en": "ShotQuill — Copied {count} line(s)",
+        "zh": "ShotQuill — 已复制 {count} 行文字",
     },
-    "title.ocr_empty": {"en": "Shotquill — No text found", "zh": "Shotquill — 未识别到文字"},
+    "title.ocr_empty": {"en": "ShotQuill — No text found", "zh": "ShotQuill — 未识别到文字"},
     # Tools
     "tool.select": {"en": "Select", "zh": "选择"},
     "tool.rect": {"en": "Rectangle", "zh": "矩形"},
@@ -72,7 +72,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "toolbar.save": {"en": "Save", "zh": "保存"},
     "dialog.pick_color": {"en": "Select Color", "zh": "选择颜色"},
     # Settings
-    "settings.title": {"en": "Shotquill Settings", "zh": "Shotquill 设置"},
+    "settings.title": {"en": "ShotQuill Settings", "zh": "ShotQuill 设置"},
     "settings.save_dir": {"en": "Save Folder", "zh": "保存目录"},
     "settings.format": {"en": "Image Format", "zh": "图片格式"},
     "settings.region": {"en": "Region Capture", "zh": "区域截图"},

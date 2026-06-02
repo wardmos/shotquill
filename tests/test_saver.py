@@ -15,7 +15,7 @@ def test_save_png(tmp_path):
     path = save(_red_2x2(), str(tmp_path), "png")
     assert path.exists()
     assert path.suffix == ".png"
-    assert path.name.startswith("Shotquill ")
+    assert path.name.startswith("ShotQuill ")
     with Image.open(path) as img:
         assert img.size == (2, 2)
         assert img.getpixel((0, 0)) == (255, 0, 0, 255)
