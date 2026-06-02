@@ -30,12 +30,18 @@ jobs:
         run: bash packaging/macos/build_dmg.sh "${{ github.ref_name }}"
       - name: Compute SHA256
         id: sha
-        run: echo "sha=$(shasum -a 256 dist/Shotquill-*.dmg | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+        run: |
+          dmg=$(ls dist/Shotquill-*.dmg)
+          # Sidecar checksum file (shasum -c compatible) shipped with the release.
+          ( cd dist && shasum -a 256 "$(basename "$dmg")" > "$(basename "$dmg").sha256" )
+          echo "sha=$(awk '{print $1}' "$dmg.sha256")" >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release
         # Pinned to a commit SHA (supply-chain hardening); v2.6.2.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
-          files: dist/Shotquill-*.dmg
+          files: |
+            dist/Shotquill-*.dmg
+            dist/Shotquill-*.dmg.sha256
           generate_release_notes: true
       - name: Update Homebrew tap
         env:
