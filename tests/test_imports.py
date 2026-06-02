@@ -30,6 +30,7 @@ _MODULES = [
     "shotquill.ui.canvas",
     "shotquill.ui.editor",
     "shotquill.ui.overlay",
+    "shotquill.ui.window_picker",
     "shotquill.ui.toolbar",
     "shotquill.ui.settings",
     "shotquill.ui.feedback",

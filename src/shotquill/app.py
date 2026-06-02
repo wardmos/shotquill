@@ -2,9 +2,9 @@
 # Copyright (C) 2026 wardmos
 """Application entry point: a menu-bar-resident Qt app.
 
-Full-screen (``⌥S``) and region (``⌥A``) capture both open the annotation
-editor. Hotkeys, save directory, image format, and UI language are editable in
-Settings.
+Full-screen (``⌥S``), region (``⌥A``), and window (``⌥W``) capture all open the
+annotation editor. Hotkeys, save directory, image format, and UI language are
+editable in Settings.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.overlay import RegionOverlay
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
+from shotquill.ui.window_picker import WindowPicker
 
 _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
@@ -58,6 +59,7 @@ class _HotkeyBridge(QObject):
 
     region_requested = Signal()
     fullscreen_requested = Signal()
+    window_requested = Signal()
 
 
 class ShotquillApp:
@@ -79,6 +81,7 @@ class ShotquillApp:
         # Queued (cross-thread) connections: slots run on the main thread.
         self._bridge.region_requested.connect(self._capture_region)
         self._bridge.fullscreen_requested.connect(self._capture_fullscreen)
+        self._bridge.window_requested.connect(self._capture_window)
 
         self._tray = QSystemTrayIcon(_build_icon(), self._app)
         self._tray.setToolTip("ShotQuill")
@@ -91,11 +94,14 @@ class ShotquillApp:
         menu = QMenu()
         region_key = human_readable_hotkey(self._config.hotkey("region_capture"))
         fullscreen_key = human_readable_hotkey(self._config.hotkey("fullscreen_capture"))
+        window_key = human_readable_hotkey(self._config.hotkey("window_capture"))
 
         region = QAction(f"{t('menu.region')}\t{region_key}", menu)
         region.triggered.connect(self._capture_region)
         fullscreen = QAction(f"{t('menu.fullscreen')}\t{fullscreen_key}", menu)
         fullscreen.triggered.connect(self._capture_fullscreen)
+        window = QAction(f"{t('menu.window')}\t{window_key}", menu)
+        window.triggered.connect(self._capture_window)
         settings = QAction(t("menu.settings"), menu)
         settings.triggered.connect(self._open_settings)
         permissions = QAction(t("menu.permissions"), menu)
@@ -107,6 +113,7 @@ class ShotquillApp:
 
         menu.addAction(region)
         menu.addAction(fullscreen)
+        menu.addAction(window)
         menu.addSeparator()
         menu.addAction(settings)
         menu.addAction(permissions)
@@ -128,6 +135,10 @@ class ShotquillApp:
             self._config.hotkey("fullscreen_capture"),
             self._bridge.fullscreen_requested.emit,
         )
+        self._hotkeys.register(
+            self._config.hotkey("window_capture"),
+            self._bridge.window_requested.emit,
+        )
         self._hotkeys.start()
 
     def _capture_fullscreen(self) -> None:
@@ -147,17 +158,46 @@ class ShotquillApp:
         overlay.activateWindow()
         overlay.setFocus()
 
+    def _capture_window(self) -> None:
+        # Snapshot the window list *before* showing the picker so our own
+        # overlay isn't a target, then let the user point at a window.
+        try:
+            windows = self._capturer.list_windows()
+        except Exception as exc:
+            self._notify(t("notify.capture_failed").format(error=exc))
+            return
+        if not windows:
+            self._notify(t("notify.no_windows"))
+            return
+        screenshot = self._grab()
+        if screenshot is None:
+            return
+        picker = WindowPicker(screenshot, self._app.primaryScreen().virtualGeometry(), windows)
+        picker.window_selected.connect(self._capture_window_image)
+        self._track(picker)
+        picker.show()
+        picker.raise_()
+        picker.activateWindow()
+        picker.setFocus()
+
+    def _capture_window_image(self, window_id: int) -> None:
+        try:
+            result = self._capturer.capture_window(window_id)
+        except Exception as exc:
+            self._notify(t("notify.capture_failed").format(error=exc))
+            return
+        self._open_editor(result_to_qimage(result))
+
     def _grab(self) -> QImage | None:
         try:
             result = self._capturer.capture_fullscreen()
         except Exception as exc:
-            self._tray.showMessage(
-                "ShotQuill",
-                t("notify.capture_failed").format(error=exc),
-                QSystemTrayIcon.MessageIcon.Critical,
-            )
+            self._notify(t("notify.capture_failed").format(error=exc))
             return None
         return result_to_qimage(result)
+
+    def _notify(self, message: str) -> None:
+        self._tray.showMessage("ShotQuill", message, QSystemTrayIcon.MessageIcon.Critical)
 
     def _open_editor(self, image: QImage) -> None:
         self._signal_capture()

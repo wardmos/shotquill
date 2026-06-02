@@ -13,11 +13,14 @@ cross-platform architecture (Windows / Linux planned).
 
 ## Features
 
-- Global hotkeys for **region** (`⌥A`) and **full-screen** (`⌥S`) capture — customizable
+- Global hotkeys for **region** (`⌥A`), **full-screen** (`⌥S`), and **window**
+  (`⌥W`) capture — customizable
+- Window capture: point at any app window and click to grab it (real pixels,
+  even when partially covered)
 - On-screen annotation: rectangles, circles, arrows, lines, freehand, text,
   highlighter, and mosaic for redaction
 - On-device OCR (Apple Vision) — extract text from a capture, fully offline
-- Copy to clipboard or save to disk
+- Copy to clipboard (Enter) or save to disk (Space)
 - English / 中文 interface (switchable in Settings; defaults to English)
 - Menu-bar resident, no Dock clutter
 

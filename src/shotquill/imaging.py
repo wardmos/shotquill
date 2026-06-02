@@ -15,11 +15,13 @@ if TYPE_CHECKING:
 def result_to_qimage(result: CaptureResult) -> QImage:
     from PySide6.QtGui import QImage
 
-    image = QImage(
-        result.pixels,
-        result.width,
-        result.height,
-        QImage.Format.Format_RGBA8888,
+    # Window captures arrive with premultiplied alpha (so transparent rounded
+    # corners render correctly); screen grabs are straight RGBA.
+    fmt = (
+        QImage.Format.Format_RGBA8888_Premultiplied
+        if result.premultiplied
+        else QImage.Format.Format_RGBA8888
     )
+    image = QImage(result.pixels, result.width, result.height, fmt)
     # Detach from the Python bytes before they can be garbage collected.
     return image.copy()

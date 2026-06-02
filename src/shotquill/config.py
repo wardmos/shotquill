@@ -15,6 +15,7 @@ from shotquill.i18n import DEFAULT_LANGUAGE
 DEFAULT_HOTKEYS: dict[str, str] = {
     "region_capture": "<alt>+a",
     "fullscreen_capture": "<alt>+s",
+    "window_capture": "<alt>+w",
 }
 
 DEFAULT_IMAGE_FORMAT = "png"
