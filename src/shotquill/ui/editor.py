@@ -48,21 +48,37 @@ class EditorWindow(QMainWindow):
         super().showEvent(event)
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
 
+    def keyPressEvent(self, event) -> None:
+        # Quick-finish keys: Space saves to disk, Enter copies to the clipboard.
+        # Both close the editor (handled in _save / _copy). A focused text
+        # annotation consumes the key first, so these never fire mid-typing.
+        key = event.key()
+        if key == Qt.Key_Space:
+            self._save()
+        elif key in (Qt.Key_Return, Qt.Key_Enter):
+            self._copy()
+        else:
+            super().keyPressEvent(event)
+
     def _copy(self) -> None:
+        # Copy the annotated shot to the clipboard, then close the editor — the
+        # toolbar button and the Enter shortcut share this finish-and-dismiss flow.
         from shotquill.output.clipboard import copy_qimage
 
         copy_qimage(self._canvas.export_image())
-        self.setWindowTitle(t("title.copied"))
+        self.close()
 
     def _save(self) -> None:
+        # Save to the configured folder, then close — shared by the toolbar
+        # button and the Space shortcut.
         from shotquill.output.saver import save_qimage
 
-        path = save_qimage(
+        save_qimage(
             self._canvas.export_image(),
             self._config.save_dir(),
             self._config.image_format(),
         )
-        self.setWindowTitle(t("title.saved").format(name=path.name))
+        self.close()
 
     def _pin(self) -> None:
         # Hand the annotated image to the app (which keeps the pin alive), then

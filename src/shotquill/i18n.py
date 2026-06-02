@@ -69,7 +69,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "拖动移动 · 双击或 Esc 关闭",
     },
     "toolbar.copy": {"en": "Copy", "zh": "复制"},
+    "toolbar.copy_tip": {"en": "Copy to clipboard (Enter)", "zh": "复制到剪贴板（回车）"},
     "toolbar.save": {"en": "Save", "zh": "保存"},
+    "toolbar.save_tip": {"en": "Save to file (Space)", "zh": "保存到文件（空格）"},
     "dialog.pick_color": {"en": "Select Color", "zh": "选择颜色"},
     # Settings
     "settings.title": {"en": "ShotQuill Settings", "zh": "ShotQuill 设置"},

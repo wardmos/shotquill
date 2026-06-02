@@ -90,11 +90,13 @@ def create_toolbar(
 
     copy_action = QAction(t("toolbar.copy"), toolbar)
     copy_action.setShortcut(QKeySequence.Copy)
+    copy_action.setToolTip(t("toolbar.copy_tip"))
     copy_action.triggered.connect(on_copy)
     toolbar.addAction(copy_action)
 
     save_action = QAction(t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
+    save_action.setToolTip(t("toolbar.save_tip"))
     save_action.triggered.connect(on_save)
     toolbar.addAction(save_action)
 
