@@ -24,6 +24,11 @@ def _canvas(qtbot, width=120, height=90):
     canvas = AnnotationCanvas(pixmap)
     canvas.resize(width, height)
     qtbot.addWidget(canvas)
+    # The view must be shown and laid out so mapToScene yields in-bounds scene
+    # coordinates; otherwise simulated mouse points map outside the image.
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    canvas.fitInView(canvas.sceneRect(), Qt.KeepAspectRatio)
     return canvas
 
 
