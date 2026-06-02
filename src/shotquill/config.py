@@ -20,6 +20,25 @@ DEFAULT_HOTKEYS: dict[str, str] = {
 DEFAULT_IMAGE_FORMAT = "png"
 DEFAULT_SAVE_DIR = "~/Pictures/Shotquill"
 
+# Capture feedback: a brief screen flash is on by default; the shutter sound is
+# off by default (opt-in, to stay quiet and unobtrusive).
+DEFAULT_FLASH = True
+DEFAULT_SOUND = False
+# Launch at login is off by default; enabling it installs a LaunchAgent.
+DEFAULT_AUTOSTART = False
+
+
+def _to_bool(value: object, default: bool) -> bool:
+    """Coerce a QSettings value (which may come back as a string) into a bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    if value is None:
+        return default
+    return bool(value)
+
+
 _MODIFIER_SYMBOLS = {
     "<alt>": "⌥",
     "<cmd>": "⌘",
@@ -65,3 +84,21 @@ class Config:
 
     def set_language(self, language: str) -> None:
         self._settings.setValue("ui/language", language)
+
+    def flash_on_capture(self) -> bool:
+        return _to_bool(self._settings.value("feedback/flash"), DEFAULT_FLASH)
+
+    def set_flash_on_capture(self, enabled: bool) -> None:
+        self._settings.setValue("feedback/flash", bool(enabled))
+
+    def sound_on_capture(self) -> bool:
+        return _to_bool(self._settings.value("feedback/sound"), DEFAULT_SOUND)
+
+    def set_sound_on_capture(self, enabled: bool) -> None:
+        self._settings.setValue("feedback/sound", bool(enabled))
+
+    def autostart(self) -> bool:
+        return _to_bool(self._settings.value("startup/autostart"), DEFAULT_AUTOSTART)
+
+    def set_autostart(self, enabled: bool) -> None:
+        self._settings.setValue("startup/autostart", bool(enabled))

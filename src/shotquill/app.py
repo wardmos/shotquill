@@ -17,12 +17,14 @@ from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixm
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from shotquill import __version__
+from shotquill.autostart.macos import MacAutostartManager
 from shotquill.capture.macos import MacScreenCapturer
 from shotquill.config import Config, human_readable_hotkey
 from shotquill.hotkeys.macos import MacHotkeyManager
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow
+from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.overlay import RegionOverlay
 from shotquill.ui.settings import SettingsDialog
 
@@ -67,6 +69,9 @@ class ShotquillApp:
 
         self._capturer = MacScreenCapturer()
         self._hotkeys = MacHotkeyManager()
+        self._feedback = CaptureFeedback()
+        self._autostart = MacAutostartManager()
+        self._sync_autostart()
         self._windows: list[object] = []  # keep overlays/editors alive
 
         self._bridge = _HotkeyBridge()
@@ -154,17 +159,34 @@ class ShotquillApp:
         return result_to_qimage(result)
 
     def _open_editor(self, image: QImage) -> None:
+        self._signal_capture()
         editor = EditorWindow(image, self._config)
         self._track(editor)
         editor.show()
         editor.raise_()
         editor.activateWindow()
 
+    def _signal_capture(self) -> None:
+        """Flash the screen and/or play a sound to confirm a shot was taken."""
+        self._feedback.trigger(
+            self._app.primaryScreen().virtualGeometry(),
+            flash=self._config.flash_on_capture(),
+            sound=self._config.sound_on_capture(),
+        )
+
+    def _sync_autostart(self) -> None:
+        """Make the on-disk login entry match the saved preference."""
+        try:
+            self._autostart.set_enabled(self._config.autostart())
+        except OSError:
+            pass  # non-fatal: launch-at-login is a convenience, not core function
+
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._config)
         if dialog.exec():
             set_language(self._config.language())
             self._apply_hotkeys()
+            self._sync_autostart()
             self._rebuild_menu()
 
     def _show_about(self) -> None:

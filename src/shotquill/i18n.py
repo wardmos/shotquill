@@ -71,6 +71,9 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.language": {"en": "Language", "zh": "界面语言"},
     "settings.browse": {"en": "Browse…", "zh": "浏览…"},
     "settings.choose_dir": {"en": "Choose Save Folder", "zh": "选择保存目录"},
+    "settings.autostart": {"en": "Launch at login", "zh": "开机自启"},
+    "settings.flash": {"en": "Flash on capture", "zh": "截图时闪光"},
+    "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},
 }
 
 _current = DEFAULT_LANGUAGE

@@ -106,6 +106,18 @@ class SettingsDialog(QDialog):
         form.addRow(t("settings.region"), self._region)
         form.addRow(t("settings.fullscreen"), self._fullscreen)
 
+        self._autostart = QCheckBox(t("settings.autostart"))
+        self._autostart.setChecked(config.autostart())
+        form.addRow("", self._autostart)
+
+        self._flash = QCheckBox(t("settings.flash"))
+        self._flash.setChecked(config.flash_on_capture())
+        form.addRow("", self._flash)
+
+        self._sound = QCheckBox(t("settings.sound"))
+        self._sound.setChecked(config.sound_on_capture())
+        form.addRow("", self._sound)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
@@ -127,4 +139,7 @@ class SettingsDialog(QDialog):
         self._config.set_image_format(self._format.currentText())
         self._config.set_hotkey("region_capture", self._region.combo())
         self._config.set_hotkey("fullscreen_capture", self._fullscreen.combo())
+        self._config.set_autostart(self._autostart.isChecked())
+        self._config.set_flash_on_capture(self._flash.isChecked())
+        self._config.set_sound_on_capture(self._sound.isChecked())
         self.accept()
