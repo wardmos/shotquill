@@ -31,24 +31,72 @@ from shotquill.hotkeys.combo import parse_combo
 # is what makes Option combos reliable.
 _MAC_VK: dict[str, int] = {
     # letters
-    "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7,
-    "c": 8, "v": 9, "b": 11, "q": 12, "w": 13, "e": 14, "r": 15,
-    "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37,
-    "j": 38, "k": 40, "n": 45, "m": 46,
+    "a": 0,
+    "s": 1,
+    "d": 2,
+    "f": 3,
+    "h": 4,
+    "g": 5,
+    "z": 6,
+    "x": 7,
+    "c": 8,
+    "v": 9,
+    "b": 11,
+    "q": 12,
+    "w": 13,
+    "e": 14,
+    "r": 15,
+    "y": 16,
+    "t": 17,
+    "o": 31,
+    "u": 32,
+    "i": 34,
+    "p": 35,
+    "l": 37,
+    "j": 38,
+    "k": 40,
+    "n": 45,
+    "m": 46,
     # number row
-    "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26,
-    "8": 28, "9": 25, "0": 29,
+    "1": 18,
+    "2": 19,
+    "3": 20,
+    "4": 21,
+    "5": 23,
+    "6": 22,
+    "7": 26,
+    "8": 28,
+    "9": 25,
+    "0": 29,
     # function keys
-    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
-    "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+    "f1": 122,
+    "f2": 120,
+    "f3": 99,
+    "f4": 118,
+    "f5": 96,
+    "f6": 97,
+    "f7": 98,
+    "f8": 100,
+    "f9": 101,
+    "f10": 109,
+    "f11": 103,
+    "f12": 111,
 }
 
 # Every pynput modifier key (generic + left/right variants) -> canonical name.
 _MOD_NAMES: dict[object, str] = {
-    Key.alt: "alt", Key.alt_l: "alt", Key.alt_r: "alt",
-    Key.cmd: "cmd", Key.cmd_l: "cmd", Key.cmd_r: "cmd",
-    Key.ctrl: "ctrl", Key.ctrl_l: "ctrl", Key.ctrl_r: "ctrl",
-    Key.shift: "shift", Key.shift_l: "shift", Key.shift_r: "shift",
+    Key.alt: "alt",
+    Key.alt_l: "alt",
+    Key.alt_r: "alt",
+    Key.cmd: "cmd",
+    Key.cmd_l: "cmd",
+    Key.cmd_r: "cmd",
+    Key.ctrl: "ctrl",
+    Key.ctrl_l: "ctrl",
+    Key.ctrl_r: "ctrl",
+    Key.shift: "shift",
+    Key.shift_l: "shift",
+    Key.shift_r: "shift",
 }
 if hasattr(Key, "alt_gr"):  # present on some layouts; treat as Option
     _MOD_NAMES[Key.alt_gr] = "alt"
@@ -93,9 +141,7 @@ class MacHotkeyManager(HotkeyManager):
         if not self._bindings:
             return
         self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
-        self._listener = keyboard.Listener(
-            on_press=self._on_press, on_release=self._on_release
-        )
+        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._listener.start()
 
     def stop(self) -> None:

@@ -77,9 +77,7 @@ class Config:
         self._settings.setValue(f"hotkeys/{action}", combo)
 
     def hotkey_enabled(self, action: str) -> bool:
-        return _to_bool(
-            self._settings.value(f"hotkeys/{action}_enabled"), DEFAULT_HOTKEY_ENABLED
-        )
+        return _to_bool(self._settings.value(f"hotkeys/{action}_enabled"), DEFAULT_HOTKEY_ENABLED)
 
     def set_hotkey_enabled(self, action: str, enabled: bool) -> None:
         self._settings.setValue(f"hotkeys/{action}_enabled", bool(enabled))
