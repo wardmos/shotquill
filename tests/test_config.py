@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
 from shotquill.config import (
+    DEFAULT_AUTO_COPY,
+    DEFAULT_AUTO_SAVE,
     DEFAULT_AUTOSTART,
     DEFAULT_FLASH,
     DEFAULT_HOTKEYS,
@@ -31,6 +33,12 @@ def test_feedback_defaults():
     assert DEFAULT_FLASH is True
     assert DEFAULT_SOUND is False
     assert DEFAULT_AUTOSTART is False
+
+
+def test_auto_output_defaults_on():
+    # Hands-free by default: a capture is saved AND copied without the editor.
+    assert DEFAULT_AUTO_SAVE is True
+    assert DEFAULT_AUTO_COPY is True
 
 
 def test_to_bool_falls_back_to_default_when_unset():

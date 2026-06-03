@@ -156,14 +156,14 @@ class ShotquillApp:
     def _capture_fullscreen(self) -> None:
         screenshot = self._grab()
         if screenshot is not None:
-            self._open_editor(screenshot)
+            self._deliver_capture(screenshot)
 
     def _capture_region(self) -> None:
         screenshot = self._grab()
         if screenshot is None:
             return
         overlay = RegionOverlay(screenshot, self._app.primaryScreen().virtualGeometry())
-        overlay.region_selected.connect(self._open_editor)
+        overlay.region_selected.connect(self._deliver_capture)
         self._track(overlay)
         overlay.show()
         overlay.raise_()
@@ -198,7 +198,7 @@ class ShotquillApp:
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
             return
-        self._open_editor(result_to_qimage(result))
+        self._deliver_capture(result_to_qimage(result))
 
     def _grab(self) -> QImage | None:
         try:
@@ -211,8 +211,35 @@ class ShotquillApp:
     def _notify(self, message: str) -> None:
         self._tray.showMessage("ShotQuill", message, QSystemTrayIcon.MessageIcon.Critical)
 
-    def _open_editor(self, image: QImage) -> None:
+    def _deliver_capture(self, image: QImage) -> None:
+        # Single exit for every capture mode. Flash/sound feedback fires either
+        # way; then auto-output (if enabled) saves/copies the raw shot hands-free
+        # and skips the editor. With both auto toggles off, the editor opens.
         self._signal_capture()
+        if self._auto_output(image):
+            return
+        self._open_editor(image)
+
+    def _auto_output(self, image: QImage) -> bool:
+        """Save and/or copy the raw shot per config; return True if it handled it."""
+        save = self._config.auto_save_after_capture()
+        copy = self._config.auto_copy_after_capture()
+        if not (save or copy):
+            return False
+        if copy:
+            from shotquill.output.clipboard import copy_qimage
+
+            copy_qimage(image)
+        if save:
+            from shotquill.output.saver import save_qimage
+
+            try:
+                save_qimage(image, self._config.save_dir(), self._config.image_format())
+            except OSError as exc:
+                self._notify(t("notify.capture_failed").format(error=exc))
+        return True
+
+    def _open_editor(self, image: QImage) -> None:
         editor = EditorWindow(image, self._config)
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)

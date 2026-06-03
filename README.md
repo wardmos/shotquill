@@ -20,7 +20,9 @@ cross-platform architecture (Windows / Linux planned).
 - On-screen annotation: rectangles, circles, arrows, lines, freehand, text,
   highlighter, and mosaic for redaction
 - On-device OCR (Apple Vision) — extract text from a capture, fully offline
-- Copy to clipboard (Enter) or save to disk (Space)
+- Hands-free by default: a capture is saved to your folder **and** copied to the
+  clipboard automatically — no extra keypress. Configurable in Settings (save
+  only, clipboard only, or off to annotate first, then Space saves / Enter copies)
 - English / 中文 interface (switchable in Settings; defaults to English)
 - Menu-bar resident, no Dock clutter
 

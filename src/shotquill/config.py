@@ -27,6 +27,11 @@ DEFAULT_FLASH = True
 DEFAULT_SOUND = False
 # Launch at login is off by default; enabling it installs a LaunchAgent.
 DEFAULT_AUTOSTART = False
+# Auto-output: when on, a capture is saved and/or copied immediately and the
+# annotation editor is skipped (hands-free). Both default on; turn both off to
+# get the manual annotate-then-save/copy flow back.
+DEFAULT_AUTO_SAVE = True
+DEFAULT_AUTO_COPY = True
 
 
 def _to_bool(value: object, default: bool) -> bool:
@@ -103,3 +108,15 @@ class Config:
 
     def set_autostart(self, enabled: bool) -> None:
         self._settings.setValue("startup/autostart", bool(enabled))
+
+    def auto_save_after_capture(self) -> bool:
+        return _to_bool(self._settings.value("output/auto_save"), DEFAULT_AUTO_SAVE)
+
+    def set_auto_save_after_capture(self, enabled: bool) -> None:
+        self._settings.setValue("output/auto_save", bool(enabled))
+
+    def auto_copy_after_capture(self) -> bool:
+        return _to_bool(self._settings.value("output/auto_copy"), DEFAULT_AUTO_COPY)
+
+    def set_auto_copy_after_capture(self, enabled: bool) -> None:
+        self._settings.setValue("output/auto_copy", bool(enabled))
