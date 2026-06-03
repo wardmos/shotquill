@@ -32,10 +32,38 @@ for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" \
 done
 iconutil -c icns "$ICONSET" -o "$ICNS"
 
+# ShotQuill only uses QtCore / QtGui / QtWidgets, but PyInstaller's PySide6 hook
+# would otherwise pull in the entire Qt stack (Chromium/WebEngine, QML, Qt3D,
+# Charts, Multimedia, …) — hundreds of MB the app never touches. Drop the unused
+# Qt modules so they (and their shared libraries) stay out of the bundle.
+QT_EXCLUDES=(
+  PySide6.QtWebEngineCore PySide6.QtWebEngineWidgets PySide6.QtWebEngineQuick
+  PySide6.QtWebChannel PySide6.QtWebSockets PySide6.QtNetworkAuth PySide6.QtHttpServer
+  PySide6.QtQml PySide6.QtQmlModels PySide6.QtQuick PySide6.QtQuick3D
+  PySide6.QtQuickWidgets PySide6.QtQuickControls2
+  PySide6.Qt3DCore PySide6.Qt3DRender PySide6.Qt3DInput PySide6.Qt3DLogic
+  PySide6.Qt3DAnimation PySide6.Qt3DExtras
+  PySide6.QtCharts PySide6.QtDataVisualization PySide6.QtGraphs
+  PySide6.QtMultimedia PySide6.QtMultimediaWidgets PySide6.QtSpatialAudio
+  PySide6.QtPdf PySide6.QtPdfWidgets PySide6.QtSql PySide6.QtSvg PySide6.QtSvgWidgets
+  PySide6.QtBluetooth PySide6.QtNfc PySide6.QtPositioning PySide6.QtLocation
+  PySide6.QtSensors PySide6.QtSerialPort PySide6.QtSerialBus
+  PySide6.QtRemoteObjects PySide6.QtScxml PySide6.QtStateMachine
+  PySide6.QtTextToSpeech PySide6.QtHelp PySide6.QtDesigner PySide6.QtUiTools
+  PySide6.QtTest PySide6.QtXml PySide6.QtDBus PySide6.QtNetwork
+  tkinter
+)
+EXCLUDE_FLAGS=()
+for mod in "${QT_EXCLUDES[@]}"; do
+  EXCLUDE_FLAGS+=(--exclude-module "$mod")
+done
+
 pyinstaller --noconfirm --windowed --name ShotQuill \
   --osx-bundle-identifier com.wardmos.shotquill \
   --icon "$ICNS" \
   --paths src \
+  --strip \
+  "${EXCLUDE_FLAGS[@]}" \
   packaging/entry.py
 
 # Menu-bar agent app (no Dock icon) + screen-recording prompt text + version.
@@ -59,7 +87,9 @@ cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 
 DMG="dist/ShotQuill-$VERSION.dmg"
-hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+# ULMO = LZMA-compressed DMG: noticeably smaller than UDZO (zlib). Mountable on
+# macOS 10.15+, which is well below ShotQuill's target.
+hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$STAGING" -ov -format ULMO "$DMG"
 rm -rf "$STAGING"
 
 echo "Built $DMG"
