@@ -54,3 +54,15 @@ jobs:
       - name: Test (macOS)
         if: runner.os == 'macOS'
         run: pytest -q
+
+  # Single aggregated gate so branch protection only needs one required check,
+  # regardless of how the test matrix above changes. Fails if any matrix leg did.
+  ci-success:
+    name: CI success
+    if: always()
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all matrix jobs passed
+        if: needs.lint-and-test.result != 'success'
+        run: exit 1
