@@ -32,5 +32,8 @@ tmp/
 .vscode/
 .idea/
 
+# Claude Code local config
+.claude/
+
 # Logs
 *.log
