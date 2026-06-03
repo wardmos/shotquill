@@ -90,6 +90,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.title": {"en": "ShotQuill Settings", "zh": "ShotQuill 设置"},
     "settings.save_dir": {"en": "Save Folder", "zh": "保存目录"},
     "settings.format": {"en": "Image Format", "zh": "图片格式"},
+    "settings.hotkey_enabled": {"en": "Enable", "zh": "启用"},
     "settings.region": {"en": "Region Capture", "zh": "区域截图"},
     "settings.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "settings.window": {"en": "Capture Window", "zh": "窗口截图"},

@@ -23,6 +23,18 @@ def test_hotkey_row_reflects_modifiers(qtbot):
     assert row._key.currentText().lower() == "s"
 
 
+def test_hotkey_row_disabled_greys_out_controls(qtbot):
+    row = _HotkeyRow("<alt>+a", enabled=False)
+    qtbot.addWidget(row)
+    assert row.enabled() is False
+    assert row._alt.isEnabled() is False
+    assert row._key.isEnabled() is False
+    # Re-enabling restores the combo controls.
+    row._enabled.setChecked(True)
+    assert row._alt.isEnabled() is True
+    assert row._key.isEnabled() is True
+
+
 def test_dialog_prefills_from_config(qtbot, config):
     config.set_language("zh")
     config.set_image_format("jpg")
@@ -66,3 +78,20 @@ def test_dialog_save_persists_custom_hotkey(qtbot, config):
     dialog._region._key.setCurrentIndex(key_index)
     dialog._save_and_accept()
     assert config.hotkey("region_capture") == "<cmd>+r"
+
+
+def test_dialog_prefills_hotkey_enabled_state(qtbot, config):
+    config.set_hotkey_enabled("fullscreen_capture", False)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._region.enabled() is True
+    assert dialog._fullscreen.enabled() is False
+
+
+def test_dialog_save_persists_hotkey_enabled_state(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._window._enabled.setChecked(False)
+    dialog._save_and_accept()
+    assert config.hotkey_enabled("window_capture") is False
+    assert config.hotkey_enabled("region_capture") is True

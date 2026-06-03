@@ -18,6 +18,9 @@ DEFAULT_HOTKEYS: dict[str, str] = {
     "window_capture": "<alt>+w",
 }
 
+# Each capture hotkey can be enabled/disabled independently; all on by default.
+DEFAULT_HOTKEY_ENABLED = True
+
 DEFAULT_IMAGE_FORMAT = "png"
 DEFAULT_SAVE_DIR = "~/Pictures/ShotQuill"
 
@@ -72,6 +75,14 @@ class Config:
 
     def set_hotkey(self, action: str, combo: str) -> None:
         self._settings.setValue(f"hotkeys/{action}", combo)
+
+    def hotkey_enabled(self, action: str) -> bool:
+        return _to_bool(
+            self._settings.value(f"hotkeys/{action}_enabled"), DEFAULT_HOTKEY_ENABLED
+        )
+
+    def set_hotkey_enabled(self, action: str, enabled: bool) -> None:
+        self._settings.setValue(f"hotkeys/{action}_enabled", bool(enabled))
 
     def image_format(self) -> str:
         return str(self._settings.value("output/format", DEFAULT_IMAGE_FORMAT))

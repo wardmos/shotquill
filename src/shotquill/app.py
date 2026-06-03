@@ -108,12 +108,18 @@ class ShotquillApp:
         self._tray.show()
         self._apply_hotkeys()
 
+    def _hotkey_label(self, action: str) -> str:
+        """Display string for a hotkey, or empty if the user disabled it."""
+        if not self._config.hotkey_enabled(action):
+            return ""
+        return human_readable_hotkey(self._config.hotkey(action))
+
     def _rebuild_menu(self) -> None:
         """(Re)build the tray menu — used at startup and after a language change."""
         menu = QMenu()
-        region_key = human_readable_hotkey(self._config.hotkey("region_capture"))
-        fullscreen_key = human_readable_hotkey(self._config.hotkey("fullscreen_capture"))
-        window_key = human_readable_hotkey(self._config.hotkey("window_capture"))
+        region_key = self._hotkey_label("region_capture")
+        fullscreen_key = self._hotkey_label("fullscreen_capture")
+        window_key = self._hotkey_label("window_capture")
 
         region = QAction(f"{t('menu.region')}\t{region_key}", menu)
         region.triggered.connect(self._capture_region)
@@ -149,18 +155,14 @@ class ShotquillApp:
     def _apply_hotkeys(self) -> None:
         self._hotkeys.stop()
         self._hotkeys.clear()
-        self._hotkeys.register(
-            self._config.hotkey("region_capture"),
-            self._bridge.region_requested.emit,
+        actions = (
+            ("region_capture", self._bridge.region_requested.emit),
+            ("fullscreen_capture", self._bridge.fullscreen_requested.emit),
+            ("window_capture", self._bridge.window_requested.emit),
         )
-        self._hotkeys.register(
-            self._config.hotkey("fullscreen_capture"),
-            self._bridge.fullscreen_requested.emit,
-        )
-        self._hotkeys.register(
-            self._config.hotkey("window_capture"),
-            self._bridge.window_requested.emit,
-        )
+        for action, emit in actions:
+            if self._config.hotkey_enabled(action):
+                self._hotkeys.register(self._config.hotkey(action), emit)
         self._hotkeys.start()
 
     def _capture_fullscreen(self) -> None:

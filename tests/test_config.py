@@ -90,6 +90,19 @@ def test_config_scalar_round_trips(config):
     assert config.language() == "zh"
 
 
+def test_hotkeys_enabled_by_default(config):
+    assert config.hotkey_enabled("region_capture") is True
+    assert config.hotkey_enabled("fullscreen_capture") is True
+    assert config.hotkey_enabled("window_capture") is True
+
+
+def test_hotkey_enabled_round_trip(config):
+    config.set_hotkey_enabled("region_capture", False)
+    assert config.hotkey_enabled("region_capture") is False
+    # Other actions stay enabled.
+    assert config.hotkey_enabled("fullscreen_capture") is True
+
+
 def test_config_bool_round_trips(config):
     config.set_flash_on_capture(False)
     config.set_sound_on_capture(True)

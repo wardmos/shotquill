@@ -92,6 +92,15 @@ def test_apply_hotkeys_registers_all_capture_combos(qapp, config, fakes):
     app.shutdown()
 
 
+def test_apply_hotkeys_skips_disabled_combos(qapp, config, fakes):
+    config.set_hotkey_enabled("fullscreen_capture", False)
+    _capturer, hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    # The disabled fullscreen combo is never registered with the listener.
+    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+w"}
+    app.shutdown()
+
+
 def test_grab_returns_qimage_on_success(qapp, config, fakes):
     app = _build_app(qapp, fakes)
     image = app._grab()

@@ -31,13 +31,21 @@ _FORMATS = ["png", "jpg"]
 
 
 class _HotkeyRow(QWidget):
-    """⌘/⌃/⌥/⇧ checkboxes plus a key dropdown that yield a pynput combo string."""
+    """An enable toggle, ⌘/⌃/⌥/⇧ checkboxes, and a key dropdown.
 
-    def __init__(self, combo: str) -> None:
+    Yields a pynput combo string plus whether the hotkey is enabled. When the
+    enable box is unchecked the combo controls are greyed out to make it clear
+    the shortcut is off.
+    """
+
+    def __init__(self, combo: str, enabled: bool = True) -> None:
         super().__init__()
         parsed = parse_combo(combo)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        self._enabled = QCheckBox(t("settings.hotkey_enabled"))
+        self._enabled.setChecked(enabled)
 
         self._cmd = QCheckBox("⌘")
         self._ctrl = QCheckBox("⌃")
@@ -54,9 +62,21 @@ class _HotkeyRow(QWidget):
         if index >= 0:
             self._key.setCurrentIndex(index)
 
-        for widget in (self._cmd, self._ctrl, self._alt, self._shift, self._key):
+        self._controls = (self._cmd, self._ctrl, self._alt, self._shift, self._key)
+        layout.addWidget(self._enabled)
+        for widget in self._controls:
             layout.addWidget(widget)
         layout.addStretch()
+
+        self._enabled.toggled.connect(self._sync_enabled)
+        self._sync_enabled(self._enabled.isChecked())
+
+    def _sync_enabled(self, on: bool) -> None:
+        for widget in self._controls:
+            widget.setEnabled(on)
+
+    def enabled(self) -> bool:
+        return self._enabled.isChecked()
 
     def combo(self) -> str:
         return to_pynput_combo(
@@ -101,9 +121,15 @@ class SettingsDialog(QDialog):
             self._format.setCurrentIndex(format_index)
         form.addRow(t("settings.format"), self._format)
 
-        self._region = _HotkeyRow(config.hotkey("region_capture"))
-        self._fullscreen = _HotkeyRow(config.hotkey("fullscreen_capture"))
-        self._window = _HotkeyRow(config.hotkey("window_capture"))
+        self._region = _HotkeyRow(
+            config.hotkey("region_capture"), config.hotkey_enabled("region_capture")
+        )
+        self._fullscreen = _HotkeyRow(
+            config.hotkey("fullscreen_capture"), config.hotkey_enabled("fullscreen_capture")
+        )
+        self._window = _HotkeyRow(
+            config.hotkey("window_capture"), config.hotkey_enabled("window_capture")
+        )
         form.addRow(t("settings.region"), self._region)
         form.addRow(t("settings.fullscreen"), self._fullscreen)
         form.addRow(t("settings.window"), self._window)
@@ -150,6 +176,9 @@ class SettingsDialog(QDialog):
         self._config.set_hotkey("region_capture", self._region.combo())
         self._config.set_hotkey("fullscreen_capture", self._fullscreen.combo())
         self._config.set_hotkey("window_capture", self._window.combo())
+        self._config.set_hotkey_enabled("region_capture", self._region.enabled())
+        self._config.set_hotkey_enabled("fullscreen_capture", self._fullscreen.enabled())
+        self._config.set_hotkey_enabled("window_capture", self._window.enabled())
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_autostart(self._autostart.isChecked())
