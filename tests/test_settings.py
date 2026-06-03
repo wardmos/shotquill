@@ -72,26 +72,26 @@ def test_dialog_save_writes_back_to_config(qtbot, config):
 def test_dialog_save_persists_custom_hotkey(qtbot, config):
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    dialog._region._cmd.setChecked(True)
-    dialog._region._alt.setChecked(False)
-    key_index = dialog._region._key.findText("R")
-    dialog._region._key.setCurrentIndex(key_index)
+    dialog._smart._cmd.setChecked(True)
+    dialog._smart._alt.setChecked(False)
+    key_index = dialog._smart._key.findText("R")
+    dialog._smart._key.setCurrentIndex(key_index)
     dialog._save_and_accept()
-    assert config.hotkey("region_capture") == "<cmd>+r"
+    assert config.hotkey("smart_capture") == "<cmd>+r"
 
 
 def test_dialog_prefills_hotkey_enabled_state(qtbot, config):
     config.set_hotkey_enabled("fullscreen_capture", False)
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    assert dialog._region.enabled() is True
+    assert dialog._smart.enabled() is True
     assert dialog._fullscreen.enabled() is False
 
 
 def test_dialog_save_persists_hotkey_enabled_state(qtbot, config):
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    dialog._window._enabled.setChecked(False)
+    dialog._smart._enabled.setChecked(False)
     dialog._save_and_accept()
-    assert config.hotkey_enabled("window_capture") is False
-    assert config.hotkey_enabled("region_capture") is True
+    assert config.hotkey_enabled("smart_capture") is False
+    assert config.hotkey_enabled("fullscreen_capture") is True

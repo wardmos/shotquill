@@ -28,6 +28,9 @@ class _FakeCapturer:
     def capture_region(self, region):  # pragma: no cover - unused here
         return self.capture_fullscreen()
 
+    def list_windows(self):
+        return []
+
 
 class _FakeHotkeys:
     def __init__(self):
@@ -87,7 +90,7 @@ def test_build_icon_is_not_null(qapp):
 def test_apply_hotkeys_registers_all_capture_combos(qapp, config, fakes):
     _capturer, hotkeys, _autostart = fakes
     app = _build_app(qapp, fakes)
-    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+s", "<alt>+w"}
+    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+s"}
     assert hotkeys.started >= 1
     app.shutdown()
 
@@ -97,7 +100,7 @@ def test_apply_hotkeys_skips_disabled_combos(qapp, config, fakes):
     _capturer, hotkeys, _autostart = fakes
     app = _build_app(qapp, fakes)
     # The disabled fullscreen combo is never registered with the listener.
-    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+w"}
+    assert set(hotkeys.bindings) == {"<alt>+a"}
     app.shutdown()
 
 

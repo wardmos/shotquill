@@ -13,9 +13,8 @@ from __future__ import annotations
 from shotquill.i18n import DEFAULT_LANGUAGE
 
 DEFAULT_HOTKEYS: dict[str, str] = {
-    "region_capture": "<alt>+a",
+    "smart_capture": "<alt>+a",  # pointer picks window / full-screen / region
     "fullscreen_capture": "<alt>+s",
-    "window_capture": "<alt>+w",
 }
 
 # Each capture hotkey can be enabled/disabled independently; all on by default.

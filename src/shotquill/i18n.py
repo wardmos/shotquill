@@ -17,9 +17,8 @@ LANGUAGE_NAMES = {"en": "English", "zh": "中文"}
 
 _STRINGS: dict[str, dict[str, str]] = {
     # Tray menu
-    "menu.region": {"en": "Region Capture", "zh": "区域截图"},
+    "menu.smart": {"en": "Smart Capture", "zh": "智能截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
-    "menu.window": {"en": "Capture Window", "zh": "窗口截图"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
     "menu.permissions": {
@@ -33,13 +32,9 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
-    "notify.no_windows": {
-        "en": "No capturable windows found.",
-        "zh": "没有找到可截图的窗口。",
-    },
-    "picker.hint": {
-        "en": "Click a window to capture · Esc to cancel",
-        "zh": "点击要截图的窗口 · Esc 取消",
+    "smart.hint": {
+        "en": "Click a window · drag for a region · click here for full screen · Esc cancels",
+        "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · Esc 取消",
     },
     "about.body": {"en": "Screenshot & annotation tool.", "zh": "截图与标注工具。"},
     # Editor window titles
@@ -91,9 +86,8 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.save_dir": {"en": "Save Folder", "zh": "保存目录"},
     "settings.format": {"en": "Image Format", "zh": "图片格式"},
     "settings.hotkey_enabled": {"en": "Enable", "zh": "启用"},
-    "settings.region": {"en": "Region Capture", "zh": "区域截图"},
+    "settings.smart": {"en": "Smart Capture", "zh": "智能截图"},
     "settings.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
-    "settings.window": {"en": "Capture Window", "zh": "窗口截图"},
     "settings.language": {"en": "Language", "zh": "界面语言"},
     "settings.browse": {"en": "Browse…", "zh": "浏览…"},
     "settings.choose_dir": {"en": "Choose Save Folder", "zh": "选择保存目录"},

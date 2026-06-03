@@ -14,8 +14,9 @@ from shotquill.config import (
 
 
 def test_default_hotkeys():
-    assert DEFAULT_HOTKEYS["region_capture"] == "<alt>+a"
+    assert DEFAULT_HOTKEYS["smart_capture"] == "<alt>+a"
     assert DEFAULT_HOTKEYS["fullscreen_capture"] == "<alt>+s"
+    assert "window_capture" not in DEFAULT_HOTKEYS
 
 
 def test_default_image_format():
@@ -64,7 +65,7 @@ def test_human_readable_hotkey_ignores_blank_segments():
 
 
 def test_config_returns_defaults_when_unset(config):
-    assert config.hotkey("region_capture") == DEFAULT_HOTKEYS["region_capture"]
+    assert config.hotkey("smart_capture") == DEFAULT_HOTKEYS["smart_capture"]
     assert config.hotkey("fullscreen_capture") == DEFAULT_HOTKEYS["fullscreen_capture"]
     assert config.image_format() == DEFAULT_IMAGE_FORMAT
     assert config.save_dir().endswith("ShotQuill")
@@ -75,8 +76,8 @@ def test_config_returns_defaults_when_unset(config):
 
 
 def test_config_hotkey_round_trip(config):
-    config.set_hotkey("region_capture", "<cmd>+<shift>+a")
-    assert config.hotkey("region_capture") == "<cmd>+<shift>+a"
+    config.set_hotkey("smart_capture", "<cmd>+<shift>+a")
+    assert config.hotkey("smart_capture") == "<cmd>+<shift>+a"
     # The other action is untouched.
     assert config.hotkey("fullscreen_capture") == DEFAULT_HOTKEYS["fullscreen_capture"]
 
@@ -91,14 +92,13 @@ def test_config_scalar_round_trips(config):
 
 
 def test_hotkeys_enabled_by_default(config):
-    assert config.hotkey_enabled("region_capture") is True
+    assert config.hotkey_enabled("smart_capture") is True
     assert config.hotkey_enabled("fullscreen_capture") is True
-    assert config.hotkey_enabled("window_capture") is True
 
 
 def test_hotkey_enabled_round_trip(config):
-    config.set_hotkey_enabled("region_capture", False)
-    assert config.hotkey_enabled("region_capture") is False
+    config.set_hotkey_enabled("smart_capture", False)
+    assert config.hotkey_enabled("smart_capture") is False
     # Other actions stay enabled.
     assert config.hotkey_enabled("fullscreen_capture") is True
 

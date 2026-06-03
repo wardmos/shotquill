@@ -2,9 +2,11 @@
 # Copyright (C) 2026 wardmos
 """Application entry point: a menu-bar-resident Qt app.
 
-Full-screen (``⌥S``), region (``⌥A``), and window (``⌥W``) capture all open the
-annotation editor. Hotkeys, save directory, image format, and UI language are
-editable in Settings.
+Two capture hotkeys: full-screen (``⌥S``) grabs everything immediately, while
+smart capture (``⌥A``) opens an overlay that picks its mode from the pointer —
+hover a window to shoot it, hover empty space to shoot full screen, or drag to
+shoot a region. Both feed the annotation editor. Hotkeys, save directory, image
+format, and UI language are editable in Settings.
 """
 
 from __future__ import annotations
@@ -25,10 +27,9 @@ from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow
 from shotquill.ui.feedback import CaptureFeedback
-from shotquill.ui.overlay import RegionOverlay
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
-from shotquill.ui.window_picker import WindowPicker
+from shotquill.ui.smart_overlay import SmartOverlay
 
 _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
@@ -76,9 +77,8 @@ def _build_icon() -> QIcon:
 class _HotkeyBridge(QObject):
     """Marshals hotkey events from the pynput listener thread onto the Qt main thread."""
 
-    region_requested = Signal()
+    smart_requested = Signal()
     fullscreen_requested = Signal()
-    window_requested = Signal()
 
 
 class ShotquillApp:
@@ -98,9 +98,8 @@ class ShotquillApp:
 
         self._bridge = _HotkeyBridge()
         # Queued (cross-thread) connections: slots run on the main thread.
-        self._bridge.region_requested.connect(self._capture_region)
+        self._bridge.smart_requested.connect(self._capture_smart)
         self._bridge.fullscreen_requested.connect(self._capture_fullscreen)
-        self._bridge.window_requested.connect(self._capture_window)
 
         self._tray = QSystemTrayIcon(_build_icon(), self._app)
         self._tray.setToolTip("ShotQuill")
@@ -117,16 +116,13 @@ class ShotquillApp:
     def _rebuild_menu(self) -> None:
         """(Re)build the tray menu — used at startup and after a language change."""
         menu = QMenu()
-        region_key = self._hotkey_label("region_capture")
+        smart_key = self._hotkey_label("smart_capture")
         fullscreen_key = self._hotkey_label("fullscreen_capture")
-        window_key = self._hotkey_label("window_capture")
 
-        region = QAction(f"{t('menu.region')}\t{region_key}", menu)
-        region.triggered.connect(self._capture_region)
+        smart = QAction(f"{t('menu.smart')}\t{smart_key}", menu)
+        smart.triggered.connect(self._capture_smart)
         fullscreen = QAction(f"{t('menu.fullscreen')}\t{fullscreen_key}", menu)
         fullscreen.triggered.connect(self._capture_fullscreen)
-        window = QAction(f"{t('menu.window')}\t{window_key}", menu)
-        window.triggered.connect(self._capture_window)
         settings = QAction(t("menu.settings"), menu)
         settings.triggered.connect(self._open_settings)
         permissions = QAction(t("menu.permissions"), menu)
@@ -138,9 +134,8 @@ class ShotquillApp:
         quit_action = QAction(t("menu.quit"), menu)
         quit_action.triggered.connect(self._app.quit)
 
-        menu.addAction(region)
+        menu.addAction(smart)
         menu.addAction(fullscreen)
-        menu.addAction(window)
         menu.addSeparator()
         menu.addAction(settings)
         menu.addAction(permissions)
@@ -156,9 +151,8 @@ class ShotquillApp:
         self._hotkeys.stop()
         self._hotkeys.clear()
         actions = (
-            ("region_capture", self._bridge.region_requested.emit),
+            ("smart_capture", self._bridge.smart_requested.emit),
             ("fullscreen_capture", self._bridge.fullscreen_requested.emit),
-            ("window_capture", self._bridge.window_requested.emit),
         )
         for action, emit in actions:
             if self._config.hotkey_enabled(action):
@@ -170,39 +164,26 @@ class ShotquillApp:
         if screenshot is not None:
             self._deliver_capture(screenshot)
 
-    def _capture_region(self) -> None:
+    def _capture_smart(self) -> None:
+        # Snapshot the window list *before* showing the overlay so our own
+        # window isn't a target. An empty/failed list is fine — the overlay
+        # then only offers full-screen and region modes.
+        try:
+            windows = self._capturer.list_windows()
+        except Exception:
+            windows = []
         screenshot = self._grab()
         if screenshot is None:
             return
-        overlay = RegionOverlay(screenshot, self._app.primaryScreen().virtualGeometry())
+        overlay = SmartOverlay(screenshot, self._app.primaryScreen().virtualGeometry(), windows)
         overlay.region_selected.connect(self._deliver_capture)
+        overlay.window_selected.connect(self._capture_window_image)
+        overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot))
         self._track(overlay)
         overlay.show()
         overlay.raise_()
         overlay.activateWindow()
         overlay.setFocus()
-
-    def _capture_window(self) -> None:
-        # Snapshot the window list *before* showing the picker so our own
-        # overlay isn't a target, then let the user point at a window.
-        try:
-            windows = self._capturer.list_windows()
-        except Exception as exc:
-            self._notify(t("notify.capture_failed").format(error=exc))
-            return
-        if not windows:
-            self._notify(t("notify.no_windows"))
-            return
-        screenshot = self._grab()
-        if screenshot is None:
-            return
-        picker = WindowPicker(screenshot, self._app.primaryScreen().virtualGeometry(), windows)
-        picker.window_selected.connect(self._capture_window_image)
-        self._track(picker)
-        picker.show()
-        picker.raise_()
-        picker.activateWindow()
-        picker.setFocus()
 
     def _capture_window_image(self, window_id: int) -> None:
         try:

@@ -16,10 +16,10 @@
 </p>
 
 ShotQuill lives in your menu bar and turns a screenshot into a finished, shareable
-image in one motion: press a hotkey, grab a region / window / the whole screen,
-and it's saved and on your clipboard — or drop into a built-in editor to annotate,
-redact, and extract text first. **macOS first**, built on a cross-platform
-architecture (Windows / Linux planned).
+image in one motion: press a hotkey, then let the pointer pick a window / region /
+the whole screen, and it's saved and on your clipboard — or drop into a built-in
+editor to annotate, redact, and extract text first. **macOS first**, built on a
+cross-platform architecture (Windows / Linux planned).
 
 > **Status:** early development — usable day-to-day, but expect rough edges.
 
@@ -27,11 +27,12 @@ architecture (Windows / Linux planned).
 
 ## Highlights
 
-- **Three capture modes**, each with a customizable global hotkey:
-  - **Region** (`⌥A`) — drag a rectangle; live size readout.
-  - **Full screen** (`⌥S`) — every display at once.
-  - **Window** (`⌥W`) — point at any app window and click; the real window
-    pixels are captured even when it's partially covered by others.
+- **Two capture hotkeys**, both customizable:
+  - **Smart capture** (`⌥A`) — one overlay, mode chosen by the pointer: hover an
+    app window to grab just that window (real pixels, even when partly covered),
+    hover empty space to grab the whole screen, or drag a rectangle for a region
+    with a live size readout.
+  - **Full screen** (`⌥S`) — every display at once, instantly.
 - **Hands-free by default** — a capture is saved to your folder **and** copied to
   the clipboard automatically, no extra keypress. Fully configurable (see below).
 - **Annotation editor** — rectangles, ellipses, arrows, lines, freehand pen,
@@ -85,13 +86,12 @@ hotkeys from anywhere.
 
 ### Capture hotkeys
 
-| Action          | Default | Notes                                              |
-| --------------- | ------- | -------------------------------------------------- |
-| Region capture  | `⌥A`    | Drag to select; `Esc` cancels.                     |
-| Full-screen     | `⌥S`    | All displays composited into one image.            |
-| Window capture  | `⌥W`    | Hover a window to highlight it, click to grab it.  |
+| Action         | Default | Notes                                                                                |
+| -------------- | ------- | ------------------------------------------------------------------------------------ |
+| Smart capture  | `⌥A`    | Hover a window to grab it, hover empty space for full screen, or drag for a region. `Esc` / right-click cancels. |
+| Full-screen    | `⌥S`    | All displays composited into one image, instantly.                                   |
 
-All three are remappable in **Settings** (any combination of `⌘ ⌃ ⌥ ⇧` + a key).
+Both are remappable in **Settings** (any combination of `⌘ ⌃ ⌥ ⇧` + a key).
 
 ### What happens after a capture
 
@@ -139,7 +139,7 @@ Open **Settings…** from the menu-bar icon:
 
 - **Language** — English / 中文.
 - **Save folder** & **image format** (PNG / JPG).
-- **Hotkeys** for all three capture modes.
+- **Hotkeys** for both capture modes.
 - **After capture** — auto-save and/or auto-copy toggles (above).
 - **Launch at login** — installs a per-user `LaunchAgent`.
 - **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
@@ -208,7 +208,7 @@ On first run, grant these in **System Settings → Privacy & Security**:
 
 ## Roadmap
 
-- [x] Region / full-screen / window capture
+- [x] Smart (window / region / full-screen) + full-screen capture
 - [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
 - [x] On-device OCR
 - [x] Hands-free auto save + clipboard

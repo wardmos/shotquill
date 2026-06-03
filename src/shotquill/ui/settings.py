@@ -121,18 +121,14 @@ class SettingsDialog(QDialog):
             self._format.setCurrentIndex(format_index)
         form.addRow(t("settings.format"), self._format)
 
-        self._region = _HotkeyRow(
-            config.hotkey("region_capture"), config.hotkey_enabled("region_capture")
+        self._smart = _HotkeyRow(
+            config.hotkey("smart_capture"), config.hotkey_enabled("smart_capture")
         )
         self._fullscreen = _HotkeyRow(
             config.hotkey("fullscreen_capture"), config.hotkey_enabled("fullscreen_capture")
         )
-        self._window = _HotkeyRow(
-            config.hotkey("window_capture"), config.hotkey_enabled("window_capture")
-        )
-        form.addRow(t("settings.region"), self._region)
+        form.addRow(t("settings.smart"), self._smart)
         form.addRow(t("settings.fullscreen"), self._fullscreen)
-        form.addRow(t("settings.window"), self._window)
 
         self._auto_save = QCheckBox(t("settings.auto_save"))
         self._auto_save.setChecked(config.auto_save_after_capture())
@@ -173,12 +169,10 @@ class SettingsDialog(QDialog):
         self._config.set_language(self._language.currentData())
         self._config.set_save_dir(self._save_dir.text())
         self._config.set_image_format(self._format.currentText())
-        self._config.set_hotkey("region_capture", self._region.combo())
+        self._config.set_hotkey("smart_capture", self._smart.combo())
         self._config.set_hotkey("fullscreen_capture", self._fullscreen.combo())
-        self._config.set_hotkey("window_capture", self._window.combo())
-        self._config.set_hotkey_enabled("region_capture", self._region.enabled())
+        self._config.set_hotkey_enabled("smart_capture", self._smart.enabled())
         self._config.set_hotkey_enabled("fullscreen_capture", self._fullscreen.enabled())
-        self._config.set_hotkey_enabled("window_capture", self._window.enabled())
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_autostart(self._autostart.isChecked())
