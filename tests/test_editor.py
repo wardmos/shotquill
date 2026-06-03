@@ -29,21 +29,23 @@ def _editor(qtbot, config):
     return window
 
 
-def test_copy_sets_window_title(qtbot, config):
+def test_copy_puts_image_on_clipboard_and_closes(qtbot, config):
     window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
     window._copy()
-    assert window.windowTitle() == "ShotQuill — Copied to clipboard"
     assert not QGuiApplication.clipboard().image().isNull()
+    assert not window.isVisible()
 
 
-def test_save_writes_file_and_updates_title(qtbot, config, tmp_path):
+def test_save_writes_file_and_closes(qtbot, config, tmp_path):
     config.set_save_dir(str(tmp_path))
     config.set_image_format("png")
     window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
     window._save()
     saved = list(tmp_path.glob("ShotQuill *.png"))
     assert len(saved) == 1
-    assert window.windowTitle().startswith("ShotQuill — Saved")
+    assert not window.isVisible()
 
 
 def test_pin_emits_image_and_closes(qtbot, config):

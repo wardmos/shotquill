@@ -84,10 +84,10 @@ def test_build_icon_is_not_null(qapp):
     assert not icon.isNull()
 
 
-def test_apply_hotkeys_registers_both_capture_combos(qapp, config, fakes):
+def test_apply_hotkeys_registers_all_capture_combos(qapp, config, fakes):
     _capturer, hotkeys, _autostart = fakes
     app = _build_app(qapp, fakes)
-    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+s"}
+    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+s", "<alt>+w"}
     assert hotkeys.started >= 1
     app.shutdown()
 
@@ -125,6 +125,9 @@ def test_sync_autostart_swallows_oserror(qapp, config, fakes):
 
 
 def test_capture_fullscreen_opens_editor(qapp, config, fakes, monkeypatch):
+    # With auto-output off, a capture falls through to the editor.
+    config.set_auto_save_after_capture(False)
+    config.set_auto_copy_after_capture(False)
     app = _build_app(qapp, fakes)
     opened = []
     monkeypatch.setattr(app, "_open_editor", opened.append)
