@@ -9,7 +9,7 @@ native-resolution screenshot and emits it; Esc cancels.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -33,12 +33,25 @@ class RegionOverlay(QWidget):
         self._sy = screenshot.height() / max(geometry.height(), 1)
         self._origin = None
         self._current = None
+        self._activated = False
 
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setCursor(Qt.CrossCursor)
         self.setMouseTracking(True)
         self.setGeometry(geometry)
+
+    def changeEvent(self, event) -> None:
+        # If something steals focus while the overlay is up — a hot corner firing
+        # Mission Control / App Exposé, Cmd-Tab, a click elsewhere — cancel
+        # instead of leaving a dimmed, screen-covering window the user can't
+        # dismiss (Esc only works while we hold keyboard focus).
+        if event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow():
+                self._activated = True
+            elif self._activated:
+                self._cancel()
+        super().changeEvent(event)
 
     # --- painting ---------------------------------------------------------
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -47,12 +47,25 @@ class WindowPicker(QWidget):
         self._sx = screenshot.width() / max(geometry.width(), 1)
         self._sy = screenshot.height() / max(geometry.height(), 1)
         self._hover: int | None = None
+        self._activated = False
 
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setCursor(Qt.CrossCursor)
         self.setMouseTracking(True)
         self.setGeometry(geometry)
+
+    def changeEvent(self, event) -> None:
+        # If something steals focus while the picker is up — a hot corner firing
+        # Mission Control / App Exposé, Cmd-Tab, a click elsewhere — cancel
+        # instead of leaving a dimmed, screen-covering window the user can't
+        # dismiss (Esc only works while we hold keyboard focus).
+        if event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow():
+                self._activated = True
+            elif self._activated:
+                self._cancel()
+        super().changeEvent(event)
 
     # --- painting ---------------------------------------------------------
 
