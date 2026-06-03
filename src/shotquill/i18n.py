@@ -26,6 +26,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Open Screen Recording Settings…",
         "zh": "打开屏幕录制权限设置…",
     },
+    "menu.input_monitoring": {
+        "en": "Open Input Monitoring Settings…",
+        "zh": "打开输入监控权限设置…",
+    },
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},

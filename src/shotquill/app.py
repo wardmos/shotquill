@@ -33,6 +33,10 @@ from shotquill.ui.window_picker import WindowPicker
 _PRIVACY_SCREEN_CAPTURE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 )
+# Global hotkeys require Input Monitoring, a *different* pane from screen capture.
+_PRIVACY_INPUT_MONITORING = (
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+)
 
 
 def _build_icon() -> QIcon:
@@ -52,10 +56,13 @@ def _build_icon() -> QIcon:
     painter.setBrush(QColor("black"))
     painter.drawRoundedRect(6, 6, 52, 52, 14, 14)
     # Erase the "S" from the tile so it shows the menu-bar colour through.
+    # Size the glyph in pixels relative to the 64px canvas so it fills most of
+    # the tile — a small point size reads as a tiny letter once macOS scales the
+    # whole tile down to menu-bar height.
     painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
     font = QFont()
     font.setBold(True)
-    font.setPointSize(28)
+    font.setPixelSize(46)
     painter.setFont(font)
     painter.setPen(QColor("black"))
     painter.drawText(pixmap.rect(), Qt.AlignCenter, "S")
@@ -118,6 +125,8 @@ class ShotquillApp:
         settings.triggered.connect(self._open_settings)
         permissions = QAction(t("menu.permissions"), menu)
         permissions.triggered.connect(self._open_privacy_settings)
+        input_monitoring = QAction(t("menu.input_monitoring"), menu)
+        input_monitoring.triggered.connect(self._open_input_monitoring_settings)
         about = QAction(t("menu.about"), menu)
         about.triggered.connect(self._show_about)
         quit_action = QAction(t("menu.quit"), menu)
@@ -129,6 +138,7 @@ class ShotquillApp:
         menu.addSeparator()
         menu.addAction(settings)
         menu.addAction(permissions)
+        menu.addAction(input_monitoring)
         menu.addAction(about)
         menu.addSeparator()
         menu.addAction(quit_action)
@@ -295,6 +305,9 @@ class ShotquillApp:
 
     def _open_privacy_settings(self) -> None:
         subprocess.run(["open", _PRIVACY_SCREEN_CAPTURE], check=False)
+
+    def _open_input_monitoring_settings(self) -> None:
+        subprocess.run(["open", _PRIVACY_INPUT_MONITORING], check=False)
 
     def shutdown(self) -> None:
         self._hotkeys.stop()

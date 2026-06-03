@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Tests for the macOS hotkey manager's binding bookkeeping.
+"""Tests for the macOS hotkey manager's binding bookkeeping and matching.
 
-The real ``pynput`` listener is never started — ``GlobalHotKeys`` is replaced with
-a recording fake so we can assert what gets registered without grabbing the
-keyboard or needing the Input Monitoring permission.
+The real ``pynput`` listener is never started — ``keyboard.Listener`` is replaced
+with a recording fake so we can drive ``on_press``/``on_release`` directly and
+assert what fires, without grabbing the keyboard or needing Input Monitoring.
 """
 
 import pytest
+from pynput.keyboard import Key
 
 from shotquill.hotkeys import macos
 
@@ -15,8 +16,9 @@ from shotquill.hotkeys import macos
 class _FakeListener:
     instances: list = []
 
-    def __init__(self, mapping):
-        self.mapping = dict(mapping)
+    def __init__(self, on_press=None, on_release=None):
+        self.on_press = on_press
+        self.on_release = on_release
         self.started = False
         self.stopped = False
         _FakeListener.instances.append(self)
@@ -28,10 +30,18 @@ class _FakeListener:
         self.stopped = True
 
 
+class _FakeKey:
+    """Stand-in for a pynput KeyCode: a hardware ``vk`` plus produced ``char``."""
+
+    def __init__(self, vk=None, char=None):
+        self.vk = vk
+        self.char = char
+
+
 @pytest.fixture
 def fake_listener(monkeypatch):
     _FakeListener.instances = []
-    monkeypatch.setattr(macos.keyboard, "GlobalHotKeys", _FakeListener)
+    monkeypatch.setattr(macos.keyboard, "Listener", _FakeListener)
     return _FakeListener
 
 
@@ -42,7 +52,8 @@ def test_register_and_unregister(fake_listener):
     manager.register("<alt>+s", cb)
     manager.unregister("<alt>+a")
     manager.start()
-    assert set(fake_listener.instances[-1].mapping) == {"<alt>+s"}
+    assert set(manager._bindings) == {"<alt>+s"}
+    assert fake_listener.instances[-1].started is True
 
 
 def test_start_with_no_bindings_does_nothing(fake_listener):
@@ -77,3 +88,81 @@ def test_stop_is_idempotent(fake_listener):
     manager.stop()
     manager.stop()  # second stop is a no-op, must not raise
     assert fake_listener.instances[-1].stopped is True
+
+
+def test_option_combo_matches_by_keycode(fake_listener):
+    """⌥A reports the character 'å' but keeps key code 0 — must still fire."""
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    assert fired == [True]
+
+
+def test_autorepeat_fires_once(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    manager._on_press(_FakeKey(vk=0, char="å"))  # held key auto-repeats
+    assert fired == [True]
+
+
+def test_release_allows_refire(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    manager._on_release(_FakeKey(vk=0, char="å"))
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    assert fired == [True, True]
+
+
+def test_wrong_modifier_does_not_fire(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.cmd)  # Cmd, not Option
+    manager._on_press(_FakeKey(vk=0, char="a"))
+    assert fired == []
+
+
+def test_no_modifier_does_not_fire(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(_FakeKey(vk=0, char="a"))  # bare 'a' keypress
+    assert fired == []
+
+
+def test_extra_modifier_does_not_fire(fake_listener):
+    """⌥A binding must not trigger on ⌘⌥A (exact modifier set required)."""
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.cmd)
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    assert fired == []
+
+
+def test_stop_clears_modifier_state(fake_listener):
+    """A modifier held when we stop must not linger into the next session."""
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.alt)  # press Option, never release it
+    manager.stop()
+    manager.start()
+    manager._on_press(_FakeKey(vk=0, char="a"))  # only 'a', no live Option
+    assert fired == []

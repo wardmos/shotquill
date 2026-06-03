@@ -5,21 +5,79 @@
 pynput delivers key events on its own listener thread, so callbacks must not
 touch Qt UI directly — the app layer marshals them onto the main thread with a
 queued signal. Requires the "Input Monitoring" permission on macOS.
+
+We do **not** use ``pynput.keyboard.GlobalHotKeys`` because it matches the final
+key by *character*. On macOS the Option (⌥) modifier is the "alternate
+character" key: ⌥A emits "å", ⌥S "ß", ⌥W "∑", so character matching makes
+Option-based combos fire only intermittently. Instead we run a raw listener and
+match the final key by its hardware *key code* (``vk``), which is independent of
+the modifiers held — exactly how reliable Option-friendly hotkey apps behave.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from pynput import keyboard
+from pynput.keyboard import Key
 
 from shotquill.hotkeys.base import HotkeyManager
+from shotquill.hotkeys.combo import parse_combo
+
+# macOS hardware virtual key codes (kVK_ANSI_* / kVK_F*), keyed by the lowercase
+# token the settings UI emits (a–z, 0–9, f1–f12). The key code is positional and
+# does not change when Option rewrites the produced character, so matching on it
+# is what makes Option combos reliable.
+_MAC_VK: dict[str, int] = {
+    # letters
+    "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7,
+    "c": 8, "v": 9, "b": 11, "q": 12, "w": 13, "e": 14, "r": 15,
+    "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37,
+    "j": 38, "k": 40, "n": 45, "m": 46,
+    # number row
+    "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26,
+    "8": 28, "9": 25, "0": 29,
+    # function keys
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
+    "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
+
+# Every pynput modifier key (generic + left/right variants) -> canonical name.
+_MOD_NAMES: dict[object, str] = {
+    Key.alt: "alt", Key.alt_l: "alt", Key.alt_r: "alt",
+    Key.cmd: "cmd", Key.cmd_l: "cmd", Key.cmd_r: "cmd",
+    Key.ctrl: "ctrl", Key.ctrl_l: "ctrl", Key.ctrl_r: "ctrl",
+    Key.shift: "shift", Key.shift_l: "shift", Key.shift_r: "shift",
+}
+if hasattr(Key, "alt_gr"):  # present on some layouts; treat as Option
+    _MOD_NAMES[Key.alt_gr] = "alt"
+
+
+def _vk_of(key: object) -> int | None:
+    """Hardware key code for a pynput key (a ``KeyCode`` or a ``Key`` member)."""
+    vk = getattr(key, "vk", None)
+    if vk is None:
+        value = getattr(key, "value", None)  # Key enum members wrap a KeyCode
+        vk = getattr(value, "vk", None)
+    return vk
+
+
+@dataclass
+class _Binding:
+    mods: frozenset[str]
+    vk: int | None  # expected hardware key code, when the key is known
+    char: str  # fallback target for keys outside the vk table
+    callback: Callable[[], None]
 
 
 class MacHotkeyManager(HotkeyManager):
     def __init__(self) -> None:
         self._bindings: dict[str, Callable[[], None]] = {}
-        self._listener: keyboard.GlobalHotKeys | None = None
+        self._listener: keyboard.Listener | None = None
+        self._compiled: list[_Binding] = []
+        self._active_mods: set[str] = set()
+        self._pressed: set[object] = set()  # non-modifier keys currently held
 
     def register(self, combo: str, callback: Callable[[], None]) -> None:
         self._bindings[combo] = callback
@@ -34,10 +92,56 @@ class MacHotkeyManager(HotkeyManager):
         self.stop()
         if not self._bindings:
             return
-        self._listener = keyboard.GlobalHotKeys(dict(self._bindings))
+        self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
+        self._listener = keyboard.Listener(
+            on_press=self._on_press, on_release=self._on_release
+        )
         self._listener.start()
 
     def stop(self) -> None:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+        # Drop any held-key state so a missed release can't wedge later matches.
+        self._active_mods.clear()
+        self._pressed.clear()
+
+    @staticmethod
+    def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
+        parsed = parse_combo(combo)
+        mods = frozenset(m for m in ("cmd", "ctrl", "alt", "shift") if parsed[m])
+        key = str(parsed["key"]).lower()
+        return _Binding(mods=mods, vk=_MAC_VK.get(key), char=key, callback=callback)
+
+    def _on_press(self, key: object) -> None:
+        name = _MOD_NAMES.get(key)
+        if name is not None:
+            self._active_mods.add(name)
+            return
+        vk = _vk_of(key)
+        char = getattr(key, "char", None)
+        ident = vk if vk is not None else char
+        if ident in self._pressed:  # ignore auto-repeat while the key is held
+            return
+        self._pressed.add(ident)
+        self._dispatch(vk, char)
+
+    def _on_release(self, key: object) -> None:
+        name = _MOD_NAMES.get(key)
+        if name is not None:
+            self._active_mods.discard(name)
+            return
+        vk = _vk_of(key)
+        char = getattr(key, "char", None)
+        self._pressed.discard(vk if vk is not None else char)
+
+    def _dispatch(self, vk: int | None, char: object) -> None:
+        char_l = char.lower() if isinstance(char, str) else None
+        for binding in self._compiled:
+            if binding.mods != self._active_mods:
+                continue
+            if binding.vk is not None:
+                if vk == binding.vk:
+                    binding.callback()
+            elif char_l is not None and char_l == binding.char:
+                binding.callback()
