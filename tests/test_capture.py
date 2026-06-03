@@ -1,70 +1,85 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Tests for the macOS capturer's pixel normalization and region mapping.
+"""Tests for the macOS capturer.
 
-``mss`` is replaced with a fake so the BGRA->RGBA reordering and the region
-bounding-box translation are verified without touching a real display.
+Quartz is macOS-only, so it is replaced with a fake module and the CGImage->RGBA
+conversion is stubbed. The point of these tests is to lock in that every capture
+path requests ``kCGWindowImageBestResolution`` — without it CoreGraphics returns
+1x (point) images and Retina screenshots look soft.
 """
 
+import sys
+import types
+
+import pytest
+
 from shotquill.capture import macos
-from shotquill.capture.base import Rect
+from shotquill.capture.base import CaptureResult, Rect
+
+# Quartz image-option flags (values mirror CoreGraphics' CGWindowImageOption).
+_BEST_RESOLUTION = 1 << 3
+_IGNORE_FRAMING = 1 << 0
 
 
-class _FakeShot:
-    def __init__(self, size, bgra):
-        self.size = size
-        self.bgra = bgra
+def _fake_quartz(record):
+    def create_image(bounds, opt, wid, img):
+        record.update(bounds=bounds, opt=opt, wid=wid, img=img)
+        return "CGIMAGE"
+
+    return types.SimpleNamespace(
+        CGRectInfinite="INFINITE",
+        CGRectNull="NULL",
+        CGRectMake=lambda x, y, w, h: ("rect", x, y, w, h),
+        kCGWindowListOptionOnScreenOnly=1,
+        kCGWindowListOptionIncludingWindow=1 << 3,
+        kCGNullWindowID=0,
+        kCGWindowImageBestResolution=_BEST_RESOLUTION,
+        kCGWindowImageBoundsIgnoreFraming=_IGNORE_FRAMING,
+        CGWindowListCreateImage=create_image,
+    )
 
 
-class _FakeSct:
-    # monitors[0] is the virtual screen spanning every display.
-    monitors = [{"left": 0, "top": 0, "width": 1, "height": 1}]
-
-    def __init__(self, shot):
-        self._shot = shot
-        self.grabbed = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def grab(self, target):
-        self.grabbed = target
-        return self._shot
+@pytest.fixture
+def quartz(monkeypatch):
+    record = {}
+    monkeypatch.setitem(sys.modules, "Quartz", _fake_quartz(record))
+    # Bypass the real CGImage bitmap pipeline; we only assert the capture call.
+    monkeypatch.setattr(
+        macos.MacScreenCapturer,
+        "_cgimage_to_result",
+        staticmethod(
+            lambda cg: CaptureResult(
+                width=4, height=2, scale=1.0, pixels=b"x" * 32, premultiplied=True
+            )
+        ),
+    )
+    return record
 
 
-def _install_fake(monkeypatch, shot):
-    sct = _FakeSct(shot)
-    monkeypatch.setattr(macos.mss, "mss", lambda: sct)
-    return sct
-
-
-def test_fullscreen_grabs_virtual_screen_and_normalizes_to_rgba(monkeypatch):
-    # One blue pixel in BGRA: B=255, G=0, R=0, A=255.
-    shot = _FakeShot((1, 1), bytes([255, 0, 0, 255]))
-    sct = _install_fake(monkeypatch, shot)
-
+def test_fullscreen_captures_virtual_screen_at_best_resolution(quartz):
     result = macos.MacScreenCapturer().capture_fullscreen()
-
-    assert sct.grabbed is _FakeSct.monitors[0]
-    assert (result.width, result.height) == (1, 1)
-    # Reordered to RGBA: R=0, G=0, B=255, A=255.
-    assert result.pixels == bytes([0, 0, 255, 255])
+    assert quartz["bounds"] == "INFINITE"  # CGRectInfinite spans all displays
+    assert quartz["img"] & _BEST_RESOLUTION
+    assert (result.width, result.height) == (4, 2)
 
 
-def test_region_translates_rect_into_mss_bbox(monkeypatch):
-    shot = _FakeShot((2, 1), bytes([0, 0, 0, 255, 0, 0, 0, 255]))
-    sct = _install_fake(monkeypatch, shot)
-
-    macos.MacScreenCapturer().capture_region(Rect(x=10, y=20, width=2, height=1))
-
-    assert sct.grabbed == {"left": 10, "top": 20, "width": 2, "height": 1}
+def test_region_maps_rect_and_requests_best_resolution(quartz):
+    macos.MacScreenCapturer().capture_region(Rect(x=10, y=20, width=30, height=40))
+    assert quartz["bounds"] == ("rect", 10, 20, 30, 40)
+    assert quartz["img"] & _BEST_RESOLUTION
 
 
-def test_capture_result_reports_native_scale(monkeypatch):
-    shot = _FakeShot((1, 1), bytes([0, 0, 0, 255]))
-    _install_fake(monkeypatch, shot)
-    result = macos.MacScreenCapturer().capture_fullscreen()
-    assert result.scale == 1.0
+def test_window_capture_requests_best_resolution_and_ignores_framing(quartz):
+    macos.MacScreenCapturer().capture_window(1234)
+    assert quartz["wid"] == 1234
+    assert quartz["img"] & _BEST_RESOLUTION
+    assert quartz["img"] & _IGNORE_FRAMING
+
+
+def test_fullscreen_raises_when_capture_fails(monkeypatch):
+    record = {}
+    fake = _fake_quartz(record)
+    fake.CGWindowListCreateImage = lambda *a: None
+    monkeypatch.setitem(sys.modules, "Quartz", fake)
+    with pytest.raises(RuntimeError):
+        macos.MacScreenCapturer().capture_fullscreen()

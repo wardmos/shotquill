@@ -2,44 +2,52 @@
 # Copyright (C) 2026 wardmos
 """macOS screen capture.
 
-Full-screen / region capture is backed by ``mss`` (CoreGraphics under the hood).
-Window enumeration and single-window capture use Quartz directly: a window is
-grabbed by its CoreGraphics window id, so its real pixels are captured even when
-it is partially covered by other windows. PyObjC/Quartz is macOS-only and so is
-imported lazily — this module still imports cleanly on Linux (for CI).
+All capture (full-screen, region, single window) goes through Quartz'
+``CGWindowListCreateImage``. The crucial flag is ``kCGWindowImageBestResolution``:
+without it CoreGraphics returns images at *point* (1x) resolution, so on a Retina
+display screenshots come out at roughly half the native pixel count and look
+soft. With it we get true native-resolution pixels. PyObjC/Quartz is macOS-only
+and so is imported lazily — this module still imports cleanly on Linux (for CI).
 
-Captures are at native (Retina) pixel resolution; pixels are normalized to RGBA
-so downstream code (PIL saver, Qt clipboard) does not need to know about the
-capture backend.
+Pixels are normalized to RGBA so downstream code (PIL saver, Qt clipboard) does
+not need to know about the capture backend.
 """
 
 from __future__ import annotations
 
 import os
 
-import mss
-from PIL import Image
-
 from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
 
 
 class MacScreenCapturer(ScreenCapturer):
     def capture_fullscreen(self) -> CaptureResult:
-        with mss.mss() as sct:
-            # monitors[0] is the virtual screen spanning every display.
-            shot = sct.grab(sct.monitors[0])
-        return self._to_result(shot)
+        import Quartz
+
+        # CGRectInfinite spans every display in the virtual desktop.
+        return self._grab_rect(Quartz.CGRectInfinite)
 
     def capture_region(self, region: Rect) -> CaptureResult:
-        bbox = {
-            "left": region.x,
-            "top": region.y,
-            "width": region.width,
-            "height": region.height,
-        }
-        with mss.mss() as sct:
-            shot = sct.grab(bbox)
-        return self._to_result(shot)
+        import Quartz
+
+        rect = Quartz.CGRectMake(region.x, region.y, region.width, region.height)
+        return self._grab_rect(rect)
+
+    @staticmethod
+    def _grab_rect(rect) -> CaptureResult:
+        """Capture a CoreGraphics rect at native (Retina) resolution."""
+        import Quartz
+
+        cg_image = Quartz.CGWindowListCreateImage(
+            rect,
+            Quartz.kCGWindowListOptionOnScreenOnly,
+            Quartz.kCGNullWindowID,
+            # Best resolution = native Retina pixels (default would be 1x).
+            Quartz.kCGWindowImageBestResolution,
+        )
+        if cg_image is None:
+            raise RuntimeError("screen capture failed")
+        return MacScreenCapturer._cgimage_to_result(cg_image)
 
     def list_windows(self) -> list[WindowInfo]:
         import Quartz
@@ -85,7 +93,8 @@ class MacScreenCapturer(ScreenCapturer):
             Quartz.CGRectNull,
             Quartz.kCGWindowListOptionIncludingWindow,
             window_id,
-            Quartz.kCGWindowImageBoundsIgnoreFraming,
+            # Native Retina pixels, and don't pad with the window's drop shadow.
+            Quartz.kCGWindowImageBoundsIgnoreFraming | Quartz.kCGWindowImageBestResolution,
         )
         if cg_image is None:
             raise RuntimeError(f"window {window_id} could not be captured")
@@ -120,12 +129,3 @@ class MacScreenCapturer(ScreenCapturer):
             pixels=bytes(buffer),
             premultiplied=True,
         )
-
-    @staticmethod
-    def _to_result(shot: mss.screenshot.ScreenShot) -> CaptureResult:
-        width, height = shot.size
-        # mss yields raw BGRA; let PIL reorder it to RGBA in one pass.
-        rgba = Image.frombytes("RGBA", shot.size, bytes(shot.bgra), "raw", "BGRA").tobytes()
-        # scale is refined in Phase 2 via QScreen.devicePixelRatio; the saved
-        # image is already at native resolution regardless.
-        return CaptureResult(width=width, height=height, scale=1.0, pixels=rgba)
