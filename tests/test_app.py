@@ -87,6 +87,19 @@ def test_build_icon_is_not_null(qapp):
     assert not icon.isNull()
 
 
+def test_app_is_qobject_for_queued_hotkey_delivery(qapp, config, fakes):
+    # ShotquillApp must be a QObject so the hotkey bridge's signals — emitted
+    # from pynput's listener thread — reach the capture slots via a *queued*
+    # connection onto the GUI thread. A plain-object receiver makes Qt fall back
+    # to a direct call on the listener thread, where building the overlay/editor
+    # QWidgets crashes on macOS and the hotkey appears dead (menu still works).
+    from PySide6.QtCore import QObject
+
+    app = _build_app(qapp, fakes)
+    assert isinstance(app, QObject)
+    app.shutdown()
+
+
 def test_apply_hotkeys_registers_all_capture_combos(qapp, config, fakes):
     _capturer, hotkeys, _autostart = fakes
     app = _build_app(qapp, fakes)

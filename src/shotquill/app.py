@@ -81,10 +81,18 @@ class _HotkeyBridge(QObject):
     fullscreen_requested = Signal()
 
 
-class ShotquillApp:
-    """Owns the tray icon, hotkeys, capturer, overlays, and editor windows."""
+class ShotquillApp(QObject):
+    """Owns the tray icon, hotkeys, capturer, overlays, and editor windows.
+
+    Subclasses ``QObject`` so it has main-thread affinity: the hotkey bridge's
+    signals are emitted from pynput's listener thread, and an ``AutoConnection``
+    to a QObject slot on the main thread is delivered queued (i.e. capture runs
+    on the GUI thread). A plain-object receiver would instead be called directly
+    on the listener thread, where creating Qt windows crashes on macOS.
+    """
 
     def __init__(self, app: QApplication) -> None:
+        super().__init__()
         self._app = app
         self._config = Config()
         set_language(self._config.language())
