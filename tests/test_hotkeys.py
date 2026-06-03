@@ -42,6 +42,10 @@ class _FakeKey:
 def fake_listener(monkeypatch):
     _FakeListener.instances = []
     monkeypatch.setattr(macos.keyboard, "Listener", _FakeListener)
+    # Decouple from the runner's TCC state: the real preflight returns False on
+    # an unattended macOS CI runner (no Input Monitoring grant), which would make
+    # start() raise. Tests that exercise the permission path override this.
+    monkeypatch.setattr(macos, "request_input_monitoring_access", lambda: True)
     return _FakeListener
 
 
@@ -59,6 +63,33 @@ def test_register_and_unregister(fake_listener):
 def test_start_with_no_bindings_does_nothing(fake_listener):
     manager = macos.MacHotkeyManager()
     manager.start()
+    assert fake_listener.instances == []
+
+
+def test_start_requests_input_monitoring_when_needed(fake_listener, monkeypatch):
+    requested = []
+
+    monkeypatch.setattr(macos, "has_input_monitoring_access", lambda: False)
+    monkeypatch.setattr(
+        macos, "request_input_monitoring_access", lambda: requested.append(True) or True
+    )
+
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: None)
+    manager.start()
+
+    assert requested == [True]
+    assert fake_listener.instances[-1].started is True
+
+
+def test_start_fails_without_input_monitoring(fake_listener, monkeypatch):
+    monkeypatch.setattr(macos, "request_input_monitoring_access", lambda: False)
+
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: None)
+
+    with pytest.raises(PermissionError):
+        manager.start()
     assert fake_listener.instances == []
 
 

@@ -66,11 +66,15 @@ pyinstaller --noconfirm --windowed --name ShotQuill \
   "${EXCLUDE_FLAGS[@]}" \
   packaging/entry.py
 
-# Menu-bar agent app (no Dock icon) + screen-recording prompt text + version.
+# Menu-bar agent app (no Dock icon) + privacy prompt text + version.
 "$PB" -c "Add :LSUIElement bool true" "$PLIST" 2>/dev/null \
   || "$PB" -c "Set :LSUIElement true" "$PLIST"
 "$PB" -c "Add :NSScreenCaptureUsageDescription string 'ShotQuill captures your screen to take screenshots.'" "$PLIST" 2>/dev/null \
-  || true
+  || "$PB" -c "Set :NSScreenCaptureUsageDescription 'ShotQuill captures your screen to take screenshots.'" "$PLIST"
+"$PB" -c "Add :NSInputMonitoringUsageDescription string 'ShotQuill listens for your configured global screenshot hotkeys.'" "$PLIST" 2>/dev/null \
+  || "$PB" -c "Set :NSInputMonitoringUsageDescription 'ShotQuill listens for your configured global screenshot hotkeys.'" "$PLIST"
+"$PB" -c "Add :NSAccessibilityUsageDescription string 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$PLIST" 2>/dev/null \
+  || "$PB" -c "Set :NSAccessibilityUsageDescription 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$PLIST"
 "$PB" -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" 2>/dev/null \
   || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"
 "$PB" -c "Set :CFBundleVersion $VERSION" "$PLIST" 2>/dev/null \

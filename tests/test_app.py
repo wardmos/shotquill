@@ -38,6 +38,7 @@ class _FakeHotkeys:
         self.started = 0
         self.stopped = 0
         self.cleared = 0
+        self.raise_permission_error = False
 
     def register(self, combo, callback):
         self.bindings[combo] = callback
@@ -50,6 +51,8 @@ class _FakeHotkeys:
         self.bindings.clear()
 
     def start(self):
+        if self.raise_permission_error:
+            raise PermissionError("Input Monitoring required")
         self.started += 1
 
     def stop(self):
@@ -114,6 +117,25 @@ def test_apply_hotkeys_skips_disabled_combos(qapp, config, fakes):
     app = _build_app(qapp, fakes)
     # The disabled fullscreen combo is never registered with the listener.
     assert set(hotkeys.bindings) == {"<alt>+a"}
+    app.shutdown()
+
+
+def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
+    qapp, config, fakes, monkeypatch
+):
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_permission_error = True
+    opened = []
+    messages = []
+    monkeypatch.setattr(app_module.subprocess, "run", lambda args, check=False: opened.append(args))
+    monkeypatch.setattr(
+        app_module.QSystemTrayIcon, "showMessage", lambda *args: messages.append(args)
+    )
+
+    app = _build_app(qapp, fakes)
+
+    assert opened == [["open", app_module._PRIVACY_INPUT_MONITORING]]
+    assert messages
     app.shutdown()
 
 

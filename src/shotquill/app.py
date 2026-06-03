@@ -14,7 +14,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
@@ -105,9 +105,14 @@ class ShotquillApp(QObject):
         self._windows: list[object] = []  # keep overlays/editors alive
 
         self._bridge = _HotkeyBridge()
-        # Queued (cross-thread) connections: slots run on the main thread.
-        self._bridge.smart_requested.connect(self._capture_smart)
-        self._bridge.fullscreen_requested.connect(self._capture_fullscreen)
+        # Hotkeys are emitted from pynput's listener thread. Force queued delivery
+        # so capture code always runs on Qt's GUI thread, where widgets/windows are safe.
+        self._bridge.smart_requested.connect(
+            self._capture_smart, Qt.ConnectionType.QueuedConnection
+        )
+        self._bridge.fullscreen_requested.connect(
+            self._capture_fullscreen, Qt.ConnectionType.QueuedConnection
+        )
 
         self._tray = QSystemTrayIcon(_build_icon(), self._app)
         self._tray.setToolTip("ShotQuill")
@@ -165,13 +170,19 @@ class ShotquillApp(QObject):
         for action, emit in actions:
             if self._config.hotkey_enabled(action):
                 self._hotkeys.register(self._config.hotkey(action), emit)
-        self._hotkeys.start()
+        try:
+            self._hotkeys.start()
+        except PermissionError:
+            self._notify(t("notify.hotkeys_need_input_monitoring"))
+            self._open_input_monitoring_settings()
 
+    @Slot()
     def _capture_fullscreen(self) -> None:
         screenshot = self._grab()
         if screenshot is not None:
             self._deliver_capture(screenshot)
 
+    @Slot()
     def _capture_smart(self) -> None:
         # Snapshot the window list *before* showing the overlay so our own
         # window isn't a target. An empty/failed list is fine — the overlay

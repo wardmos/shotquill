@@ -25,9 +25,9 @@ def test_every_string_has_all_languages():
 
 
 def test_translate_switches_language():
-    assert i18n.t("menu.smart") == "Smart Capture"
+    assert i18n.t("menu.smart") == "Capture"
     i18n.set_language("zh")
-    assert i18n.t("menu.smart") == "智能截图"
+    assert i18n.t("menu.smart") == "截图"
 
 
 def test_unknown_key_returns_key():

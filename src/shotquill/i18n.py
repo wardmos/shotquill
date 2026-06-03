@@ -17,7 +17,7 @@ LANGUAGE_NAMES = {"en": "English", "zh": "中文"}
 
 _STRINGS: dict[str, dict[str, str]] = {
     # Tray menu
-    "menu.smart": {"en": "Smart Capture", "zh": "智能截图"},
+    "menu.smart": {"en": "Capture", "zh": "截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
@@ -32,6 +32,11 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
+    "notify.hotkeys_need_input_monitoring": {
+        "en": "Global hotkeys need Input Monitoring permission. "
+        "Enable it in System Settings, then restart ShotQuill.",
+        "zh": "全局快捷键需要输入监控权限。请在系统设置中启用后重启 ShotQuill。",
+    },
     "smart.hint": {
         "en": "Click a window · drag for a region · click here for full screen · Esc cancels",
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · Esc 取消",
@@ -86,7 +91,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.save_dir": {"en": "Save Folder", "zh": "保存目录"},
     "settings.format": {"en": "Image Format", "zh": "图片格式"},
     "settings.hotkey_enabled": {"en": "Enable", "zh": "启用"},
-    "settings.smart": {"en": "Smart Capture", "zh": "智能截图"},
+    "settings.smart": {"en": "Capture", "zh": "截图"},
     "settings.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "settings.language": {"en": "Language", "zh": "界面语言"},
     "settings.browse": {"en": "Browse…", "zh": "浏览…"},

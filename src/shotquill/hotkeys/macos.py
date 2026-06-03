@@ -25,6 +25,8 @@ from pynput.keyboard import Key
 from shotquill.hotkeys.base import HotkeyManager
 from shotquill.hotkeys.combo import parse_combo
 
+_INPUT_MONITORING_ERROR = "Input Monitoring permission is required for global hotkeys."
+
 # macOS hardware virtual key codes (kVK_ANSI_* / kVK_F*), keyed by the lowercase
 # token the settings UI emits (a–z, 0–9, f1–f12). The key code is positional and
 # does not change when Option rewrites the produced character, so matching on it
@@ -111,6 +113,45 @@ def _vk_of(key: object) -> int | None:
     return vk
 
 
+def _quartz_function(name: str) -> Callable[[], bool] | None:
+    """Return a Quartz TCC helper when running on macOS, else ``None``.
+
+    Tests and Linux development import this module without PyObjC/Quartz, so the
+    permission preflight must be best-effort and fail open when the OS helper is
+    unavailable. On macOS 10.15+, these helpers are the correct way to check and
+    request the Input Monitoring permission that raw keyboard listeners need.
+    """
+    try:
+        import Quartz  # type: ignore[import-not-found]
+    except Exception:
+        return None
+    return getattr(Quartz, name, None)
+
+
+def has_input_monitoring_access() -> bool:
+    """Whether macOS currently allows this process to listen for key events."""
+    preflight = _quartz_function("CGPreflightListenEventAccess")
+    if preflight is None:
+        return True
+    try:
+        return bool(preflight())
+    except Exception:
+        return True
+
+
+def request_input_monitoring_access() -> bool:
+    """Ask macOS for Input Monitoring access if needed; return whether it is granted."""
+    if has_input_monitoring_access():
+        return True
+    request = _quartz_function("CGRequestListenEventAccess")
+    if request is None:
+        return True
+    try:
+        return bool(request())
+    except Exception:
+        return has_input_monitoring_access()
+
+
 @dataclass
 class _Binding:
     mods: frozenset[str]
@@ -140,6 +181,8 @@ class MacHotkeyManager(HotkeyManager):
         self.stop()
         if not self._bindings:
             return
+        if not request_input_monitoring_access():
+            raise PermissionError(_INPUT_MONITORING_ERROR)
         self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
         self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._listener.start()

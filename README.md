@@ -28,7 +28,7 @@ cross-platform architecture (Windows / Linux planned).
 ## Highlights
 
 - **Two capture hotkeys**, both customizable:
-  - **Smart capture** (`⌥A`) — one overlay, mode chosen by the pointer: hover an
+  - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: hover an
     app window to grab just that window (real pixels, even when partly covered),
     hover empty space to grab the whole screen, or drag a rectangle for a region
     with a live size readout.
@@ -88,7 +88,7 @@ hotkeys from anywhere.
 
 | Action         | Default | Notes                                                                                |
 | -------------- | ------- | ------------------------------------------------------------------------------------ |
-| Smart capture  | `⌥A`    | Hover a window to grab it, hover empty space for full screen, or drag for a region. `Esc` / right-click cancels. |
+| Capture        | `⌥A`    | Hover a window to grab it, hover empty space for full screen, or drag for a region. `Esc` / right-click cancels. |
 | Full-screen    | `⌥S`    | All displays composited into one image, instantly.                                   |
 
 Both are remappable in **Settings** (any combination of `⌘ ⌃ ⌥ ⇧` + a key).

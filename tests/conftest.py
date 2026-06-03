@@ -25,6 +25,29 @@ except Exception:  # pragma: no cover - only hit on a headless dev machine
     _pynput = types.ModuleType("pynput")
     _keyboard = types.ModuleType("pynput.keyboard")
 
+    class _StubKey:
+        alt = object()
+        alt_l = object()
+        alt_r = object()
+        cmd = object()
+        cmd_l = object()
+        cmd_r = object()
+        ctrl = object()
+        ctrl_l = object()
+        ctrl_r = object()
+        shift = object()
+        shift_l = object()
+        shift_r = object()
+
+    class _StubListener:  # minimal stand-in; real behaviour is monkeypatched per-test
+        def __init__(self, on_press=None, on_release=None) -> None:
+            self.on_press = on_press
+            self.on_release = on_release
+
+        def start(self) -> None: ...
+
+        def stop(self) -> None: ...
+
     class _StubGlobalHotKeys:  # minimal stand-in; real behaviour is monkeypatched per-test
         def __init__(self, mapping: dict) -> None:
             self._mapping = mapping
@@ -34,6 +57,8 @@ except Exception:  # pragma: no cover - only hit on a headless dev machine
         def stop(self) -> None: ...
 
     _keyboard.GlobalHotKeys = _StubGlobalHotKeys
+    _keyboard.Key = _StubKey
+    _keyboard.Listener = _StubListener
     _pynput.keyboard = _keyboard
     sys.modules["pynput"] = _pynput
     sys.modules["pynput.keyboard"] = _keyboard
