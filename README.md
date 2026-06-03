@@ -2,29 +2,49 @@
   <img src="packaging/macos/icon.png" alt="ShotQuill icon" width="128" height="128">
 </p>
 
-# ShotQuill
+<h1 align="center">ShotQuill</h1>
 
-[![CI](https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg)](https://github.com/wardmos/shotquill/actions/workflows/ci.yml)
+<p align="center">
+  A fast, privacy-respecting screenshot &amp; annotation tool for macOS.
+</p>
 
-A fast, privacy-respecting screenshot & annotation tool. **macOS first**, with a
-cross-platform architecture (Windows / Linux planned).
+<p align="center">
+  <a href="https://github.com/wardmos/shotquill/actions/workflows/ci.yml"><img src="https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-macOS-blue" alt="Platform: macOS">
+  <img src="https://img.shields.io/badge/python-3.12-blue" alt="Python 3.12">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache 2.0"></a>
+</p>
 
-> Status: early development.
+ShotQuill lives in your menu bar and turns a screenshot into a finished, shareable
+image in one motion: press a hotkey, grab a region / window / the whole screen,
+and it's saved and on your clipboard — or drop into a built-in editor to annotate,
+redact, and extract text first. **macOS first**, built on a cross-platform
+architecture (Windows / Linux planned).
 
-## Features
+> **Status:** early development — usable day-to-day, but expect rough edges.
 
-- Global hotkeys for **region** (`⌥A`), **full-screen** (`⌥S`), and **window**
-  (`⌥W`) capture — customizable
-- Window capture: point at any app window and click to grab it (real pixels,
-  even when partially covered)
-- On-screen annotation: rectangles, circles, arrows, lines, freehand, text,
-  highlighter, and mosaic for redaction
-- On-device OCR (Apple Vision) — extract text from a capture, fully offline
-- Hands-free by default: a capture is saved to your folder **and** copied to the
-  clipboard automatically — no extra keypress. Configurable in Settings (save
-  only, clipboard only, or off to annotate first, then Space saves / Enter copies)
-- English / 中文 interface (switchable in Settings; defaults to English)
-- Menu-bar resident, no Dock clutter
+---
+
+## Highlights
+
+- **Three capture modes**, each with a customizable global hotkey:
+  - **Region** (`⌥A`) — drag a rectangle; live size readout.
+  - **Full screen** (`⌥S`) — every display at once.
+  - **Window** (`⌥W`) — point at any app window and click; the real window
+    pixels are captured even when it's partially covered by others.
+- **Hands-free by default** — a capture is saved to your folder **and** copied to
+  the clipboard automatically, no extra keypress. Fully configurable (see below).
+- **Annotation editor** — rectangles, ellipses, arrows, lines, freehand pen,
+  highlighter, text, and **mosaic redaction** that pixelates the real pixels (not
+  just an overlay, so the sensitive data never survives in the exported image).
+- **On-device OCR** via Apple's Vision framework — pull text out of a shot,
+  fully offline, no network, no API key. Recognizes Chinese (Simplified) + English.
+- **Pin to screen** — float an annotated shot on top of the desktop for reference;
+  drag to move, double-click or `Esc` to dismiss.
+- **Bilingual UI** — English / 中文, switchable in Settings (defaults to English).
+- **Menu-bar resident** — no Dock clutter; optional launch-at-login.
+
+---
 
 ## Install
 
@@ -34,48 +54,179 @@ cross-platform architecture (Windows / Linux planned).
 brew install --cask wardmos/tap/shotquill
 ```
 
+`brew upgrade` keeps it current.
+
 **Direct download:** grab the `.dmg` from
 [Releases](https://github.com/wardmos/shotquill/releases), open it, and drag
-ShotQuill to Applications.
+ShotQuill to your Applications folder. Each release ships a `.sha256` sidecar so
+you can verify the download:
 
-> ShotQuill is open source and **ad-hoc signed (not notarized)** to keep the
-> developer anonymous. On first launch macOS Gatekeeper will warn it can't
+```bash
+shasum -a 256 -c ShotQuill-*.dmg.sha256
+```
+
+> ShotQuill is open source and **ad-hoc signed (not notarized)** so the developer
+> can stay anonymous. On first launch macOS Gatekeeper will warn that it can't
 > verify the developer — **right-click the app → Open** once, or run:
 >
 > ```bash
 > xattr -dr com.apple.quarantine /Applications/ShotQuill.app
 > ```
 >
-> The Homebrew cask strips quarantine automatically.
+> The Homebrew cask strips quarantine automatically, so this only applies to the
+> direct download.
+
+---
+
+## Usage
+
+ShotQuill runs in the menu bar. Click its icon for the menu, or use the global
+hotkeys from anywhere.
+
+### Capture hotkeys
+
+| Action          | Default | Notes                                              |
+| --------------- | ------- | -------------------------------------------------- |
+| Region capture  | `⌥A`    | Drag to select; `Esc` cancels.                     |
+| Full-screen     | `⌥S`    | All displays composited into one image.            |
+| Window capture  | `⌥W`    | Hover a window to highlight it, click to grab it.  |
+
+All three are remappable in **Settings** (any combination of `⌘ ⌃ ⌥ ⇧` + a key).
+
+### What happens after a capture
+
+By default ShotQuill is **hands-free**: the shot is saved to your folder and
+copied to the clipboard immediately, with a brief screen flash to confirm — no
+editor, no keypress. You can change this in Settings → *After capture*:
+
+| Auto-save | Auto-copy | Result                                                       |
+| :-------: | :-------: | ------------------------------------------------------------ |
+|     ✅     |     ✅     | Saved **and** copied, no editor (default).                   |
+|     ✅     |     —     | Saved only.                                                  |
+|     —     |     ✅     | Copied only.                                                 |
+|     —     |     —     | Opens the **annotation editor** instead (see below).         |
+
+### Annotation editor
+
+When both auto-output toggles are off (or whenever you want to mark a shot up),
+the editor opens with a toolbar:
+
+- **Tools:** select, rectangle, ellipse, arrow, line, pen, highlighter, mosaic,
+  text — with adjustable color and stroke width, plus undo / redo.
+- **Copy Text** runs OCR on the capture and copies the recognized text.
+- **Pin** floats the annotated shot on top of the desktop.
+
+Keyboard:
+
+| Key            | Action                                  |
+| -------------- | --------------------------------------- |
+| `Space`        | Save to your folder, then close         |
+| `Enter`        | Copy to the clipboard, then close       |
+| `⌘Z` / `⌘⇧Z`   | Undo / redo                             |
+| `Esc`          | Close without saving                    |
+
+### Saved files
+
+Captures are written to `~/Pictures/ShotQuill` by default (configurable), named
+like macOS does — e.g. `ShotQuill 2026-06-04 at 14.30.00.png`. Choose **PNG** or
+**JPG** in Settings.
+
+---
+
+## Configuration
+
+Open **Settings…** from the menu-bar icon:
+
+- **Language** — English / 中文.
+- **Save folder** & **image format** (PNG / JPG).
+- **Hotkeys** for all three capture modes.
+- **After capture** — auto-save and/or auto-copy toggles (above).
+- **Launch at login** — installs a per-user `LaunchAgent`.
+- **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
+
+---
+
+## Privacy
+
+ShotQuill is built to be trustworthy, and it's open source so you can verify it:
+
+- **No keylogging.** The global-hotkey listener only checks for your configured
+  shortcut combos; it never records, stores, or forwards keystrokes.
+- **OCR is on-device.** Text recognition uses Apple's Vision framework locally —
+  nothing is uploaded, and it works with no network connection.
+- **Redaction is real.** The mosaic tool rewrites the underlying pixels before
+  export, so blurred-out content isn't recoverable from the saved image.
+- **No telemetry.** ShotQuill makes no network requests of its own.
+
+---
 
 ## Tech stack
 
-Python 3.12 + [PySide6](https://doc.qt.io/qtforpython/) (Qt). Screen capture via
-`mss`, global hotkeys via `pynput`, image ops via `Pillow`.
+Python 3.12 + [PySide6](https://doc.qt.io/qtforpython/) (Qt) for a self-drawn,
+cross-platform UI:
+
+| Concern               | Library                                              |
+| --------------------- | ---------------------------------------------------- |
+| GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                 |
+| Screen capture        | `mss`, plus Quartz (`CGWindowList*`) for windows     |
+| Global hotkeys        | `pynput`                                             |
+| Image processing      | `Pillow`                                             |
+| OCR                   | `pyobjc` → Apple Vision                               |
+
+Platform-specific code (capture, hotkeys, OCR, autostart) sits behind small
+`base.py` interfaces, so the editor and output layers stay portable and adding a
+new OS means implementing those interfaces rather than touching the UI.
+
+---
 
 ## Development
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m shotquill        # launches the menu-bar app (macOS)
-ruff check src tests       # lint
-pytest                     # tests
+
+python -m shotquill              # launch the menu-bar app (macOS)
+ruff check src tests             # lint
+ruff format --check src tests    # formatting
+pytest                           # tests
 ```
 
-> Capture, global hotkeys, and the selection overlay rely on macOS system
-> frameworks, so they must be **run and tested on a Mac**. Pure logic and Qt
-> widgets can be developed and tested headlessly on Linux
-> (`QT_QPA_PLATFORM=offscreen`).
+> Screen capture, global hotkeys, and the full-screen overlays rely on macOS
+> system frameworks, so they must be **run and tested on a Mac**. Pure logic and
+> Qt widgets can be developed and tested headlessly on Linux with
+> `QT_QPA_PLATFORM=offscreen` (this is what CI does).
 
 ### macOS permissions
 
-On first run, grant **Screen Recording** and **Input Monitoring** in
-System Settings → Privacy & Security.
+On first run, grant these in **System Settings → Privacy & Security**:
+
+- **Screen Recording** — required to capture the screen and enumerate windows.
+- **Input Monitoring** — required for the global capture hotkeys to work while
+  other apps are focused.
+
+---
+
+## Roadmap
+
+- [x] Region / full-screen / window capture
+- [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
+- [x] On-device OCR
+- [x] Hands-free auto save + clipboard
+- [ ] Windows & Linux backends (the architecture is ready; backends are not)
+- [ ] Scrolling / long-page capture
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Please run `ruff check`, `ruff format`, and
+`pytest` before submitting; CI runs the same on Linux + macOS.
+
+---
 
 ## License
 
 [Apache-2.0](LICENSE). Copyright (C) 2026 wardmos.
 
-This program bundles Qt via PySide6, which is licensed under the LGPLv3; the
+ShotQuill bundles Qt via PySide6, which is licensed under the LGPLv3; the
 corresponding license notices are included with distributed builds.
