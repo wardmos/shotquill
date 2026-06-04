@@ -93,15 +93,46 @@ def test_start_fails_without_input_monitoring(fake_listener, monkeypatch):
     assert fake_listener.instances == []
 
 
-def test_start_stops_previous_listener(fake_listener):
+def test_start_reuses_running_listener(fake_listener):
+    # Restarting a pynput listener under a running Qt app SIGTRAPs on macOS,
+    # so re-applying settings must keep the existing listener alive.
     manager = macos.MacHotkeyManager()
     manager.register("<alt>+a", lambda: None)
     manager.start()
     first = fake_listener.instances[-1]
-    manager.start()  # re-applying settings starts a fresh listener
-    assert first.stopped is True
-    assert len(fake_listener.instances) == 2
-    assert fake_listener.instances[-1].started is True
+    manager.start()  # re-applying settings hot-swaps bindings, no restart
+    assert first.stopped is False
+    assert fake_listener.instances == [first]
+
+
+def test_rebind_takes_effect_without_restart(fake_listener):
+    """Changing hotkeys in Settings swaps bindings on the live listener."""
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append("a"))
+    manager.start()
+    manager.clear()
+    manager.register("<alt>+s", lambda: fired.append("s"))
+    manager.start()
+    assert len(fake_listener.instances) == 1
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))  # old ⌥A is unbound
+    manager._on_press(_FakeKey(vk=1, char="ß"))  # new ⌥S fires
+    assert fired == ["s"]
+
+
+def test_disabling_all_hotkeys_unbinds_but_keeps_listener(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    listener = fake_listener.instances[-1]
+    manager.clear()
+    manager.start()  # all hotkeys disabled in Settings
+    assert listener.stopped is False  # stopping would make re-enable crash-prone
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    assert fired == []
 
 
 def test_clear_removes_all_bindings(fake_listener):

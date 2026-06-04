@@ -178,12 +178,23 @@ class MacHotkeyManager(HotkeyManager):
         self._bindings.clear()
 
     def start(self) -> None:
-        self.stop()
+        """Compile the current bindings and make sure a listener is running.
+
+        The listener is started at most once per process: stopping a pynput
+        listener and starting a fresh one while Qt owns the main loop trips a
+        dispatch assertion inside macOS frameworks (EXC_BREAKPOINT/SIGTRAP on
+        the new listener thread), killing the app — observed when re-applying
+        hotkeys after the Settings dialog. So re-applying settings hot-swaps
+        ``_compiled`` (an atomic reference swap, safe to race with the listener
+        thread's reads) and leaves the running listener untouched.
+        """
+        self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
+        if self._listener is not None:
+            return  # already listening: the new bindings are live immediately
         if not self._bindings:
-            return
+            return  # nothing to listen for; don't prompt for permission yet
         if not request_input_monitoring_access():
             raise PermissionError(_INPUT_MONITORING_ERROR)
-        self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
         self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self._listener.start()
 

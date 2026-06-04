@@ -161,7 +161,9 @@ class ShotquillApp(QObject):
         self._menu = menu  # keep a reference
 
     def _apply_hotkeys(self) -> None:
-        self._hotkeys.stop()
+        # Note: no stop() here. Restarting the pynput listener while Qt runs
+        # crashes the process (SIGTRAP on the listener thread), so the manager
+        # keeps one listener alive and start() just swaps in the new bindings.
         self._hotkeys.clear()
         actions = (
             ("smart_capture", self._bridge.smart_requested.emit),
