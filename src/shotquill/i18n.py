@@ -32,6 +32,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
+    "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.hotkeys_need_input_monitoring": {
         "en": "Global hotkeys need Input Monitoring permission. "
         "Enable it in System Settings, then restart ShotQuill.",

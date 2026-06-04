@@ -116,14 +116,21 @@ class EditorWindow(QMainWindow):
 
     def _save(self) -> None:
         # Save to the configured folder, then close — shared by the toolbar
-        # button and the Space shortcut.
+        # button and the Space shortcut. On failure keep the editor open so the
+        # annotations aren't lost.
+        from PySide6.QtWidgets import QMessageBox
+
         from shotquill.output.saver import save_qimage
 
-        save_qimage(
-            self._canvas.export_image(),
-            self._config.save_dir(),
-            self._config.image_format(),
-        )
+        try:
+            save_qimage(
+                self._canvas.export_image(),
+                self._config.save_dir(),
+                self._config.image_format(),
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "ShotQuill", t("notify.save_failed").format(error=exc))
+            return
         self.close()
 
     def _pin(self) -> None:

@@ -62,6 +62,27 @@ def test_build_output_path_expands_user(monkeypatch, tmp_path):
     assert (tmp_path / "shots").is_dir()
 
 
+def test_save_unpremultiplies_window_captures(tmp_path):
+    # Window captures arrive premultiplied; the saved file must hold straight
+    # alpha (half-transparent red premultiplied is (128, 0, 0, 128)).
+    pixels = bytes([128, 0, 0, 128] * 4)
+    result = CaptureResult(width=2, height=2, scale=1.0, pixels=pixels, premultiplied=True)
+    path = save(result, str(tmp_path), "png")
+    img = QImage(str(path))
+    assert img.pixelColor(0, 0).getRgb() == (255, 0, 0, 128)
+
+
+def test_save_raises_when_directory_unwritable(tmp_path):
+    target = tmp_path / "readonly"
+    target.mkdir()
+    target.chmod(0o500)
+    try:
+        with pytest.raises(OSError):
+            save(_red_2x2(), str(target), "png")
+    finally:
+        target.chmod(0o700)
+
+
 def test_save_qimage_writes_file(tmp_path):
     from PySide6.QtGui import QColor
 

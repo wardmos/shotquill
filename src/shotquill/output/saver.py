@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtGui import QImage
 
 from shotquill.capture.base import CaptureResult
+from shotquill.imaging import result_to_qimage
 
 _JPEG_FORMATS = {"jpg", "jpeg"}
 
@@ -25,23 +26,15 @@ def build_output_path(directory: str, image_format: str = "png") -> Path:
 
 def save(result: CaptureResult, directory: str, image_format: str = "png") -> Path:
     """Write a raw capture to disk and return the created file path."""
-    path = build_output_path(directory, image_format)
-    image = QImage(
-        result.pixels,
-        result.width,
-        result.height,
-        result.width * 4,
-        QImage.Format.Format_RGBA8888,
-    )
-    if path.suffix == ".jpg":
-        image = image.convertToFormat(QImage.Format.Format_RGB888)
-    if not image.save(str(path)):
-        raise OSError(f"failed to write {path}")
-    return path
+    return save_qimage(result_to_qimage(result), directory, image_format)
 
 
 def save_qimage(image: QImage, directory: str, image_format: str = "png") -> Path:
-    """Write an annotated QImage (rendered by the editor) to disk."""
+    """Write a QImage to disk; raise ``OSError`` when the write fails."""
     path = build_output_path(directory, image_format)
-    image.save(str(path))
+    if path.suffix == ".jpg":
+        # JPEG has no alpha; convert explicitly so the result is deterministic.
+        image = image.convertToFormat(QImage.Format.Format_RGB888)
+    if not image.save(str(path)):
+        raise OSError(f"failed to write {path}")
     return path
