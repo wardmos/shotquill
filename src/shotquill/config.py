@@ -2,10 +2,14 @@
 # Copyright (C) 2026 wardmos
 """User configuration: hotkeys, save directory, image format.
 
-Backed by QSettings (stored in the app's plist on macOS). Hotkey combos use
-pynput's syntax (e.g. ``<alt>+a``) so they can be handed straight to the hotkey
-manager. Qt is imported lazily so this module's pure helpers stay testable
-without a running QApplication.
+Backed by QSettings (stored in the app's plist on macOS). Two hotkey syntaxes
+coexist under the ``hotkeys/`` group: *capture* hotkeys use pynput's syntax
+(e.g. ``<alt>+a``) so they can be handed straight to the global hotkey manager,
+while *editor finish keys* use Qt's QKeySequence portable syntax (e.g. ``Space``,
+``Ctrl+Return``) since they are matched inside Qt windows — always read them
+through their dedicated accessors (``hotkey`` vs ``editor_hotkey``). Qt is
+imported lazily so this module's pure helpers stay testable without a running
+QApplication.
 """
 
 from __future__ import annotations

@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QKeyCombination, Qt, Signal
-from PySide6.QtGui import QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QKeyCombination, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QAction, QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QMainWindow
 
-from shotquill.i18n import t
+from shotquill.i18n import key_display_name, t
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.toolbar import create_toolbar
 
@@ -42,9 +42,10 @@ def _pressed_sequence(event) -> QKeySequence:
     return QKeySequence(QKeyCombination(modifiers, Qt.Key(key)))
 
 
-def _display_key(sequence: QKeySequence) -> str:
-    """A human-readable key name for tooltips, or '' when the key is off."""
-    return sequence.toString(QKeySequence.NativeText)
+def _finish_tip(sequence: QKeySequence, label: str) -> str:
+    """A tooltip with the localized finish-key name appended (omitted when off)."""
+    key = key_display_name(sequence.toString())
+    return f"{label} ({key})" if key else label
 
 
 class EditorWindow(QMainWindow):
@@ -72,17 +73,11 @@ class EditorWindow(QMainWindow):
         self._canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setCentralWidget(self._canvas)
-        self.addToolBar(
-            create_toolbar(
-                self._canvas,
-                self._copy,
-                self._save,
-                self._ocr,
-                self._pin,
-                copy_key=_display_key(self._copy_key),
-                save_key=_display_key(self._save_key),
-            )
-        )
+        toolbar = create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin)
+        self.addToolBar(toolbar)
+        self._copy_action = toolbar.findChild(QAction, "copy_action")
+        self._save_action = toolbar.findChild(QAction, "save_action")
+        self._refresh_finish_tips()
 
         # Size from the shot's on-screen (logical) rect when known — the pixmap
         # is in native pixels, which is 2x too large on Retina displays.
@@ -134,6 +129,18 @@ class EditorWindow(QMainWindow):
         frame.moveLeft(min(max(frame.left(), available.left()), max_left))
         frame.moveTop(min(max(frame.top(), available.top()), max_top))
         self.move(self.pos() + (frame.topLeft() - self.frameGeometry().topLeft()))
+
+    def reload_finish_keys(self) -> None:
+        """Re-resolve the finish keys from config — the app calls this on every
+        open editor after the user accepts the Settings dialog, so changed or
+        disabled keys take effect without reopening the window."""
+        self._copy_key = _finish_sequence(self._config, "editor_copy")
+        self._save_key = _finish_sequence(self._config, "editor_save")
+        self._refresh_finish_tips()
+
+    def _refresh_finish_tips(self) -> None:
+        self._copy_action.setToolTip(_finish_tip(self._copy_key, t("toolbar.copy_tip")))
+        self._save_action.setToolTip(_finish_tip(self._save_key, t("toolbar.save_tip")))
 
     def keyPressEvent(self, event) -> None:
         # Quick-finish keys (configurable; Space copies to the clipboard and

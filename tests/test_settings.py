@@ -53,11 +53,11 @@ def test_editor_key_row_disabled_greys_out_recorder(qtbot):
 
 
 def test_dialog_prefills_editor_keys_from_config(qtbot, config):
-    config.set_editor_hotkey("editor_copy", "Ctrl+C")
+    config.set_editor_hotkey("editor_copy", "Ctrl+D")
     config.set_hotkey_enabled("editor_save", False)
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    assert dialog._editor_copy.sequence() == "Ctrl+C"
+    assert dialog._editor_copy.sequence() == "Ctrl+D"
     assert dialog._editor_save.sequence() == "Return"
     assert dialog._editor_save.enabled() is False
 
@@ -67,13 +67,67 @@ def test_dialog_save_persists_editor_keys(qtbot, config):
 
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    dialog._editor_copy._edit.setKeySequence(QKeySequence("Ctrl+C"))
+    dialog._editor_copy._edit.setKeySequence(QKeySequence("Ctrl+D"))
     dialog._editor_save._enabled.setChecked(False)
     dialog._save_and_accept()
-    assert config.editor_hotkey("editor_copy") == "Ctrl+C"
+    assert config.editor_hotkey("editor_copy") == "Ctrl+D"
     assert config.hotkey_enabled("editor_copy") is True
     assert config.editor_hotkey("editor_save") == "Return"
     assert config.hotkey_enabled("editor_save") is False
+
+
+def _silence_warnings(monkeypatch):
+    """Swallow the QMessageBox.warning popup (it would block offscreen tests)."""
+    from PySide6.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *args, **kwargs: warnings.append(args))
+    )
+    return warnings
+
+
+def test_dialog_rejects_finish_key_reserved_by_toolbar(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Ctrl+C (QKeySequence.Copy) is bound by the toolbar's Copy action: the
+    # shortcut system would consume it before keyPressEvent, so it's refused.
+    dialog._editor_copy._edit.setKeySequence(QKeySequence(QKeySequence.Copy))
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+    assert config.editor_hotkey("editor_copy") == "Space"  # unchanged
+
+
+def test_dialog_rejects_same_key_for_copy_and_save(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._editor_copy._edit.setKeySequence(QKeySequence("Ctrl+D"))
+    dialog._editor_save._edit.setKeySequence(QKeySequence("Ctrl+D"))
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+
+
+def test_dialog_allows_reserved_key_on_disabled_row(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # A disabled row never fires, so a colliding combo there is harmless.
+    dialog._editor_copy._edit.setKeySequence(QKeySequence(QKeySequence.Copy))
+    dialog._editor_copy._enabled.setChecked(False)
+    dialog._save_and_accept()
+    assert warnings == []
+    assert dialog.result() == SettingsDialog.Accepted
+    assert config.hotkey_enabled("editor_copy") is False
 
 
 def test_dialog_prefills_from_config(qtbot, config):

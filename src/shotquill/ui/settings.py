@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QKeySequenceEdit,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -30,6 +32,20 @@ if TYPE_CHECKING:
 
 _KEYS = [*"abcdefghijklmnopqrstuvwxyz", *"0123456789", *(f"f{i}" for i in range(1, 13))]
 _FORMATS = ["png", "jpg"]
+
+
+def _reserved_editor_sequences() -> list[QKeySequence]:
+    """Key combos the editor already binds (toolbar shortcuts and Esc).
+
+    A finish key set to one of these would be shadowed: Qt's shortcut system
+    consumes the press before EditorWindow.keyPressEvent ever sees it, so the
+    Settings dialog refuses them. ``keyBindings`` covers every platform binding
+    of each standard key (e.g. both Ctrl+C and Ctrl+Insert for Copy on Linux).
+    """
+    standard = (QKeySequence.Copy, QKeySequence.Save, QKeySequence.Undo, QKeySequence.Redo)
+    reserved = [binding for key in standard for binding in QKeySequence.keyBindings(key)]
+    reserved.append(QKeySequence(Qt.Key_Escape))
+    return reserved
 
 
 class _HotkeyRow(QWidget):
@@ -122,6 +138,10 @@ class _EditorKeyRow(QWidget):
     def sequence(self) -> str:
         return self._edit.keySequence().toString()
 
+    def active_sequence(self) -> QKeySequence:
+        """The recorded sequence, or an empty one when the key is disabled."""
+        return self._edit.keySequence() if self.enabled() else QKeySequence()
+
 
 class SettingsDialog(QDialog):
     def __init__(self, config: Config) -> None:
@@ -213,7 +233,23 @@ class SettingsDialog(QDialog):
         if path:
             self._save_dir.setText(path)
 
+    def _validate_editor_keys(self) -> bool:
+        """Refuse finish keys that collide with built-in shortcuts or each other."""
+        copy_seq = self._editor_copy.active_sequence()
+        save_seq = self._editor_save.active_sequence()
+        reserved = _reserved_editor_sequences()
+        for sequence in (copy_seq, save_seq):
+            if not sequence.isEmpty() and sequence in reserved:
+                QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_conflict"))
+                return False
+        if not copy_seq.isEmpty() and copy_seq == save_seq:
+            QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_duplicate"))
+            return False
+        return True
+
     def _save_and_accept(self) -> None:
+        if not self._validate_editor_keys():
+            return  # keep the dialog open so the user can pick another key
         self._config.set_language(self._language.currentData())
         self._config.set_save_dir(self._save_dir.text())
         self._config.set_image_format(self._format.currentText())

@@ -96,6 +96,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "settings.editor_copy": {"en": "Copy in Editor", "zh": "编辑器内复制"},
     "settings.editor_save": {"en": "Save in Editor", "zh": "编辑器内保存"},
+    "settings.editor_key_conflict": {
+        "en": "This key is already used by the editor (copy, save, undo, redo, or Esc). "
+        "Choose another key.",
+        "zh": "该按键已被编辑器占用（复制/保存/撤销/重做或 Esc），请换一个按键。",
+    },
+    "settings.editor_key_duplicate": {
+        "en": "Copy and save can't share the same key.",
+        "zh": "复制和保存不能使用同一个按键。",
+    },
     "settings.language": {"en": "Language", "zh": "界面语言"},
     "settings.browse": {"en": "Browse…", "zh": "浏览…"},
     "settings.choose_dir": {"en": "Choose Save Folder", "zh": "选择保存目录"},
@@ -111,6 +120,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},
 }
 
+# Localized display names for keys shown in tooltips, keyed by the Qt
+# QKeySequence portable name. Applied to the final (non-modifier) segment so
+# combos like "Ctrl+Return" keep their modifier prefix.
+_KEY_NAMES: dict[str, dict[str, str]] = {
+    "Space": {"en": "Space", "zh": "空格"},
+    "Return": {"en": "Enter", "zh": "回车"},
+}
+
 _current = DEFAULT_LANGUAGE
 
 
@@ -121,6 +138,15 @@ def set_language(language: str) -> None:
 
 def current_language() -> str:
     return _current
+
+
+def key_display_name(portable: str) -> str:
+    """Localize a QKeySequence portable string for display (e.g. ``Return`` → 回车)."""
+    parts = portable.split("+")
+    entry = _KEY_NAMES.get(parts[-1])
+    if entry:
+        parts[-1] = entry.get(_current) or entry.get(DEFAULT_LANGUAGE) or parts[-1]
+    return "+".join(parts)
 
 
 def t(key: str) -> str:

@@ -80,16 +80,36 @@ def test_enter_saves_to_folder_and_closes(qtbot, config, tmp_path):
 
 def test_custom_finish_keys_are_honoured(qtbot, config, tmp_path):
     config.set_save_dir(str(tmp_path))
-    config.set_editor_hotkey("editor_save", "Ctrl+S")
+    config.set_editor_hotkey("editor_save", "Ctrl+D")
     window = _editor(qtbot, config)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
     # The old default no longer saves...
     qtbot.keyClick(window, Qt.Key_Return)
     assert list(tmp_path.glob("ShotQuill *.png")) == []
     # ...the remapped combo does.
-    qtbot.keyClick(window, Qt.Key_S, Qt.ControlModifier)
+    qtbot.keyClick(window, Qt.Key_D, Qt.ControlModifier)
     assert len(list(tmp_path.glob("ShotQuill *.png"))) == 1
     assert not window.isVisible()
+
+
+def test_finish_key_names_shown_in_toolbar_tooltips(qtbot, config):
+    window = _editor(qtbot, config)
+    assert window._copy_action.toolTip() == "Copy to clipboard (Space)"
+    assert window._save_action.toolTip() == "Save to file (Enter)"
+
+
+def test_reload_finish_keys_applies_new_bindings_to_open_editor(qtbot, config, tmp_path):
+    config.set_save_dir(str(tmp_path))
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    # Simulate the user remapping save in Settings while this editor is open.
+    config.set_editor_hotkey("editor_save", "Ctrl+D")
+    window.reload_finish_keys()
+    qtbot.keyClick(window, Qt.Key_Return)  # old binding is inert
+    assert list(tmp_path.glob("ShotQuill *.png")) == []
+    qtbot.keyClick(window, Qt.Key_D, Qt.ControlModifier)  # new binding works
+    assert len(list(tmp_path.glob("ShotQuill *.png"))) == 1
+    assert "Ctrl+D" in window._save_action.toolTip()
 
 
 def test_disabled_finish_keys_do_nothing(qtbot, config, tmp_path):

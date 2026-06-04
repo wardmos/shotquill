@@ -292,6 +292,11 @@ class ShotquillApp(QObject):
             self._apply_hotkeys()
             self._sync_autostart()
             self._rebuild_menu()
+            # Editors resolve their finish keys at creation; push the new
+            # bindings into any that are still open.
+            for window in self._windows:
+                if isinstance(window, EditorWindow):
+                    window.reload_finish_keys()
 
     def _show_about(self) -> None:
         body = (

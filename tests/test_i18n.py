@@ -42,3 +42,19 @@ def test_invalid_language_falls_back_to_default():
 def test_placeholder_templates_are_formattable():
     i18n.set_language("zh")
     assert i18n.t("title.saved").format(name="a.png") == "ShotQuill — 已保存 a.png"
+
+
+def test_key_display_name_localizes_known_keys():
+    assert i18n.key_display_name("Space") == "Space"
+    assert i18n.key_display_name("Return") == "Enter"
+    i18n.set_language("zh")
+    assert i18n.key_display_name("Space") == "空格"
+    assert i18n.key_display_name("Return") == "回车"
+
+
+def test_key_display_name_keeps_modifier_prefix_and_unknown_keys():
+    i18n.set_language("zh")
+    # Only the final segment is localized; modifiers keep their Qt names.
+    assert i18n.key_display_name("Ctrl+Return") == "Ctrl+回车"
+    assert i18n.key_display_name("Ctrl+D") == "Ctrl+D"
+    assert i18n.key_display_name("") == ""
