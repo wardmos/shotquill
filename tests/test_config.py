@@ -4,6 +4,7 @@ from shotquill.config import (
     DEFAULT_AUTO_COPY,
     DEFAULT_AUTO_SAVE,
     DEFAULT_AUTOSTART,
+    DEFAULT_EDITOR_HOTKEYS,
     DEFAULT_FLASH,
     DEFAULT_HOTKEYS,
     DEFAULT_IMAGE_FORMAT,
@@ -18,6 +19,12 @@ def test_default_hotkeys():
     assert DEFAULT_HOTKEYS["smart_capture"] == "<alt>+a"
     assert DEFAULT_HOTKEYS["fullscreen_capture"] == "<alt>+s"
     assert "window_capture" not in DEFAULT_HOTKEYS
+
+
+def test_default_editor_hotkeys():
+    # Space copies to the clipboard, Enter saves to the folder.
+    assert DEFAULT_EDITOR_HOTKEYS["editor_copy"] == "Space"
+    assert DEFAULT_EDITOR_HOTKEYS["editor_save"] == "Return"
 
 
 def test_default_image_format():
@@ -87,6 +94,20 @@ def test_config_hotkey_round_trip(config):
     assert config.hotkey("smart_capture") == "<cmd>+<shift>+a"
     # The other action is untouched.
     assert config.hotkey("fullscreen_capture") == DEFAULT_HOTKEYS["fullscreen_capture"]
+
+
+def test_config_editor_hotkey_defaults_and_round_trip(config):
+    assert config.editor_hotkey("editor_copy") == DEFAULT_EDITOR_HOTKEYS["editor_copy"]
+    assert config.editor_hotkey("editor_save") == DEFAULT_EDITOR_HOTKEYS["editor_save"]
+    config.set_editor_hotkey("editor_copy", "Ctrl+Return")
+    assert config.editor_hotkey("editor_copy") == "Ctrl+Return"
+    # The other action is untouched.
+    assert config.editor_hotkey("editor_save") == DEFAULT_EDITOR_HOTKEYS["editor_save"]
+
+
+def test_editor_hotkeys_enabled_by_default(config):
+    assert config.hotkey_enabled("editor_copy") is True
+    assert config.hotkey_enabled("editor_save") is True
 
 
 def test_config_scalar_round_trips(config):

@@ -59,47 +59,50 @@ def test_pin_emits_image_and_closes(qtbot, config):
     assert not window.isVisible()
 
 
-def test_editor_places_canvas_over_capture_origin(qtbot, config):
-    # The shot was taken at (120, 80) sized 300x200 logical points (the image
-    # is 2x: a Retina capture). The canvas viewport must land exactly there so
-    # the screenshot appears to stay in place while editing.
-    origin = QRect(120, 80, 300, 200)
-    window = EditorWindow(_image(600, 400), config, origin)
-    qtbot.addWidget(window)
+def test_space_copies_to_clipboard_and_closes(qtbot, config):
+    QGuiApplication.clipboard().clear()
+    window = _editor(qtbot, config)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    window.show()
-    qtbot.waitExposed(window)
-
-    viewport = window._canvas.viewport()
-    assert viewport.size() == origin.size()
-    assert viewport.mapToGlobal(QPoint(0, 0)) == origin.topLeft()
+    qtbot.keyClick(window, Qt.Key_Space)
+    assert not QGuiApplication.clipboard().image().isNull()
+    assert not window.isVisible()
 
 
-def test_editor_near_screen_edge_is_clamped_on_screen(qtbot, config):
-    # A shot taken in the bottom-right corner: snapping the canvas there would
-    # push the toolbar/frame off-screen, so the window is clamped instead.
-    screen = QGuiApplication.primaryScreen().availableGeometry()
-    origin = QRect(screen.right() - 100, screen.bottom() - 80, 300, 200)
-    window = EditorWindow(_image(600, 400), config, origin)
-    qtbot.addWidget(window)
+def test_enter_saves_to_folder_and_closes(qtbot, config, tmp_path):
+    config.set_save_dir(str(tmp_path))
+    config.set_image_format("png")
+    window = _editor(qtbot, config)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    window.show()
-    qtbot.waitExposed(window)
-
-    frame = window.frameGeometry()
-    assert frame.right() <= screen.right()
-    assert frame.bottom() <= screen.bottom()
-    assert frame.left() >= screen.left()
-    assert frame.top() >= screen.top()
+    qtbot.keyClick(window, Qt.Key_Return)
+    assert len(list(tmp_path.glob("ShotQuill *.png"))) == 1
+    assert not window.isVisible()
 
 
-def test_editor_without_origin_still_opens(qtbot, config):
-    window = EditorWindow(_image(), config)
-    qtbot.addWidget(window)
+def test_custom_finish_keys_are_honoured(qtbot, config, tmp_path):
+    config.set_save_dir(str(tmp_path))
+    config.set_editor_hotkey("editor_save", "Ctrl+S")
+    window = _editor(qtbot, config)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    window.show()
-    qtbot.waitExposed(window)
-    assert window.isVisible()
+    # The old default no longer saves...
+    qtbot.keyClick(window, Qt.Key_Return)
+    assert list(tmp_path.glob("ShotQuill *.png")) == []
+    # ...the remapped combo does.
+    qtbot.keyClick(window, Qt.Key_S, Qt.ControlModifier)
+    assert len(list(tmp_path.glob("ShotQuill *.png"))) == 1
+    assert not window.isVisible()
+
+
+def test_disabled_finish_keys_do_nothing(qtbot, config, tmp_path):
+    QGuiApplication.clipboard().clear()
+    config.set_save_dir(str(tmp_path))
+    config.set_hotkey_enabled("editor_copy", False)
+    config.set_hotkey_enabled("editor_save", False)
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.keyClick(window, Qt.Key_Space)
+    qtbot.keyClick(window, Qt.Key_Return)
+    assert QGuiApplication.clipboard().image().isNull()
+    assert list(tmp_path.glob("ShotQuill *.png")) == []
 
 
 def _patch_recognizer(monkeypatch, *, lines=None, error=None):

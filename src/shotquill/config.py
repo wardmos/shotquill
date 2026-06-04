@@ -20,6 +20,14 @@ DEFAULT_HOTKEYS: dict[str, str] = {
 # Each capture hotkey can be enabled/disabled independently; all on by default.
 DEFAULT_HOTKEY_ENABLED = True
 
+# In-editor finish keys (Qt QKeySequence portable syntax, not pynput): Space
+# copies the annotated shot to the clipboard, Enter saves it to the folder.
+# Both close the editor. Configurable and individually toggleable in Settings.
+DEFAULT_EDITOR_HOTKEYS: dict[str, str] = {
+    "editor_copy": "Space",
+    "editor_save": "Return",
+}
+
 DEFAULT_IMAGE_FORMAT = "png"
 DEFAULT_SAVE_DIR = "~/Pictures/ShotQuill"
 
@@ -77,6 +85,12 @@ class Config:
 
     def set_hotkey(self, action: str, combo: str) -> None:
         self._settings.setValue(f"hotkeys/{action}", combo)
+
+    def editor_hotkey(self, action: str) -> str:
+        return str(self._settings.value(f"hotkeys/{action}", DEFAULT_EDITOR_HOTKEYS[action]))
+
+    def set_editor_hotkey(self, action: str, sequence: str) -> None:
+        self._settings.setValue(f"hotkeys/{action}", sequence)
 
     def hotkey_enabled(self, action: str) -> bool:
         return _to_bool(self._settings.value(f"hotkeys/{action}_enabled"), DEFAULT_HOTKEY_ENABLED)

@@ -35,12 +35,19 @@ def _pick_color(canvas: AnnotationCanvas) -> None:
         canvas.set_color(color)
 
 
+def _finish_tip(key: str, label: str) -> str:
+    """Append the finish-key name to a tooltip (omitted when the key is off)."""
+    return f"{label} ({key})" if key else label
+
+
 def create_toolbar(
     canvas: AnnotationCanvas,
     on_copy: Callable[[], None],
     on_save: Callable[[], None],
     on_ocr: Callable[[], None],
     on_pin: Callable[[], None],
+    copy_key: str = "",
+    save_key: str = "",
 ) -> QToolBar:
     toolbar = QToolBar()
     group = QActionGroup(toolbar)
@@ -90,13 +97,13 @@ def create_toolbar(
 
     copy_action = QAction(t("toolbar.copy"), toolbar)
     copy_action.setShortcut(QKeySequence.Copy)
-    copy_action.setToolTip(t("toolbar.copy_tip"))
+    copy_action.setToolTip(_finish_tip(copy_key, t("toolbar.copy_tip")))
     copy_action.triggered.connect(on_copy)
     toolbar.addAction(copy_action)
 
     save_action = QAction(t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
-    save_action.setToolTip(t("toolbar.save_tip"))
+    save_action.setToolTip(_finish_tip(save_key, t("toolbar.save_tip")))
     save_action.triggered.connect(on_save)
     toolbar.addAction(save_action)
 

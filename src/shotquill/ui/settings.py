@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
@@ -88,6 +90,39 @@ class _HotkeyRow(QWidget):
         )
 
 
+class _EditorKeyRow(QWidget):
+    """An enable toggle plus a key recorder for an in-editor finish key.
+
+    Yields a QKeySequence portable string (e.g. ``Space``, ``Ctrl+Return``) plus
+    whether the key is enabled. When the enable box is unchecked the recorder is
+    greyed out to make it clear the shortcut is off.
+    """
+
+    def __init__(self, sequence: str, enabled: bool = True) -> None:
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._enabled = QCheckBox(t("settings.hotkey_enabled"))
+        self._enabled.setChecked(enabled)
+
+        self._edit = QKeySequenceEdit(QKeySequence(sequence))
+        self._edit.setMaximumSequenceLength(1)  # a single chord, not a multi-key chain
+
+        layout.addWidget(self._enabled)
+        layout.addWidget(self._edit)
+        layout.addStretch()
+
+        self._enabled.toggled.connect(self._edit.setEnabled)
+        self._edit.setEnabled(self._enabled.isChecked())
+
+    def enabled(self) -> bool:
+        return self._enabled.isChecked()
+
+    def sequence(self) -> str:
+        return self._edit.keySequence().toString()
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -129,6 +164,15 @@ class SettingsDialog(QDialog):
         )
         form.addRow(t("settings.smart"), self._smart)
         form.addRow(t("settings.fullscreen"), self._fullscreen)
+
+        self._editor_copy = _EditorKeyRow(
+            config.editor_hotkey("editor_copy"), config.hotkey_enabled("editor_copy")
+        )
+        self._editor_save = _EditorKeyRow(
+            config.editor_hotkey("editor_save"), config.hotkey_enabled("editor_save")
+        )
+        form.addRow(t("settings.editor_copy"), self._editor_copy)
+        form.addRow(t("settings.editor_save"), self._editor_save)
 
         self._auto_save = QCheckBox(t("settings.auto_save"))
         self._auto_save.setChecked(config.auto_save_after_capture())
@@ -177,6 +221,10 @@ class SettingsDialog(QDialog):
         self._config.set_hotkey("fullscreen_capture", self._fullscreen.combo())
         self._config.set_hotkey_enabled("smart_capture", self._smart.enabled())
         self._config.set_hotkey_enabled("fullscreen_capture", self._fullscreen.enabled())
+        self._config.set_editor_hotkey("editor_copy", self._editor_copy.sequence())
+        self._config.set_editor_hotkey("editor_save", self._editor_save.sequence())
+        self._config.set_hotkey_enabled("editor_copy", self._editor_copy.enabled())
+        self._config.set_hotkey_enabled("editor_save", self._editor_save.enabled())
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_include_cursor(self._include_cursor.isChecked())

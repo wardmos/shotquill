@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QKeyCombination, Qt, Signal
+from PySide6.QtGui import QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QMainWindow
 
 from shotquill.i18n import t
@@ -19,6 +19,32 @@ if TYPE_CHECKING:
 
 _MAX_INITIAL_WIDTH = 1400
 _MAX_INITIAL_HEIGHT = 900
+
+# Pure-modifier presses never match a finish key; ignore them outright.
+_MODIFIER_KEYS = (Qt.Key_unknown, Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta)
+
+
+def _finish_sequence(config: Config, action: str) -> QKeySequence:
+    """The configured finish-key sequence, or an empty one when disabled."""
+    if not config.hotkey_enabled(action):
+        return QKeySequence()
+    return QKeySequence(config.editor_hotkey(action))
+
+
+def _pressed_sequence(event) -> QKeySequence:
+    """Normalize a key event into a QKeySequence for finish-key matching."""
+    key = event.key()
+    if key in _MODIFIER_KEYS:
+        return QKeySequence()
+    if key == Qt.Key_Enter:
+        key = Qt.Key_Return  # keypad Enter counts as a configured Return
+    modifiers = event.modifiers() & ~Qt.KeypadModifier
+    return QKeySequence(QKeyCombination(modifiers, Qt.Key(key)))
+
+
+def _display_key(sequence: QKeySequence) -> str:
+    """A human-readable key name for tooltips, or '' when the key is off."""
+    return sequence.toString(QKeySequence.NativeText)
 
 
 class EditorWindow(QMainWindow):
@@ -33,6 +59,11 @@ class EditorWindow(QMainWindow):
         self._origin = origin
         self._placed = False
 
+        # Quick-finish keys are configurable (Settings) and may be disabled;
+        # resolve them once at window creation.
+        self._copy_key = _finish_sequence(config, "editor_copy")
+        self._save_key = _finish_sequence(config, "editor_save")
+
         pixmap = QPixmap.fromImage(image)
         self._canvas = AnnotationCanvas(pixmap)
         # The image is always fitted to the view (below and in resizeEvent), so
@@ -41,7 +72,17 @@ class EditorWindow(QMainWindow):
         self._canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setCentralWidget(self._canvas)
-        self.addToolBar(create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin))
+        self.addToolBar(
+            create_toolbar(
+                self._canvas,
+                self._copy,
+                self._save,
+                self._ocr,
+                self._pin,
+                copy_key=_display_key(self._copy_key),
+                save_key=_display_key(self._save_key),
+            )
+        )
 
         # Size from the shot's on-screen (logical) rect when known — the pixmap
         # is in native pixels, which is 2x too large on Retina displays.
@@ -95,20 +136,23 @@ class EditorWindow(QMainWindow):
         self.move(self.pos() + (frame.topLeft() - self.frameGeometry().topLeft()))
 
     def keyPressEvent(self, event) -> None:
-        # Quick-finish keys: Space saves to disk, Enter copies to the clipboard.
-        # Both close the editor (handled in _save / _copy). A focused text
-        # annotation consumes the key first, so these never fire mid-typing.
-        key = event.key()
-        if key == Qt.Key_Space:
-            self._save()
-        elif key in (Qt.Key_Return, Qt.Key_Enter):
-            self._copy()
-        else:
-            super().keyPressEvent(event)
+        # Quick-finish keys (configurable; Space copies to the clipboard and
+        # Enter saves to disk by default). Both close the editor (handled in
+        # _copy / _save). A focused text annotation consumes the key first, so
+        # these never fire mid-typing.
+        pressed = _pressed_sequence(event)
+        if not pressed.isEmpty():
+            if pressed == self._copy_key:
+                self._copy()
+                return
+            if pressed == self._save_key:
+                self._save()
+                return
+        super().keyPressEvent(event)
 
     def _copy(self) -> None:
         # Copy the annotated shot to the clipboard, then close the editor — the
-        # toolbar button and the Enter shortcut share this finish-and-dismiss flow.
+        # toolbar button and the finish key share this finish-and-dismiss flow.
         from shotquill.output.clipboard import copy_qimage
 
         copy_qimage(self._canvas.export_image())
@@ -116,10 +160,7 @@ class EditorWindow(QMainWindow):
 
     def _save(self) -> None:
         # Save to the configured folder, then close — shared by the toolbar
-        # button and the Space shortcut. On failure keep the editor open so the
-        # annotations aren't lost.
-        from PySide6.QtWidgets import QMessageBox
-
+        # button and the finish key.
         from shotquill.output.saver import save_qimage
 
         try:

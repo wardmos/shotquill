@@ -121,10 +121,13 @@ Keyboard:
 
 | Key            | Action                                  |
 | -------------- | --------------------------------------- |
-| `Space`        | Save to your folder, then close         |
-| `Enter`        | Copy to the clipboard, then close       |
+| `Space`        | Copy to the clipboard, then close       |
+| `Enter`        | Save to your folder, then close         |
 | `⌘Z` / `⌘⇧Z`   | Undo / redo                             |
 | `Esc`          | Close without saving                    |
+
+The copy and save keys are configurable in Settings, and each can be
+disabled individually.
 
 ### Saved files
 
@@ -141,6 +144,8 @@ Open **Settings…** from the menu-bar icon:
 - **Language** — English / 中文.
 - **Save folder** & **image format** (PNG / JPG).
 - **Hotkeys** for both capture modes.
+- **Editor finish keys** — the in-editor copy and save keys (Space / Enter by
+  default), each with its own enable toggle.
 - **After capture** — auto-save and/or auto-copy toggles (above).
 - **Include mouse pointer** (off) — composite the cursor into captures.
 - **Launch at login** — installs a per-user `LaunchAgent`.
