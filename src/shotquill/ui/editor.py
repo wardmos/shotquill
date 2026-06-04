@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QKeyCombination, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QMainWindow
 
 from shotquill.i18n import key_display_name, t
@@ -43,8 +43,13 @@ def _pressed_sequence(event) -> QKeySequence:
 
 
 def _finish_tip(sequence: QKeySequence, label: str) -> str:
-    """A tooltip with the localized finish-key name appended (omitted when off)."""
-    key = key_display_name(sequence.toString())
+    """A tooltip with the finish-key name appended (omitted when the key is off).
+
+    NativeText keeps macOS modifier symbols unambiguous (⌘D — the portable
+    "Ctrl+D" would be misleading there because Qt swaps Ctrl/Cmd); the plain
+    Space/Return names it leaves in English are then localized.
+    """
+    key = key_display_name(sequence.toString(QKeySequence.NativeText))
     return f"{label} ({key})" if key else label
 
 
@@ -60,11 +65,6 @@ class EditorWindow(QMainWindow):
         self._origin = origin
         self._placed = False
 
-        # Quick-finish keys are configurable (Settings) and may be disabled;
-        # resolve them once at window creation.
-        self._copy_key = _finish_sequence(config, "editor_copy")
-        self._save_key = _finish_sequence(config, "editor_save")
-
         pixmap = QPixmap.fromImage(image)
         self._canvas = AnnotationCanvas(pixmap)
         # The image is always fitted to the view (below and in resizeEvent), so
@@ -75,9 +75,11 @@ class EditorWindow(QMainWindow):
         self.setCentralWidget(self._canvas)
         toolbar = create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin)
         self.addToolBar(toolbar)
-        self._copy_action = toolbar.findChild(QAction, "copy_action")
-        self._save_action = toolbar.findChild(QAction, "save_action")
-        self._refresh_finish_tips()
+        self._copy_action = toolbar.copy_action
+        self._save_action = toolbar.save_action
+        # Resolves the (configurable, possibly disabled) finish keys and sets
+        # the matching tooltips; re-run by the app whenever Settings changes.
+        self.reload_finish_keys()
 
         # Size from the shot's on-screen (logical) rect when known — the pixmap
         # is in native pixels, which is 2x too large on Retina displays.

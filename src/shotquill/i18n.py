@@ -141,7 +141,11 @@ def current_language() -> str:
 
 
 def key_display_name(portable: str) -> str:
-    """Localize a QKeySequence portable string for display (e.g. ``Return`` → 回车)."""
+    """Localize a key-sequence display string (e.g. ``Return`` → 回车).
+
+    Only the final segment is looked up, so combos keep their modifier prefix;
+    unknown names (including platform-native symbols like ⌘D) pass through.
+    """
     parts = portable.split("+")
     entry = _KEY_NAMES.get(parts[-1])
     if entry:

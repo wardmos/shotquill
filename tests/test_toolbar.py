@@ -74,6 +74,15 @@ def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     assert canvas.width() == 13
 
 
+def test_toolbar_exposes_copy_and_save_actions(qtbot):
+    # EditorWindow grabs these to keep tooltips in sync with the finish keys.
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert toolbar.copy_action.text() == "Copy"
+    assert toolbar.save_action.text() == "Save"
+    assert toolbar.copy_action in toolbar.actions()
+    assert toolbar.save_action in toolbar.actions()
+
+
 def test_copy_and_save_callbacks_are_wired(qtbot):
     calls = []
     canvas, toolbar = _toolbar(

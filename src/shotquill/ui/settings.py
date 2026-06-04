@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from shotquill.hotkeys.combo import parse_combo, to_pynput_combo
 from shotquill.i18n import LANGUAGE_NAMES, LANGUAGES, t
+from shotquill.ui.toolbar import RESERVED_SHORTCUTS
 
 if TYPE_CHECKING:
     from shotquill.config import Config
@@ -35,15 +36,14 @@ _FORMATS = ["png", "jpg"]
 
 
 def _reserved_editor_sequences() -> list[QKeySequence]:
-    """Key combos the editor already binds (toolbar shortcuts and Esc).
+    """Key combos the editor already binds (toolbar's RESERVED_SHORTCUTS and Esc).
 
     A finish key set to one of these would be shadowed: Qt's shortcut system
     consumes the press before EditorWindow.keyPressEvent ever sees it, so the
     Settings dialog refuses them. ``keyBindings`` covers every platform binding
     of each standard key (e.g. both Ctrl+C and Ctrl+Insert for Copy on Linux).
     """
-    standard = (QKeySequence.Copy, QKeySequence.Save, QKeySequence.Undo, QKeySequence.Redo)
-    reserved = [binding for key in standard for binding in QKeySequence.keyBindings(key)]
+    reserved = [binding for key in RESERVED_SHORTCUTS for binding in QKeySequence.keyBindings(key)]
     reserved.append(QKeySequence(Qt.Key_Escape))
     return reserved
 
@@ -234,7 +234,12 @@ class SettingsDialog(QDialog):
             self._save_dir.setText(path)
 
     def _validate_editor_keys(self) -> bool:
-        """Refuse finish keys that collide with built-in shortcuts or each other."""
+        """Refuse finish keys that collide with built-in shortcuts or each other.
+
+        Known limitation: global *capture* hotkeys (pynput syntax, different
+        scope) are not cross-checked — a finish key equal to a capture combo
+        would trigger both when the editor has focus.
+        """
         copy_seq = self._editor_copy.active_sequence()
         save_seq = self._editor_save.active_sequence()
         reserved = _reserved_editor_sequences()

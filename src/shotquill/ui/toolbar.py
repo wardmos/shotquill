@@ -16,6 +16,16 @@ from shotquill.ui.tools import Tool
 if TYPE_CHECKING:
     from shotquill.ui.canvas import AnnotationCanvas
 
+# Standard shortcuts the toolbar binds below (Esc is bound by EditorWindow on
+# top of these). The Settings dialog derives its finish-key denylist from this
+# tuple, so adding a setShortcut call here means adding its key to the tuple.
+RESERVED_SHORTCUTS: tuple[QKeySequence.StandardKey, ...] = (
+    QKeySequence.Copy,
+    QKeySequence.Save,
+    QKeySequence.Undo,
+    QKeySequence.Redo,
+)
+
 _TOOLS: list[tuple[str, Tool]] = [
     ("tool.select", Tool.SELECT),
     ("tool.rect", Tool.RECT),
@@ -88,20 +98,21 @@ def create_toolbar(
     pin_action.triggered.connect(on_pin)
     toolbar.addAction(pin_action)
 
-    # The editor looks these two up by object name to keep their tooltips in
-    # sync with the configurable finish keys (see EditorWindow._refresh_finish_tips).
     copy_action = QAction(t("toolbar.copy"), toolbar)
-    copy_action.setObjectName("copy_action")
     copy_action.setShortcut(QKeySequence.Copy)
     copy_action.setToolTip(t("toolbar.copy_tip"))
     copy_action.triggered.connect(on_copy)
     toolbar.addAction(copy_action)
 
     save_action = QAction(t("toolbar.save"), toolbar)
-    save_action.setObjectName("save_action")
     save_action.setShortcut(QKeySequence.Save)
     save_action.setToolTip(t("toolbar.save_tip"))
     save_action.triggered.connect(on_save)
     toolbar.addAction(save_action)
+
+    # Exposed so EditorWindow can keep these tooltips in sync with the
+    # configurable finish keys (see EditorWindow._refresh_finish_tips).
+    toolbar.copy_action = copy_action
+    toolbar.save_action = save_action
 
     return toolbar
