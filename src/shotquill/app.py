@@ -97,7 +97,7 @@ class ShotquillApp(QObject):
         self._config = Config()
         set_language(self._config.language())
 
-        self._capturer = MacScreenCapturer()
+        self._capturer = MacScreenCapturer(include_cursor=self._config.include_cursor())
         self._hotkeys = MacHotkeyManager()
         self._feedback = CaptureFeedback()
         self._autostart = MacAutostartManager()
@@ -284,6 +284,7 @@ class ShotquillApp(QObject):
         dialog = SettingsDialog(self._config)
         if dialog.exec():
             set_language(self._config.language())
+            self._capturer.include_cursor = self._config.include_cursor()
             self._apply_hotkeys()
             self._sync_autostart()
             self._rebuild_menu()

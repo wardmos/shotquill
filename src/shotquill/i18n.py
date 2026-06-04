@@ -100,6 +100,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.auto_save": {"en": "Auto-save to folder", "zh": "自动保存到目录"},
     "settings.auto_copy": {"en": "Auto-copy to clipboard", "zh": "自动复制到剪贴板"},
     "settings.autostart": {"en": "Launch at login", "zh": "开机自启"},
+    "settings.include_cursor": {
+        "en": "Include mouse pointer in screenshots",
+        "zh": "截图包含鼠标指针",
+    },
     "settings.flash": {"en": "Flash on capture", "zh": "截图时闪光"},
     "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},
 }

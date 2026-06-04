@@ -19,6 +19,7 @@ from shotquill.capture.base import CaptureResult  # noqa: E402
 class _FakeCapturer:
     def __init__(self):
         self.fail = False
+        self.include_cursor = False
 
     def capture_fullscreen(self):
         if self.fail:
@@ -75,7 +76,12 @@ def fakes(monkeypatch):
     capturer = _FakeCapturer()
     hotkeys = _FakeHotkeys()
     autostart = _FakeAutostart()
-    monkeypatch.setattr(app_module, "MacScreenCapturer", lambda: capturer)
+
+    def _make_capturer(include_cursor=False):
+        capturer.include_cursor = include_cursor
+        return capturer
+
+    monkeypatch.setattr(app_module, "MacScreenCapturer", _make_capturer)
     monkeypatch.setattr(app_module, "MacHotkeyManager", lambda: hotkeys)
     monkeypatch.setattr(app_module, "MacAutostartManager", lambda: autostart)
     return capturer, hotkeys, autostart
@@ -213,6 +219,34 @@ def test_shutdown_stops_hotkeys(qapp, config, fakes):
     before = hotkeys.stopped
     app.shutdown()
     assert hotkeys.stopped > before
+
+
+def test_capturer_gets_cursor_preference_from_config(qapp, config, fakes):
+    config.set_include_cursor(True)
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    assert capturer.include_cursor is True
+    app.shutdown()
+
+
+def test_open_settings_syncs_capturer_cursor_preference(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    assert capturer.include_cursor is False
+
+    class _FakeDialog:
+        def __init__(self, cfg):
+            pass
+
+        def exec(self):
+            # Simulate the user turning the cursor toggle on in the dialog.
+            config.set_include_cursor(True)
+            return True
+
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeDialog)
+    app._open_settings()
+    assert capturer.include_cursor is True
+    app.shutdown()
 
 
 def test_open_settings_reapplies_on_accept(qapp, config, fakes, monkeypatch):

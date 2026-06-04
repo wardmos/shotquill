@@ -141,6 +141,7 @@ Open **Settings…** from the menu-bar icon:
 - **Save folder** & **image format** (PNG / JPG).
 - **Hotkeys** for both capture modes.
 - **After capture** — auto-save and/or auto-copy toggles (above).
+- **Include mouse pointer** (off) — composite the cursor into captures.
 - **Launch at login** — installs a per-user `LaunchAgent`.
 - **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
 

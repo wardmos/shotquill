@@ -138,6 +138,10 @@ class SettingsDialog(QDialog):
         self._auto_copy.setChecked(config.auto_copy_after_capture())
         form.addRow("", self._auto_copy)
 
+        self._include_cursor = QCheckBox(t("settings.include_cursor"))
+        self._include_cursor.setChecked(config.include_cursor())
+        form.addRow("", self._include_cursor)
+
         self._autostart = QCheckBox(t("settings.autostart"))
         self._autostart.setChecked(config.autostart())
         form.addRow("", self._autostart)
@@ -175,6 +179,7 @@ class SettingsDialog(QDialog):
         self._config.set_hotkey_enabled("fullscreen_capture", self._fullscreen.enabled())
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
+        self._config.set_include_cursor(self._include_cursor.isChecked())
         self._config.set_autostart(self._autostart.isChecked())
         self._config.set_flash_on_capture(self._flash.isChecked())
         self._config.set_sound_on_capture(self._sound.isChecked())

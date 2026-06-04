@@ -53,7 +53,13 @@ class WindowInfo:
 
 
 class ScreenCapturer(ABC):
-    """Captures screen pixels at native resolution."""
+    """Captures screen pixels at native resolution.
+
+    ``include_cursor`` controls whether the mouse pointer is composited into
+    captures (best effort — not every backend can honor it). Off by default.
+    """
+
+    include_cursor: bool = False
 
     @abstractmethod
     def capture_fullscreen(self) -> CaptureResult:

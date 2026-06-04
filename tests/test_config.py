@@ -7,6 +7,7 @@ from shotquill.config import (
     DEFAULT_FLASH,
     DEFAULT_HOTKEYS,
     DEFAULT_IMAGE_FORMAT,
+    DEFAULT_INCLUDE_CURSOR,
     DEFAULT_SOUND,
     _to_bool,
     human_readable_hotkey,
@@ -34,6 +35,11 @@ def test_feedback_defaults():
     assert DEFAULT_FLASH is True
     assert DEFAULT_SOUND is False
     assert DEFAULT_AUTOSTART is False
+
+
+def test_cursor_excluded_by_default():
+    # Screenshots leave the mouse pointer out unless the user opts in.
+    assert DEFAULT_INCLUDE_CURSOR is False
 
 
 def test_auto_output_defaults_on():
@@ -73,6 +79,7 @@ def test_config_returns_defaults_when_unset(config):
     assert config.flash_on_capture() is DEFAULT_FLASH
     assert config.sound_on_capture() is DEFAULT_SOUND
     assert config.autostart() is DEFAULT_AUTOSTART
+    assert config.include_cursor() is DEFAULT_INCLUDE_CURSOR
 
 
 def test_config_hotkey_round_trip(config):
@@ -107,9 +114,11 @@ def test_config_bool_round_trips(config):
     config.set_flash_on_capture(False)
     config.set_sound_on_capture(True)
     config.set_autostart(True)
+    config.set_include_cursor(True)
     assert config.flash_on_capture() is False
     assert config.sound_on_capture() is True
     assert config.autostart() is True
+    assert config.include_cursor() is True
 
 
 def test_config_persists_across_instances(config):

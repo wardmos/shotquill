@@ -23,6 +23,9 @@ DEFAULT_HOTKEY_ENABLED = True
 DEFAULT_IMAGE_FORMAT = "png"
 DEFAULT_SAVE_DIR = "~/Pictures/ShotQuill"
 
+# Screenshots leave the mouse pointer out by default; including it is opt-in.
+DEFAULT_INCLUDE_CURSOR = False
+
 # Capture feedback: a brief screen flash is on by default; the shutter sound is
 # off by default (opt-in, to stay quiet and unobtrusive).
 DEFAULT_FLASH = True
@@ -98,6 +101,12 @@ class Config:
 
     def set_language(self, language: str) -> None:
         self._settings.setValue("ui/language", language)
+
+    def include_cursor(self) -> bool:
+        return _to_bool(self._settings.value("capture/include_cursor"), DEFAULT_INCLUDE_CURSOR)
+
+    def set_include_cursor(self, enabled: bool) -> None:
+        self._settings.setValue("capture/include_cursor", bool(enabled))
 
     def flash_on_capture(self) -> bool:
         return _to_bool(self._settings.value("feedback/flash"), DEFAULT_FLASH)

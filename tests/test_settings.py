@@ -40,6 +40,7 @@ def test_dialog_prefills_from_config(qtbot, config):
     config.set_image_format("jpg")
     config.set_save_dir("/tmp/shots")
     config.set_autostart(True)
+    config.set_include_cursor(True)
 
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
@@ -47,6 +48,7 @@ def test_dialog_prefills_from_config(qtbot, config):
     assert dialog._format.currentText() == "jpg"
     assert dialog._save_dir.text() == "/tmp/shots"
     assert dialog._autostart.isChecked() is True
+    assert dialog._include_cursor.isChecked() is True
 
 
 def test_dialog_save_writes_back_to_config(qtbot, config):
@@ -60,6 +62,7 @@ def test_dialog_save_writes_back_to_config(qtbot, config):
     dialog._language.setCurrentIndex(lang_index)
     dialog._flash.setChecked(False)
     dialog._sound.setChecked(True)
+    dialog._include_cursor.setChecked(True)
     dialog._save_and_accept()
 
     assert config.save_dir() == "/tmp/new"
@@ -67,6 +70,7 @@ def test_dialog_save_writes_back_to_config(qtbot, config):
     assert config.language() == "zh"
     assert config.flash_on_capture() is False
     assert config.sound_on_capture() is True
+    assert config.include_cursor() is True
 
 
 def test_dialog_save_persists_custom_hotkey(qtbot, config):

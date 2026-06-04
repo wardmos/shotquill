@@ -2,12 +2,19 @@
 # Copyright (C) 2026 wardmos
 """macOS screen capture.
 
-All capture (full-screen, region, single window) goes through Quartz'
-``CGWindowListCreateImage``. The crucial flag is ``kCGWindowImageBestResolution``:
-without it CoreGraphics returns images at *point* (1x) resolution, so on a Retina
-display screenshots come out at roughly half the native pixel count and look
-soft. With it we get true native-resolution pixels. PyObjC/Quartz is macOS-only
-and so is imported lazily — this module still imports cleanly on Linux (for CI).
+Captures prefer ScreenCaptureKit's ``SCScreenshotManager`` (macOS 14+): it is
+the only capture API with an explicit cursor switch (``showsCursor``), and the
+legacy ``CGWindowListCreateImage`` — deprecated in Sonoma and rerouted through a
+ScreenCaptureKit shim on recent systems — bakes the mouse pointer into every
+shot with no way to opt out. Whether the pointer is included is the capturer's
+``include_cursor`` flag (off by default, set from user config).
+
+When ScreenCaptureKit is unavailable (older macOS) or fails, captures fall back
+to ``CGWindowListCreateImage``. There the crucial flag is
+``kCGWindowImageBestResolution``: without it CoreGraphics returns images at
+*point* (1x) resolution, so on a Retina display screenshots come out at roughly
+half the native pixel count and look soft. PyObjC frameworks are macOS-only and
+so are imported lazily — this module still imports cleanly on Linux (for CI).
 
 Pixels are normalized to RGBA so downstream code (PIL saver, Qt clipboard) does
 not need to know about the capture backend.
@@ -19,15 +26,28 @@ import os
 
 from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
 
+# ScreenCaptureKit calls are completion-handler based; we block the calling
+# thread until the handler fires. The timeout guards against a wedged capture
+# service — on expiry the capture falls back to the legacy path.
+_SCK_TIMEOUT = 5.0
+
 
 class MacScreenCapturer(ScreenCapturer):
+    def __init__(self, include_cursor: bool = False) -> None:
+        self.include_cursor = include_cursor
+
     def capture_fullscreen(self) -> CaptureResult:
         import Quartz
 
+        result = self._sck_capture_fullscreen()
+        if result is not None:
+            return result
         # CGRectInfinite spans every display in the virtual desktop.
         return self._grab_rect(Quartz.CGRectInfinite)
 
     def capture_region(self, region: Rect) -> CaptureResult:
+        # Unused at runtime (the app crops regions out of the full-screen grab),
+        # so this keeps the simple legacy path.
         import Quartz
 
         rect = Quartz.CGRectMake(region.x, region.y, region.width, region.height)
@@ -89,6 +109,9 @@ class MacScreenCapturer(ScreenCapturer):
     def capture_window(self, window_id: int) -> CaptureResult:
         import Quartz
 
+        result = self._sck_capture_window(window_id)
+        if result is not None:
+            return result
         cg_image = Quartz.CGWindowListCreateImage(
             Quartz.CGRectNull,
             Quartz.kCGWindowListOptionIncludingWindow,
@@ -100,16 +123,151 @@ class MacScreenCapturer(ScreenCapturer):
             raise RuntimeError(f"window {window_id} could not be captured")
         return self._cgimage_to_result(cg_image)
 
+    # --- ScreenCaptureKit path (macOS 14+) ---------------------------------
+
     @staticmethod
-    def _cgimage_to_result(cg_image) -> CaptureResult:
+    def _sck():
+        """The ScreenCaptureKit module, or None when unusable (macOS < 14)."""
+        try:
+            import ScreenCaptureKit
+        except Exception:
+            return None
+        # SCScreenshotManager (one-shot screenshots) appeared in macOS 14.
+        return ScreenCaptureKit if hasattr(ScreenCaptureKit, "SCScreenshotManager") else None
+
+    @staticmethod
+    def _sck_await(start):
+        """Drive a completion-handler SCK call synchronously, returning its value.
+
+        SCK delivers completions on a background queue, so blocking here (even
+        on the GUI thread) does not deadlock; the timeout still guards against
+        the capture service going unresponsive.
+        """
+        import threading
+
+        done = threading.Event()
+        out: list = [None, None]
+
+        def completion(value, error):
+            out[0], out[1] = value, error
+            done.set()
+
+        start(completion)
+        if not done.wait(_SCK_TIMEOUT):
+            raise RuntimeError("ScreenCaptureKit timed out")
+        if out[1] is not None or out[0] is None:
+            raise RuntimeError(str(out[1] or "ScreenCaptureKit returned nothing"))
+        return out[0]
+
+    def _sck_shareable_content(self, sck):
+        return self._sck_await(
+            lambda cb: sck.SCShareableContent.getShareableContentWithCompletionHandler_(cb)
+        )
+
+    def _sck_screenshot(self, sck, content_filter):
+        """One ``SCScreenshotManager`` shot of ``content_filter`` as a CGImage."""
+        rect = content_filter.contentRect()  # points
+        scale = float(content_filter.pointPixelScale())
+        config = sck.SCStreamConfiguration.alloc().init()
+        # Explicit pixel size = native Retina resolution (default is 1x-ish).
+        config.setWidth_(max(1, round(rect.size.width * scale)))
+        config.setHeight_(max(1, round(rect.size.height * scale)))
+        # The whole reason this path exists: the pointer is composited only
+        # when the user opted in (the legacy API offers no such switch).
+        config.setShowsCursor_(bool(self.include_cursor))
+        # Match the legacy kCGWindowImageBoundsIgnoreFraming behaviour.
+        config.setIgnoreShadowsSingleWindow_(True)
+        manager = sck.SCScreenshotManager
+        return self._sck_await(
+            lambda cb: manager.captureImageWithFilter_configuration_completionHandler_(
+                content_filter, config, cb
+            )
+        )
+
+    def _sck_capture_fullscreen(self) -> CaptureResult | None:
+        """All displays via ScreenCaptureKit, or None to use the legacy path."""
+        sck = self._sck()
+        if sck is None:
+            return None
+        try:
+            content = self._sck_shareable_content(sck)
+            displays = list(content.displays())
+            if not displays:
+                return None
+            shots = []
+            for display in displays:
+                content_filter = sck.SCContentFilter.alloc().initWithDisplay_excludingWindows_(
+                    display, []
+                )
+                scale = float(content_filter.pointPixelScale())
+                shots.append((display.frame(), scale, self._sck_screenshot(sck, content_filter)))
+            if len(shots) == 1:
+                return self._cgimage_to_result(shots[0][2])
+            return self._composite_displays(shots)
+        except Exception:
+            return None  # fall back to the legacy capture path
+
+    def _sck_capture_window(self, window_id: int) -> CaptureResult | None:
+        """One window via ScreenCaptureKit, or None to use the legacy path."""
+        sck = self._sck()
+        if sck is None:
+            return None
+        try:
+            content = self._sck_shareable_content(sck)
+            target = next(
+                (w for w in content.windows() if int(w.windowID()) == int(window_id)), None
+            )
+            if target is None:
+                return None
+            content_filter = sck.SCContentFilter.alloc().initWithDesktopIndependentWindow_(target)
+            return self._cgimage_to_result(self._sck_screenshot(sck, content_filter))
+        except Exception:
+            return None  # fall back to the legacy capture path
+
+    @staticmethod
+    def _composite_displays(shots) -> CaptureResult:
+        """Stitch per-display CGImages into one virtual-desktop image.
+
+        ``shots`` is ``(frame, scale, cg_image)`` per display; frames are in
+        points in the top-left-origin global space that both ``SCDisplay.frame``
+        and Qt's virtual desktop use. Rendered at the sharpest display's scale
+        so no capture is downsampled.
+        """
         import Quartz
 
-        width = int(Quartz.CGImageGetWidth(cg_image))
-        height = int(Quartz.CGImageGetHeight(cg_image))
+        left = min(f.origin.x for f, _, _ in shots)
+        top = min(f.origin.y for f, _, _ in shots)
+        right = max(f.origin.x + f.size.width for f, _, _ in shots)
+        bottom = max(f.origin.y + f.size.height for f, _, _ in shots)
+        scale = max(s for _, s, _ in shots)
+        width = max(1, round((right - left) * scale))
+        height = max(1, round((bottom - top) * scale))
+        buffer, context = MacScreenCapturer._rgba_context(width, height)
+        for frame, _, image in shots:
+            # CGBitmapContext has a bottom-left origin; flip each frame's y.
+            dest = Quartz.CGRectMake(
+                (frame.origin.x - left) * scale,
+                (bottom - frame.origin.y - frame.size.height) * scale,
+                frame.size.width * scale,
+                frame.size.height * scale,
+            )
+            Quartz.CGContextDrawImage(context, dest, image)
+        return CaptureResult(
+            width=width, height=height, scale=1.0, pixels=bytes(buffer), premultiplied=True
+        )
+
+    # --- pixel plumbing -----------------------------------------------------
+
+    @staticmethod
+    def _rgba_context(width: int, height: int):
+        """A padding-free RGBA bitmap context plus its backing buffer.
+
+        The bitmap context only supports premultiplied alpha, so results built
+        from it are flagged premultiplied for the imaging layer.
+        """
+        import Quartz
+
         bytes_per_row = width * 4
-        # Draw the window image into a freshly allocated, padding-free RGBA
-        # buffer. The bitmap context only supports premultiplied alpha, so we
-        # flag the result as premultiplied for the imaging layer.
         buffer = bytearray(bytes_per_row * height)
         color_space = Quartz.CGColorSpaceCreateDeviceRGB()
         context = Quartz.CGBitmapContextCreate(
@@ -121,6 +279,15 @@ class MacScreenCapturer(ScreenCapturer):
             color_space,
             Quartz.kCGImageAlphaPremultipliedLast | Quartz.kCGBitmapByteOrder32Big,
         )
+        return buffer, context
+
+    @staticmethod
+    def _cgimage_to_result(cg_image) -> CaptureResult:
+        import Quartz
+
+        width = int(Quartz.CGImageGetWidth(cg_image))
+        height = int(Quartz.CGImageGetHeight(cg_image))
+        buffer, context = MacScreenCapturer._rgba_context(width, height)
         Quartz.CGContextDrawImage(context, Quartz.CGRectMake(0, 0, width, height), cg_image)
         return CaptureResult(
             width=width,
