@@ -252,7 +252,7 @@ class ShotquillApp(QObject):
             try:
                 save_qimage(image, self._config.save_dir(), self._config.image_format())
             except OSError as exc:
-                self._notify(t("notify.capture_failed").format(error=exc))
+                self._notify(t("notify.save_failed").format(error=exc))
         return True
 
     def _open_editor(self, image: QImage, origin: QRect | None = None) -> None:

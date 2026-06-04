@@ -208,6 +208,33 @@ def test_capture_fullscreen_does_nothing_on_failure(qapp, config, fakes, monkeyp
     app.shutdown()
 
 
+def test_auto_save_failure_notifies_save_failed(qapp, config, fakes, monkeypatch):
+    # A failed auto-save must report "save failed", not "capture failed" — the
+    # capture itself succeeded; only the disk write went wrong.
+    from PySide6.QtGui import QImage
+
+    from shotquill import i18n
+    from shotquill.output import saver
+
+    config.set_auto_save_after_capture(True)
+    config.set_auto_copy_after_capture(False)
+    app = _build_app(qapp, fakes)
+
+    err = OSError("disk full")
+
+    def _failing_save(image, directory, image_format="png"):
+        raise err
+
+    monkeypatch.setattr(saver, "save_qimage", _failing_save)
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    image = QImage(4, 3, QImage.Format.Format_ARGB32)
+    assert app._auto_output(image) is True  # still handled, no editor fallback
+    assert notified == [i18n.t("notify.save_failed").format(error=err)]
+    app.shutdown()
+
+
 def test_track_and_forget_window_bookkeeping(qapp, config, fakes):
     from PySide6.QtWidgets import QWidget
 
