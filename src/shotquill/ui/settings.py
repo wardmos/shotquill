@@ -35,6 +35,24 @@ _KEYS = [*"abcdefghijklmnopqrstuvwxyz", *"0123456789", *(f"f{i}" for i in range(
 _FORMATS = ["png", "jpg"]
 
 
+# pynput modifiers → the Qt portable names Qt reports for the same physical
+# keys on macOS (where Qt swaps Ctrl and Cmd; the hotkey manager is Mac-only).
+_PYNPUT_TO_QT_MODIFIER = {"cmd": "Ctrl", "ctrl": "Meta", "alt": "Alt", "shift": "Shift"}
+
+
+def _capture_combo_sequence(combo: str) -> QKeySequence:
+    """The QKeySequence Qt would deliver for a pynput capture combo.
+
+    Used to refuse finish keys that would double-fire with a global capture
+    hotkey: the pynput listener fires regardless of focus, so the same press
+    would take a screenshot *and* run the editor action.
+    """
+    parsed = parse_combo(combo)
+    parts = [qt for mod, qt in _PYNPUT_TO_QT_MODIFIER.items() if parsed[mod]]
+    parts.append(str(parsed["key"]).upper())
+    return QKeySequence("+".join(parts))
+
+
 def _reserved_editor_sequences() -> list[QKeySequence]:
     """Key combos the editor already binds (toolbar's RESERVED_SHORTCUTS and Esc).
 
@@ -234,18 +252,27 @@ class SettingsDialog(QDialog):
             self._save_dir.setText(path)
 
     def _validate_editor_keys(self) -> bool:
-        """Refuse finish keys that collide with built-in shortcuts or each other.
-
-        Known limitation: global *capture* hotkeys (pynput syntax, different
-        scope) are not cross-checked — a finish key equal to a capture combo
-        would trigger both when the editor has focus.
-        """
+        """Refuse finish keys that collide with built-in editor shortcuts,
+        with each other, or with an enabled global capture hotkey (using the
+        capture rows' pending values, so both kinds can change in one visit)."""
         copy_seq = self._editor_copy.active_sequence()
         save_seq = self._editor_save.active_sequence()
         reserved = _reserved_editor_sequences()
+        captures = [
+            _capture_combo_sequence(row.combo())
+            for row in (self._smart, self._fullscreen)
+            if row.enabled()
+        ]
         for sequence in (copy_seq, save_seq):
-            if not sequence.isEmpty() and sequence in reserved:
+            if sequence.isEmpty():
+                continue
+            if sequence in reserved:
                 QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_conflict"))
+                return False
+            if sequence in captures:
+                QMessageBox.warning(
+                    self, t("settings.title"), t("settings.editor_key_capture_conflict")
+                )
                 return False
         if not copy_seq.isEmpty() and copy_seq == save_seq:
             QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_duplicate"))

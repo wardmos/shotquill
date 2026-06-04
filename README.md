@@ -127,7 +127,9 @@ Keyboard:
 | `Esc`          | Close without saving                    |
 
 The copy and save keys are configurable in Settings, and each can be
-disabled individually.
+disabled individually. Settings rejects keys that would clash with the
+built-in editor shortcuts (copy/save/undo/redo/`Esc`), with each other,
+or with a global capture hotkey.
 
 ### Saved files
 

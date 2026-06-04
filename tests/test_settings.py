@@ -115,6 +115,47 @@ def test_dialog_rejects_same_key_for_copy_and_save(qtbot, config, monkeypatch):
     assert dialog.result() != SettingsDialog.Accepted
 
 
+def test_capture_combo_sequence_maps_macos_modifiers(qtbot):
+    from PySide6.QtGui import QKeySequence
+
+    from shotquill.ui.settings import _capture_combo_sequence
+
+    # Qt swaps Ctrl/Cmd on macOS: pynput <cmd> arrives as Qt "Ctrl", <ctrl> as "Meta".
+    assert _capture_combo_sequence("<alt>+a") == QKeySequence("Alt+A")
+    assert _capture_combo_sequence("<cmd>+<shift>+r") == QKeySequence("Ctrl+Shift+R")
+    assert _capture_combo_sequence("<ctrl>+1") == QKeySequence("Meta+1")
+
+
+def test_dialog_rejects_finish_key_matching_capture_hotkey(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Default smart-capture hotkey is <alt>+a; Qt delivers that press as Alt+A,
+    # so a finish key set to it would screenshot AND copy at once.
+    dialog._editor_copy._edit.setKeySequence(QKeySequence("Alt+A"))
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+    assert config.editor_hotkey("editor_copy") == "Space"  # unchanged
+
+
+def test_dialog_allows_capture_combo_when_that_capture_is_disabled(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Disabling the smart-capture hotkey in the same visit frees its combo.
+    dialog._smart._enabled.setChecked(False)
+    dialog._editor_copy._edit.setKeySequence(QKeySequence("Alt+A"))
+    dialog._save_and_accept()
+    assert warnings == []
+    assert dialog.result() == SettingsDialog.Accepted
+    assert config.editor_hotkey("editor_copy") == "Alt+A"
+
+
 def test_dialog_allows_reserved_key_on_disabled_row(qtbot, config, monkeypatch):
     from PySide6.QtGui import QKeySequence
 

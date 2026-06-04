@@ -105,6 +105,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Copy and save can't share the same key.",
         "zh": "复制和保存不能使用同一个按键。",
     },
+    "settings.editor_key_capture_conflict": {
+        "en": "This key matches a global capture hotkey and would trigger both. "
+        "Choose another key.",
+        "zh": "该按键与全局截图热键相同，会同时触发截图和编辑器动作，请换一个按键。",
+    },
     "settings.language": {"en": "Language", "zh": "界面语言"},
     "settings.browse": {"en": "Browse…", "zh": "浏览…"},
     "settings.choose_dir": {"en": "Choose Save Folder", "zh": "选择保存目录"},
