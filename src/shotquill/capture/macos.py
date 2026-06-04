@@ -16,7 +16,7 @@ to ``CGWindowListCreateImage``. There the crucial flag is
 half the native pixel count and look soft. PyObjC frameworks are macOS-only and
 so are imported lazily — this module still imports cleanly on Linux (for CI).
 
-Pixels are normalized to RGBA so downstream code (PIL saver, Qt clipboard) does
+Pixels are normalized to RGBA so downstream code (QImage saver, Qt clipboard) does
 not need to know about the capture backend.
 """
 

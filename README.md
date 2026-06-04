@@ -58,9 +58,10 @@ brew install --cask wardmos/tap/shotquill
 `brew upgrade` keeps it current.
 
 **Direct download:** grab the `.dmg` from
-[Releases](https://github.com/wardmos/shotquill/releases), open it, and drag
-ShotQuill to your Applications folder. Each release ships a `.sha256` sidecar so
-you can verify the download:
+[Releases](https://github.com/wardmos/shotquill/releases) — `arm64` for Apple
+Silicon, `x86_64` for Intel Macs, or `universal2` if unsure (works on both,
+roughly twice the size) — open it, and drag ShotQuill to your Applications
+folder. Each release ships a `.sha256` sidecar so you can verify the download:
 
 ```bash
 shasum -a 256 -c ShotQuill-*.dmg.sha256
@@ -171,7 +172,7 @@ cross-platform UI:
 | GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                 |
 | Screen capture        | `mss`, plus Quartz (`CGWindowList*`) for windows     |
 | Global hotkeys        | `pynput`                                             |
-| Image processing      | `Pillow`                                             |
+| Image processing      | Qt (`QImage`)                                        |
 | OCR                   | `pyobjc` → Apple Vision                               |
 
 Platform-specific code (capture, hotkeys, OCR, autostart) sits behind small

@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
-# Build ShotQuill.app and a drag-to-Applications DMG.
+# Build ShotQuill.app and drag-to-Applications DMGs, one per CPU architecture.
 # Ad-hoc signed (anonymous, no Apple account, no notarization).
 #
-# Usage: packaging/macos/build_dmg.sh <version-or-tag>
+# Usage: packaging/macos/build_dmg.sh <version-or-tag> [arch ...]
+#   arch: arm64 | x86_64 | universal2 (default: all three)
+#
+# Single-arch DMGs are roughly half the size of universal2 because PyInstaller
+# thins the fat (universal2) Python/Qt binaries down to one slice. Building a
+# non-native or universal2 app requires a universal2 Python and universal2
+# wheels for every binary dependency; PyInstaller fails loudly if that does not
+# hold, and the package smoke workflow exercises all three arches on PRs.
 set -euo pipefail
 
 VERSION="${1:-0.0.0}"
 VERSION="${VERSION#v}"
+shift || true
+ARCHES=("$@")
+if [ ${#ARCHES[@]} -eq 0 ]; then
+  ARCHES=(arm64 x86_64 universal2)
+fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-APP="dist/ShotQuill.app"
-PLIST="$APP/Contents/Info.plist"
 PB="/usr/libexec/PlistBuddy"
 
 rm -rf build dist
@@ -58,42 +68,55 @@ for mod in "${QT_EXCLUDES[@]}"; do
   EXCLUDE_FLAGS+=(--exclude-module "$mod")
 done
 
-pyinstaller --noconfirm --windowed --name ShotQuill \
-  --osx-bundle-identifier com.wardmos.shotquill \
-  --icon "$ICNS" \
-  --paths src \
-  --strip \
-  "${EXCLUDE_FLAGS[@]}" \
-  packaging/entry.py
+build_one() {
+  local arch="$1"
+  local app="dist/$arch/ShotQuill.app"
+  local plist="$app/Contents/Info.plist"
 
-# Menu-bar agent app (no Dock icon) + privacy prompt text + version.
-"$PB" -c "Add :LSUIElement bool true" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Set :LSUIElement true" "$PLIST"
-"$PB" -c "Add :NSScreenCaptureUsageDescription string 'ShotQuill captures your screen to take screenshots.'" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Set :NSScreenCaptureUsageDescription 'ShotQuill captures your screen to take screenshots.'" "$PLIST"
-"$PB" -c "Add :NSInputMonitoringUsageDescription string 'ShotQuill listens for your configured global screenshot hotkeys.'" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Set :NSInputMonitoringUsageDescription 'ShotQuill listens for your configured global screenshot hotkeys.'" "$PLIST"
-"$PB" -c "Add :NSAccessibilityUsageDescription string 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Set :NSAccessibilityUsageDescription 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$PLIST"
-"$PB" -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"
-"$PB" -c "Set :CFBundleVersion $VERSION" "$PLIST" 2>/dev/null \
-  || "$PB" -c "Add :CFBundleVersion string $VERSION" "$PLIST"
+  pyinstaller --noconfirm --windowed --name ShotQuill \
+    --osx-bundle-identifier com.wardmos.shotquill \
+    --icon "$ICNS" \
+    --paths src \
+    --strip \
+    --target-arch "$arch" \
+    --workpath "build/$arch" \
+    --distpath "dist/$arch" \
+    "${EXCLUDE_FLAGS[@]}" \
+    packaging/entry.py
 
-# Ad-hoc signature: required to run on Apple Silicon; embeds no identity.
-codesign --force --deep --sign - "$APP"
+  # Menu-bar agent app (no Dock icon) + privacy prompt text + version.
+  "$PB" -c "Add :LSUIElement bool true" "$plist" 2>/dev/null \
+    || "$PB" -c "Set :LSUIElement true" "$plist"
+  "$PB" -c "Add :NSScreenCaptureUsageDescription string 'ShotQuill captures your screen to take screenshots.'" "$plist" 2>/dev/null \
+    || "$PB" -c "Set :NSScreenCaptureUsageDescription 'ShotQuill captures your screen to take screenshots.'" "$plist"
+  "$PB" -c "Add :NSInputMonitoringUsageDescription string 'ShotQuill listens for your configured global screenshot hotkeys.'" "$plist" 2>/dev/null \
+    || "$PB" -c "Set :NSInputMonitoringUsageDescription 'ShotQuill listens for your configured global screenshot hotkeys.'" "$plist"
+  "$PB" -c "Add :NSAccessibilityUsageDescription string 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$plist" 2>/dev/null \
+    || "$PB" -c "Set :NSAccessibilityUsageDescription 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$plist"
+  "$PB" -c "Set :CFBundleShortVersionString $VERSION" "$plist" 2>/dev/null \
+    || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
+  "$PB" -c "Set :CFBundleVersion $VERSION" "$plist" 2>/dev/null \
+    || "$PB" -c "Add :CFBundleVersion string $VERSION" "$plist"
 
-# Assemble the DMG with hdiutil (built into macOS, no extra dependency).
-STAGING="dist/dmg"
-rm -rf "$STAGING"
-mkdir -p "$STAGING"
-cp -R "$APP" "$STAGING/"
-ln -s /Applications "$STAGING/Applications"
+  # Ad-hoc signature: required to run on Apple Silicon; embeds no identity.
+  codesign --force --deep --sign - "$app"
 
-DMG="dist/ShotQuill-$VERSION.dmg"
-# ULMO = LZMA-compressed DMG: noticeably smaller than UDZO (zlib). Mountable on
-# macOS 10.15+, which is well below ShotQuill's target.
-hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$STAGING" -ov -format ULMO "$DMG"
-rm -rf "$STAGING"
+  # Assemble the DMG with hdiutil (built into macOS, no extra dependency).
+  local staging="dist/$arch/dmg"
+  rm -rf "$staging"
+  mkdir -p "$staging"
+  cp -R "$app" "$staging/"
+  ln -s /Applications "$staging/Applications"
 
-echo "Built $DMG"
+  local dmg="dist/ShotQuill-$VERSION-$arch.dmg"
+  # ULMO = LZMA-compressed DMG: noticeably smaller than UDZO (zlib). Mountable on
+  # macOS 10.15+, which is well below ShotQuill's target.
+  hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$staging" -ov -format ULMO "$dmg"
+  rm -rf "$staging"
+
+  echo "Built $dmg"
+}
+
+for arch in "${ARCHES[@]}"; do
+  build_one "$arch"
+done

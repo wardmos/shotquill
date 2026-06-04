@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
 import pytest
-from PIL import Image
+from PySide6.QtGui import QImage
 
 from shotquill.capture.base import CaptureResult
 from shotquill.output.saver import build_output_path, save
@@ -17,16 +17,17 @@ def test_save_png(tmp_path):
     assert path.exists()
     assert path.suffix == ".png"
     assert path.name.startswith("ShotQuill ")
-    with Image.open(path) as img:
-        assert img.size == (2, 2)
-        assert img.getpixel((0, 0)) == (255, 0, 0, 255)
+    img = QImage(str(path))
+    assert (img.width(), img.height()) == (2, 2)
+    assert img.pixelColor(0, 0).getRgb() == (255, 0, 0, 255)
 
 
 def test_save_jpg_converts_to_rgb(tmp_path):
     path = save(_red_2x2(), str(tmp_path), "jpg")
     assert path.suffix == ".jpg"
-    with Image.open(path) as img:
-        assert img.mode == "RGB"
+    img = QImage(str(path))
+    assert not img.isNull()
+    assert not img.hasAlphaChannel()
 
 
 def test_save_creates_missing_directory(tmp_path):
@@ -62,8 +63,7 @@ def test_build_output_path_expands_user(monkeypatch, tmp_path):
 
 
 def test_save_qimage_writes_file(tmp_path):
-    pytest.importorskip("PySide6")
-    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtGui import QColor
 
     from shotquill.output.saver import save_qimage
 
@@ -71,5 +71,5 @@ def test_save_qimage_writes_file(tmp_path):
     image.fill(QColor("blue"))
     path = save_qimage(image, str(tmp_path), "png")
     assert path.exists()
-    with Image.open(path) as img:
-        assert img.size == (5, 4)
+    saved = QImage(str(path))
+    assert (saved.width(), saved.height()) == (5, 4)

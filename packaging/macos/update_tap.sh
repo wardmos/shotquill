@@ -2,12 +2,14 @@
 # Regenerate the Homebrew cask in wardmos/homebrew-tap after a release.
 # No-ops (exit 0) when TAP_TOKEN is unset, so releases still succeed without it.
 #
-# Usage: packaging/macos/update_tap.sh <tag> <sha256>
+# Usage: packaging/macos/update_tap.sh <tag> <arm64-sha256> <x86_64-sha256>
 set -euo pipefail
 
-VERSION="${1:?usage: update_tap.sh <tag> <sha256>}"
+USAGE="usage: update_tap.sh <tag> <arm64-sha256> <x86_64-sha256>"
+VERSION="${1:?$USAGE}"
 VERSION="${VERSION#v}"
-SHA="${2:?usage: update_tap.sh <tag> <sha256>}"
+ARM_SHA="${2:?$USAGE}"
+INTEL_SHA="${3:?$USAGE}"
 
 if [ -z "${TAP_TOKEN:-}" ]; then
   echo "TAP_TOKEN not set; skipping Homebrew tap update."
@@ -15,7 +17,6 @@ if [ -z "${TAP_TOKEN:-}" ]; then
 fi
 
 REPO="wardmos/homebrew-tap"
-URL="https://github.com/wardmos/shotquill/releases/download/v${VERSION}/ShotQuill-${VERSION}.dmg"
 
 WORK="$(mktemp -d)"
 # Authenticate with an HTTP header injected via GIT_CONFIG_* env vars rather than
@@ -30,10 +31,13 @@ mkdir -p "$WORK/Casks"
 
 cat > "$WORK/Casks/shotquill.rb" <<EOF
 cask "shotquill" do
-  version "${VERSION}"
-  sha256 "${SHA}"
+  arch arm: "arm64", intel: "x86_64"
 
-  url "${URL}"
+  version "${VERSION}"
+  sha256 arm:   "${ARM_SHA}",
+         intel: "${INTEL_SHA}"
+
+  url "https://github.com/wardmos/shotquill/releases/download/v#{version}/ShotQuill-#{version}-#{arch}.dmg"
   name "ShotQuill"
   desc "Screenshot and annotation tool"
   homepage "https://github.com/wardmos/shotquill"

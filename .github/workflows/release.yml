@@ -26,15 +26,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e . pyinstaller
-      - name: Build .app + DMG
+      - name: Build .app + DMGs (arm64, x86_64, universal2)
         run: bash packaging/macos/build_dmg.sh "${{ github.ref_name }}"
       - name: Compute SHA256
         id: sha
         run: |
-          dmg=$(ls dist/ShotQuill-*.dmg)
-          # Sidecar checksum file (shasum -c compatible) shipped with the release.
-          ( cd dist && shasum -a 256 "$(basename "$dmg")" > "$(basename "$dmg").sha256" )
-          echo "sha=$(awk '{print $1}' "$dmg.sha256")" >> "$GITHUB_OUTPUT"
+          cd dist
+          # Sidecar checksum files (shasum -c compatible) shipped with the release.
+          for dmg in ShotQuill-*.dmg; do
+            shasum -a 256 "$dmg" > "$dmg.sha256"
+          done
+          echo "arm_sha=$(awk '{print $1}' ShotQuill-*-arm64.dmg.sha256)" >> "$GITHUB_OUTPUT"
+          echo "intel_sha=$(awk '{print $1}' ShotQuill-*-x86_64.dmg.sha256)" >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release
         # Pinned to a commit SHA (supply-chain hardening); v2.6.2.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
@@ -46,4 +49,4 @@ jobs:
       - name: Update Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-        run: bash packaging/macos/update_tap.sh "${{ github.ref_name }}" "${{ steps.sha.outputs.sha }}"
+        run: bash packaging/macos/update_tap.sh "${{ github.ref_name }}" "${{ steps.sha.outputs.arm_sha }}" "${{ steps.sha.outputs.intel_sha }}"

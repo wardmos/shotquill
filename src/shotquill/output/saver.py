@@ -6,14 +6,10 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from PIL import Image
+from PySide6.QtGui import QImage
 
 from shotquill.capture.base import CaptureResult
-
-if TYPE_CHECKING:
-    from PySide6.QtGui import QImage
 
 _JPEG_FORMATS = {"jpg", "jpeg"}
 
@@ -30,10 +26,17 @@ def build_output_path(directory: str, image_format: str = "png") -> Path:
 def save(result: CaptureResult, directory: str, image_format: str = "png") -> Path:
     """Write a raw capture to disk and return the created file path."""
     path = build_output_path(directory, image_format)
-    image = Image.frombytes("RGBA", (result.width, result.height), result.pixels)
+    image = QImage(
+        result.pixels,
+        result.width,
+        result.height,
+        result.width * 4,
+        QImage.Format.Format_RGBA8888,
+    )
     if path.suffix == ".jpg":
-        image = image.convert("RGB")
-    image.save(path)
+        image = image.convertToFormat(QImage.Format.Format_RGB888)
+    if not image.save(str(path)):
+        raise OSError(f"failed to write {path}")
     return path
 
 
