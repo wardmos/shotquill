@@ -36,8 +36,10 @@ _DRAG_THRESHOLD = 4
 
 
 class SmartOverlay(QWidget):
-    region_selected = Signal(QImage)
-    window_selected = Signal(int)
+    #: Capture signals also carry the shot's on-screen rect (global, logical
+    #: points) so the editor can open right where the shot was taken.
+    region_selected = Signal(QImage, QRect)
+    window_selected = Signal(int, QRect)
     fullscreen_selected = Signal()
     cancelled = Signal()
 
@@ -218,12 +220,21 @@ class SmartOverlay(QWidget):
             return
         phys = scale_rect((sel.x(), sel.y(), sel.width(), sel.height()), self._sx, self._sy)
         cropped = self._screenshot.copy(QRect(*phys))
-        self.region_selected.emit(cropped)
+        # Overlay coordinates are relative to the virtual-desktop origin; shift
+        # back so the emitted rect is in global screen coordinates.
+        self.region_selected.emit(cropped, sel.translated(self._geometry.topLeft()))
         self.close()
 
     def _accept_target(self, hover: int | None) -> None:
         if hover is not None:
-            self.window_selected.emit(self._windows[hover].window_id)
+            window = self._windows[hover]
+            bounds = QRect(
+                int(window.bounds.x),
+                int(window.bounds.y),
+                int(window.bounds.width),
+                int(window.bounds.height),
+            )
+            self.window_selected.emit(window.window_id, bounds)
         else:
             self.fullscreen_selected.emit()
         self.close()

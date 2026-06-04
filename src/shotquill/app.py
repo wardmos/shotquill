@@ -14,7 +14,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
@@ -182,7 +182,7 @@ class ShotquillApp(QObject):
     def _capture_fullscreen(self) -> None:
         screenshot = self._grab()
         if screenshot is not None:
-            self._deliver_capture(screenshot)
+            self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
 
     @Slot()
     def _capture_smart(self) -> None:
@@ -196,23 +196,24 @@ class ShotquillApp(QObject):
         screenshot = self._grab()
         if screenshot is None:
             return
-        overlay = SmartOverlay(screenshot, self._app.primaryScreen().virtualGeometry(), windows)
+        geometry = self._app.primaryScreen().virtualGeometry()
+        overlay = SmartOverlay(screenshot, geometry, windows)
         overlay.region_selected.connect(self._deliver_capture)
         overlay.window_selected.connect(self._capture_window_image)
-        overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot))
+        overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot, geometry))
         self._track(overlay)
         overlay.show()
         overlay.raise_()
         overlay.activateWindow()
         overlay.setFocus()
 
-    def _capture_window_image(self, window_id: int) -> None:
+    def _capture_window_image(self, window_id: int, origin: QRect) -> None:
         try:
             result = self._capturer.capture_window(window_id)
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
             return
-        self._deliver_capture(result_to_qimage(result))
+        self._deliver_capture(result_to_qimage(result), origin)
 
     def _grab(self) -> QImage | None:
         try:
@@ -225,14 +226,15 @@ class ShotquillApp(QObject):
     def _notify(self, message: str) -> None:
         self._tray.showMessage("ShotQuill", message, QSystemTrayIcon.MessageIcon.Critical)
 
-    def _deliver_capture(self, image: QImage) -> None:
+    def _deliver_capture(self, image: QImage, origin: QRect | None = None) -> None:
         # Single exit for every capture mode. Flash/sound feedback fires either
         # way; then auto-output (if enabled) saves/copies the raw shot hands-free
-        # and skips the editor. With both auto toggles off, the editor opens.
+        # and skips the editor. With both auto toggles off, the editor opens —
+        # placed over ``origin`` (the shot's on-screen rect) when known.
         self._signal_capture()
         if self._auto_output(image):
             return
-        self._open_editor(image)
+        self._open_editor(image, origin)
 
     def _auto_output(self, image: QImage) -> bool:
         """Save and/or copy the raw shot per config; return True if it handled it."""
@@ -253,8 +255,8 @@ class ShotquillApp(QObject):
                 self._notify(t("notify.capture_failed").format(error=exc))
         return True
 
-    def _open_editor(self, image: QImage) -> None:
-        editor = EditorWindow(image, self._config)
+    def _open_editor(self, image: QImage, origin: QRect | None = None) -> None:
+        editor = EditorWindow(image, self._config, origin)
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)
         editor.show()

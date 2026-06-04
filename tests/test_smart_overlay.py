@@ -61,15 +61,35 @@ def _release(overlay, x, y):
 def test_drag_emits_region_crop_scaled_to_native(qtbot):
     overlay = _overlay(qtbot)
     received = []
-    overlay.region_selected.connect(received.append)
+    overlay.region_selected.connect(lambda image, rect: received.append((image, rect)))
 
     _press(overlay, 10, 10)
     _move(overlay, 40, 30, buttons=Qt.LeftButton)
     _release(overlay, 40, 30)
 
     assert len(received) == 1
+    image, rect = received[0]
     # Logical 30x20 selection -> native 60x40 at the 2x scale.
-    assert (received[0].width(), received[0].height()) == (60, 40)
+    assert (image.width(), image.height()) == (60, 40)
+    # The rect stays in logical, global coordinates so the editor can reopen
+    # the shot in place.
+    assert rect == QRect(10, 10, 30, 20)
+
+
+def test_region_rect_is_translated_to_global_coordinates(qtbot):
+    # A virtual desktop whose origin is not (0, 0) — e.g. a screen arranged to
+    # the right of another. The emitted rect must be shifted back to global.
+    overlay = SmartOverlay(_screenshot(), QRect(100, 200, 100, 50), [])
+    overlay.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(overlay)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _press(overlay, 10, 10)
+    _move(overlay, 40, 30, buttons=Qt.LeftButton)
+    _release(overlay, 40, 30)
+
+    assert received == [QRect(110, 210, 30, 20)]
 
 
 def test_click_on_empty_space_emits_fullscreen(qtbot):
@@ -85,25 +105,25 @@ def test_click_on_empty_space_emits_fullscreen(qtbot):
     assert fullscreen == [True]
 
 
-def test_click_on_window_emits_its_id(qtbot):
+def test_click_on_window_emits_its_id_and_bounds(qtbot):
     overlay = _overlay(qtbot, windows=_windows())
     received = []
-    overlay.window_selected.connect(received.append)
+    overlay.window_selected.connect(lambda window_id, rect: received.append((window_id, rect)))
 
     # Move onto the right-half window, then click without dragging.
     _move(overlay, 70, 25)
     _press(overlay, 70, 25)
     _release(overlay, 70, 25)
 
-    assert received == [42]
+    assert received == [(42, QRect(50, 0, 50, 50))]
 
 
 def test_tiny_move_counts_as_click_not_drag(qtbot):
     overlay = _overlay(qtbot, windows=_windows())
     region = []
     windows = []
-    overlay.region_selected.connect(region.append)
-    overlay.window_selected.connect(windows.append)
+    overlay.region_selected.connect(lambda image, rect: region.append((image, rect)))
+    overlay.window_selected.connect(lambda window_id, rect: windows.append(window_id))
 
     _move(overlay, 70, 25)
     _press(overlay, 70, 25)

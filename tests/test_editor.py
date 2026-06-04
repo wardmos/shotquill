@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage  # noqa: E402
 
 from shotquill.ocr import macos as ocr_macos  # noqa: E402
@@ -57,6 +57,49 @@ def test_pin_emits_image_and_closes(qtbot, config):
     assert len(received) == 1
     assert isinstance(received[0], QImage)
     assert not window.isVisible()
+
+
+def test_editor_places_canvas_over_capture_origin(qtbot, config):
+    # The shot was taken at (120, 80) sized 300x200 logical points (the image
+    # is 2x: a Retina capture). The canvas viewport must land exactly there so
+    # the screenshot appears to stay in place while editing.
+    origin = QRect(120, 80, 300, 200)
+    window = EditorWindow(_image(600, 400), config, origin)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    viewport = window._canvas.viewport()
+    assert viewport.size() == origin.size()
+    assert viewport.mapToGlobal(QPoint(0, 0)) == origin.topLeft()
+
+
+def test_editor_near_screen_edge_is_clamped_on_screen(qtbot, config):
+    # A shot taken in the bottom-right corner: snapping the canvas there would
+    # push the toolbar/frame off-screen, so the window is clamped instead.
+    screen = QGuiApplication.primaryScreen().availableGeometry()
+    origin = QRect(screen.right() - 100, screen.bottom() - 80, 300, 200)
+    window = EditorWindow(_image(600, 400), config, origin)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    frame = window.frameGeometry()
+    assert frame.right() <= screen.right()
+    assert frame.bottom() <= screen.bottom()
+    assert frame.left() >= screen.left()
+    assert frame.top() >= screen.top()
+
+
+def test_editor_without_origin_still_opens(qtbot, config):
+    window = EditorWindow(_image(), config)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+    assert window.isVisible()
 
 
 def _patch_recognizer(monkeypatch, *, lines=None, error=None):

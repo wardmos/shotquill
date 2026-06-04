@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QMainWindow
 
 from shotquill.i18n import t
@@ -25,20 +25,30 @@ class EditorWindow(QMainWindow):
     #: Emitted with the annotated image when the user pins the shot to the desktop.
     pin_requested = Signal(QImage)
 
-    def __init__(self, image: QImage, config: Config) -> None:
+    def __init__(self, image: QImage, config: Config, origin: QRect | None = None) -> None:
         super().__init__()
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle(t("title.annotate"))
         self._config = config
+        self._origin = origin
+        self._placed = False
 
         pixmap = QPixmap.fromImage(image)
         self._canvas = AnnotationCanvas(pixmap)
+        # The image is always fitted to the view (below and in resizeEvent), so
+        # scrollbars never help — and the ~14px they'd steal would break the
+        # canvas-over-capture alignment in _place_over_origin.
+        self._canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setCentralWidget(self._canvas)
         self.addToolBar(create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin))
 
+        # Size from the shot's on-screen (logical) rect when known — the pixmap
+        # is in native pixels, which is 2x too large on Retina displays.
+        initial = origin.size() if origin is not None else pixmap.size()
         self.resize(
-            min(pixmap.width(), _MAX_INITIAL_WIDTH) + 40,
-            min(pixmap.height(), _MAX_INITIAL_HEIGHT) + 120,
+            min(initial.width(), _MAX_INITIAL_WIDTH) + 40,
+            min(initial.height(), _MAX_INITIAL_HEIGHT) + 120,
         )
 
         close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
@@ -46,7 +56,43 @@ class EditorWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        if self._origin is not None and not self._placed:
+            self._placed = True
+            self._place_over_origin()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+
+    def resizeEvent(self, event) -> None:
+        # Keep the whole image fitted as the user resizes — with scrollbars off
+        # there is no other way to reach content outside the viewport.
+        super().resizeEvent(event)
+        self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+
+    def _place_over_origin(self) -> None:
+        """Open the editor so the screenshot appears to stay where it was shot.
+
+        Sizes the window so the canvas viewport matches the capture's on-screen
+        size (within the initial-size caps), shifts the frame so the canvas
+        lands exactly on the capture rect, then clamps the frame to the screen
+        so the toolbar and window edges stay reachable. Runs on first show —
+        only then are the toolbar and frame dimensions known.
+        """
+        self.layout().activate()  # settle toolbar/central layout before measuring
+        viewport = self._canvas.viewport()
+        target = QSize(
+            min(self._origin.width(), _MAX_INITIAL_WIDTH),
+            min(self._origin.height(), _MAX_INITIAL_HEIGHT),
+        )
+        self.resize(self.size() + (target - viewport.size()))
+
+        delta = self._origin.topLeft() - viewport.mapToGlobal(QPoint(0, 0))
+        frame = self.frameGeometry().translated(delta)
+        screen = QGuiApplication.screenAt(self._origin.center())
+        available = (screen or self.screen()).availableGeometry()
+        max_left = max(available.left(), available.right() - frame.width() + 1)
+        max_top = max(available.top(), available.bottom() - frame.height() + 1)
+        frame.moveLeft(min(max(frame.left(), available.left()), max_left))
+        frame.moveTop(min(max(frame.top(), available.top()), max_top))
+        self.move(self.pos() + (frame.topLeft() - self.frameGeometry().topLeft()))
 
     def keyPressEvent(self, event) -> None:
         # Quick-finish keys: Space saves to disk, Enter copies to the clipboard.

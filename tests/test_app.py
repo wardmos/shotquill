@@ -177,16 +177,21 @@ def test_sync_autostart_swallows_oserror(qapp, config, fakes):
     app.shutdown()
 
 
-def test_capture_fullscreen_opens_editor(qapp, config, fakes, monkeypatch):
-    # With auto-output off, a capture falls through to the editor.
+def test_capture_fullscreen_opens_editor_over_the_screen(qapp, config, fakes, monkeypatch):
+    # With auto-output off, a capture falls through to the editor, placed over
+    # the captured area (the whole virtual desktop for a full-screen shot).
     config.set_auto_save_after_capture(False)
     config.set_auto_copy_after_capture(False)
     app = _build_app(qapp, fakes)
     opened = []
-    monkeypatch.setattr(app, "_open_editor", opened.append)
+    monkeypatch.setattr(
+        app, "_open_editor", lambda image, origin=None: opened.append((image, origin))
+    )
     app._capture_fullscreen()
     assert len(opened) == 1
-    assert (opened[0].width(), opened[0].height()) == (4, 3)
+    image, origin = opened[0]
+    assert (image.width(), image.height()) == (4, 3)
+    assert origin == qapp.primaryScreen().virtualGeometry()
     app.shutdown()
 
 
@@ -195,7 +200,9 @@ def test_capture_fullscreen_does_nothing_on_failure(qapp, config, fakes, monkeyp
     capturer.fail = True
     app = _build_app(qapp, fakes)
     opened = []
-    monkeypatch.setattr(app, "_open_editor", opened.append)
+    monkeypatch.setattr(
+        app, "_open_editor", lambda image, origin=None: opened.append((image, origin))
+    )
     app._capture_fullscreen()
     assert opened == []
     app.shutdown()
