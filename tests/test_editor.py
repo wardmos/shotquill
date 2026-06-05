@@ -98,6 +98,28 @@ def test_finish_key_names_shown_in_toolbar_tooltips(qtbot, config):
     assert window._save_action.toolTip() == "Save to file (Enter)"
 
 
+def test_finish_tip_localizes_key_via_portable_name():
+    # The localized name must be looked up by the key's *portable* spelling and
+    # swapped into the NativeText rendering: on macOS NativeText shows Return
+    # as ↩ (never "Return"), so matching on the native string would silently
+    # skip localization there. Offscreen NativeText == PortableText, which
+    # still exercises the suffix replacement.
+    from PySide6.QtGui import QKeySequence
+
+    from shotquill import i18n
+    from shotquill.ui.editor import _finish_tip
+
+    try:
+        i18n.set_language("zh")
+        assert _finish_tip(QKeySequence("Return"), "保存") == "保存 (回车)"
+        assert _finish_tip(QKeySequence("Ctrl+Return"), "保存") == "保存 (Ctrl+回车)"
+        # Unknown keys pass through untouched; empty means the key is off.
+        assert _finish_tip(QKeySequence("Ctrl+D"), "保存") == "保存 (Ctrl+D)"
+        assert _finish_tip(QKeySequence(), "保存") == "保存"
+    finally:
+        i18n.set_language(i18n.DEFAULT_LANGUAGE)
+
+
 def test_reload_finish_keys_applies_new_bindings_to_open_editor(qtbot, config, tmp_path):
     config.set_save_dir(str(tmp_path))
     window = _editor(qtbot, config)

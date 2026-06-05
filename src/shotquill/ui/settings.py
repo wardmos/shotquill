@@ -254,7 +254,13 @@ class SettingsDialog(QDialog):
     def _validate_editor_keys(self) -> bool:
         """Refuse finish keys that collide with built-in editor shortcuts,
         with each other, or with an enabled global capture hotkey (using the
-        capture rows' pending values, so both kinds can change in one visit)."""
+        capture rows' pending values, so both kinds can change in one visit).
+        An enabled row with no key recorded is also refused — it would look
+        active in Settings yet silently never fire."""
+        for row in (self._editor_copy, self._editor_save):
+            if row.enabled() and row.active_sequence().isEmpty():
+                QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_empty"))
+                return False
         copy_seq = self._editor_copy.active_sequence()
         save_seq = self._editor_save.active_sequence()
         reserved = _reserved_editor_sequences()

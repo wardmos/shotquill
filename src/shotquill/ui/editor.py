@@ -46,11 +46,22 @@ def _finish_tip(sequence: QKeySequence, label: str) -> str:
     """A tooltip with the finish-key name appended (omitted when the key is off).
 
     NativeText keeps macOS modifier symbols unambiguous (⌘D — the portable
-    "Ctrl+D" would be misleading there because Qt swaps Ctrl/Cmd); the plain
-    Space/Return names it leaves in English are then localized.
+    "Ctrl+D" would be misleading there because Qt swaps Ctrl/Cmd). The lookup
+    for a localized key name must use the *portable* spelling though: on macOS
+    NativeText renders Return as ↩, which the display-name table would never
+    match. So the localized name replaces the key's native suffix (macOS
+    "⌘↩" → "⌘回车", elsewhere "Ctrl+Return" → "Ctrl+回车").
     """
-    key = key_display_name(sequence.toString(QKeySequence.NativeText))
-    return f"{label} ({key})" if key else label
+    native = sequence.toString(QKeySequence.NativeText)
+    if not native:
+        return label
+    portable_key = sequence.toString().split("+")[-1]  # the non-modifier key
+    localized = key_display_name(portable_key)
+    if localized != portable_key:
+        native_key = QKeySequence(portable_key).toString(QKeySequence.NativeText)
+        if native_key and native.endswith(native_key):
+            native = native[: len(native) - len(native_key)] + localized
+    return f"{label} ({native})"
 
 
 class EditorWindow(QMainWindow):

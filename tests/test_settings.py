@@ -171,6 +171,34 @@ def test_dialog_allows_reserved_key_on_disabled_row(qtbot, config, monkeypatch):
     assert config.hotkey_enabled("editor_copy") is False
 
 
+def test_dialog_rejects_enabled_row_with_no_key_recorded(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Enabled but empty would look active in Settings yet never fire.
+    dialog._editor_copy._edit.setKeySequence(QKeySequence())
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+    assert config.editor_hotkey("editor_copy") == "Space"  # unchanged
+
+
+def test_dialog_allows_empty_key_on_disabled_row(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._editor_copy._edit.setKeySequence(QKeySequence())
+    dialog._editor_copy._enabled.setChecked(False)
+    dialog._save_and_accept()
+    assert warnings == []
+    assert dialog.result() == SettingsDialog.Accepted
+    assert config.hotkey_enabled("editor_copy") is False
+
+
 def test_dialog_prefills_from_config(qtbot, config):
     config.set_language("zh")
     config.set_image_format("jpg")

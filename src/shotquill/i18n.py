@@ -105,6 +105,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Copy and save can't share the same key.",
         "zh": "复制和保存不能使用同一个按键。",
     },
+    "settings.editor_key_empty": {
+        "en": "Record a key for the enabled editor action, or disable it.",
+        "zh": "请为已启用的编辑器动作录制一个按键，或将其停用。",
+    },
     "settings.editor_key_capture_conflict": {
         "en": "This key matches a global capture hotkey and would trigger both. "
         "Choose another key.",
