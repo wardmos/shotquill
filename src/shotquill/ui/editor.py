@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QKeyCombination, QPoint, QRect, QSize, Qt, Signal
@@ -67,6 +68,9 @@ def _finish_tip(sequence: QKeySequence, label: str) -> str:
 class EditorWindow(QMainWindow):
     #: Emitted with the annotated image when the user pins the shot to the desktop.
     pin_requested = Signal(QImage)
+    #: Internal: OCR finished on its worker thread — (lines, error). The queued
+    #: delivery hops back to the GUI thread before touching clipboard/title.
+    _ocr_done = Signal(object, object)
 
     def __init__(self, image: QImage, config: Config, origin: QRect | None = None) -> None:
         super().__init__()
@@ -102,6 +106,9 @@ class EditorWindow(QMainWindow):
 
         close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         close_shortcut.activated.connect(self.close)
+
+        self._ocr_running = False
+        self._ocr_done.connect(self._on_ocr_done)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -204,15 +211,38 @@ class EditorWindow(QMainWindow):
         self.close()
 
     def _ocr(self) -> None:
+        # Vision's accurate recognition can take seconds on a full-screen shot,
+        # so it runs on a worker thread instead of freezing the GUI; the title
+        # shows progress. A second click while one is in flight is ignored.
+        if self._ocr_running:
+            return
+        self._ocr_running = True
+        self.setWindowTitle(t("title.ocr_running"))
+        image = self._canvas.background_image()
+        threading.Thread(target=self._run_ocr, args=(image,), daemon=True, name="sq-ocr").start()
+
+    def _run_ocr(self, image: QImage) -> None:
+        """Worker thread: recognize and hand the outcome back to the GUI thread."""
         from shotquill.ocr.macos import VisionTextRecognizer
+
+        lines: list[str] | None = None
+        error: Exception | None = None
+        try:
+            lines = VisionTextRecognizer().recognize(image)
+        except Exception as exc:
+            error = exc
+        try:
+            self._ocr_done.emit(lines, error)
+        except RuntimeError:
+            pass  # editor closed (and deleted) while OCR was in flight
+
+    def _on_ocr_done(self, lines: object, error: object) -> None:
         from shotquill.output.clipboard import copy_text
 
-        try:
-            lines = VisionTextRecognizer().recognize(self._canvas.background_image())
-        except Exception as exc:
-            self.setWindowTitle(t("title.ocr_failed").format(error=exc))
-            return
-        if lines:
+        self._ocr_running = False
+        if error is not None:
+            self.setWindowTitle(t("title.ocr_failed").format(error=error))
+        elif lines:
             copy_text("\n".join(lines))
             self.setWindowTitle(t("title.ocr_copied").format(count=len(lines)))
         else:

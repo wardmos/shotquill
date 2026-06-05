@@ -217,20 +217,41 @@ def test_editor_without_origin_still_opens(qtbot, config):
     assert window.isVisible()
 
 
-def _patch_recognizer(monkeypatch, *, lines=None, error=None):
+def _patch_recognizer(monkeypatch, *, lines=None, error=None, started=None, release=None):
+    """Install a fake recognizer; optional events observe/block the OCR thread."""
+
     class _FakeRecognizer:
+        instances = 0
+
+        def __init__(self):
+            _FakeRecognizer.instances += 1
+
         def recognize(self, image):
+            if started is not None:
+                started.set()
+            if release is not None:
+                release.wait(timeout=5)
             if error is not None:
                 raise error
             return list(lines or [])
 
     monkeypatch.setattr(ocr_macos, "VisionTextRecognizer", _FakeRecognizer)
+    return _FakeRecognizer
+
+
+def _wait_ocr_done(qtbot, window):
+    """OCR runs on a worker thread; wait until the title leaves the running state."""
+    from shotquill import i18n
+
+    running = i18n.t("title.ocr_running")
+    qtbot.waitUntil(lambda: window.windowTitle() != running, timeout=2000)
 
 
 def test_ocr_success_copies_text_and_reports_count(qtbot, config, monkeypatch):
     _patch_recognizer(monkeypatch, lines=["hello", "world"])
     window = _editor(qtbot, config)
     window._ocr()
+    _wait_ocr_done(qtbot, window)
     assert QGuiApplication.clipboard().text() == "hello\nworld"
     assert window.windowTitle() == "ShotQuill — Copied 2 line(s)"
 
@@ -239,6 +260,7 @@ def test_ocr_empty_reports_no_text(qtbot, config, monkeypatch):
     _patch_recognizer(monkeypatch, lines=[])
     window = _editor(qtbot, config)
     window._ocr()
+    _wait_ocr_done(qtbot, window)
     assert window.windowTitle() == "ShotQuill — No text found"
 
 
@@ -246,5 +268,27 @@ def test_ocr_failure_reports_error(qtbot, config, monkeypatch):
     _patch_recognizer(monkeypatch, error=RuntimeError("boom"))
     window = _editor(qtbot, config)
     window._ocr()
+    _wait_ocr_done(qtbot, window)
     assert window.windowTitle().startswith("ShotQuill — OCR failed")
     assert "boom" in window.windowTitle()
+
+
+def test_ocr_runs_off_the_gui_thread_and_ignores_reentry(qtbot, config, monkeypatch):
+    # _ocr must return immediately (recognition on a worker thread, title in
+    # the running state) and a second click while in flight must not start a
+    # second recognizer.
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    recognizer = _patch_recognizer(monkeypatch, lines=["hi"], started=started, release=release)
+    window = _editor(qtbot, config)
+
+    window._ocr()  # returns without blocking even though recognize() is stuck
+    assert window.windowTitle() == "ShotQuill — Recognizing text…"
+    assert started.wait(timeout=2)
+    window._ocr()  # ignored: one OCR already in flight
+    release.set()
+    _wait_ocr_done(qtbot, window)
+    assert recognizer.instances == 1
+    assert window.windowTitle() == "ShotQuill — Copied 1 line(s)"
