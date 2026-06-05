@@ -62,6 +62,37 @@ def test_build_output_path_expands_user(monkeypatch, tmp_path):
     assert (tmp_path / "shots").is_dir()
 
 
+def test_build_output_path_never_reuses_an_existing_name(tmp_path, monkeypatch):
+    # The timestamp resolves to seconds, so two captures in the same second
+    # must get distinct names instead of silently overwriting each other.
+    import datetime as real_dt
+
+    class _FrozenDateTime(real_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 4, 14, 30, 0)
+
+    from shotquill.output import saver
+
+    monkeypatch.setattr(saver.dt, "datetime", _FrozenDateTime)
+    first = build_output_path(str(tmp_path), "png")
+    first.touch()
+    second = build_output_path(str(tmp_path), "png")
+    second.touch()
+    third = build_output_path(str(tmp_path), "png")
+    assert first.name == "ShotQuill 2026-06-04 14.30.00.png"
+    assert second.name == "ShotQuill 2026-06-04 14.30.00 (2).png"
+    assert third.name == "ShotQuill 2026-06-04 14.30.00 (3).png"
+
+
+def test_rapid_saves_in_the_same_second_keep_every_file(tmp_path):
+    # End-to-end: two back-to-back saves (well within one second) must both
+    # survive on disk.
+    save(_red_2x2(), str(tmp_path), "png")
+    save(_red_2x2(), str(tmp_path), "png")
+    assert len(list(tmp_path.glob("ShotQuill *.png"))) == 2
+
+
 def test_save_unpremultiplies_window_captures(tmp_path):
     # Window captures arrive premultiplied; the saved file must hold straight
     # alpha (half-transparent red premultiplied is (128, 0, 0, 128)).

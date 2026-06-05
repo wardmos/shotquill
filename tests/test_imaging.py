@@ -12,15 +12,28 @@ from shotquill.capture.base import CaptureResult  # noqa: E402
 from shotquill.imaging import result_to_qimage  # noqa: E402
 
 
-def _result(width=2, height=2, color=(255, 0, 0, 255)) -> CaptureResult:
+def _result(width=2, height=2, color=(255, 0, 0, 255), premultiplied=False) -> CaptureResult:
     pixels = bytes(list(color) * (width * height))
-    return CaptureResult(width=width, height=height, scale=1.0, pixels=pixels)
+    return CaptureResult(
+        width=width, height=height, scale=1.0, pixels=pixels, premultiplied=premultiplied
+    )
 
 
 def test_result_to_qimage_dimensions_and_format():
     image = result_to_qimage(_result(4, 3))
     assert (image.width(), image.height()) == (4, 3)
     assert image.format() == QImage.Format.Format_RGBA8888
+
+
+def test_result_to_qimage_premultiplied_uses_premultiplied_format():
+    # Window captures arrive premultiplied; interpreting them as straight RGBA
+    # would wash out semi-transparent pixels (e.g. rounded window corners).
+    # Half-transparent red premultiplied is (128, 0, 0, 128) and must read back
+    # as straight (255, 0, 0, 128).
+    image = result_to_qimage(_result(2, 2, color=(128, 0, 0, 128), premultiplied=True))
+    assert image.format() == QImage.Format.Format_RGBA8888_Premultiplied
+    pixel = image.pixelColor(0, 0)
+    assert (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()) == (255, 0, 0, 128)
 
 
 def test_result_to_qimage_preserves_pixel_values():

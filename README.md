@@ -138,7 +138,7 @@ or with a global capture hotkey.
 ### Saved files
 
 Captures are written to `~/Pictures/ShotQuill` by default (configurable), named
-like macOS does — e.g. `ShotQuill 2026-06-04 at 14.30.00.png`. Choose **PNG** or
+with a timestamp — e.g. `ShotQuill 2026-06-04 14.30.00.png`. Choose **PNG** or
 **JPG** in Settings.
 
 ---
@@ -181,7 +181,7 @@ cross-platform UI:
 | Concern               | Library                                              |
 | --------------------- | ---------------------------------------------------- |
 | GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                 |
-| Screen capture        | `mss`, plus Quartz (`CGWindowList*`) for windows     |
+| Screen capture        | ScreenCaptureKit (macOS 14+), `CGWindowList*` fallback |
 | Global hotkeys        | `pynput`                                             |
 | Image processing      | Qt (`QImage`)                                        |
 | OCR                   | `pyobjc` → Apple Vision                               |

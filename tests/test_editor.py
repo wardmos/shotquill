@@ -48,6 +48,29 @@ def test_save_writes_file_and_closes(qtbot, config, tmp_path):
     assert not window.isVisible()
 
 
+def test_save_failure_keeps_editor_open(qtbot, config, monkeypatch):
+    # A failed write (full disk, unwritable folder) must warn and leave the
+    # editor open so the annotations aren't lost.
+    from PySide6.QtWidgets import QMessageBox
+
+    from shotquill.output import saver
+
+    def _failing_save(image, directory, image_format="png"):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(saver, "save_qimage", _failing_save)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    window._save()
+    assert window.isVisible()
+    assert len(warnings) == 1
+    assert "disk full" in str(warnings[0])
+
+
 def test_pin_emits_image_and_closes(qtbot, config):
     window = _editor(qtbot, config)
     window.setAttribute(Qt.WA_DeleteOnClose, False)

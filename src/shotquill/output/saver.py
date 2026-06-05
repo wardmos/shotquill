@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Save captured / annotated images to disk with macOS-style timestamped names."""
+"""Save captured / annotated images to disk with timestamped names."""
 
 from __future__ import annotations
 
@@ -16,12 +16,22 @@ _JPEG_FORMATS = {"jpg", "jpeg"}
 
 
 def build_output_path(directory: str, image_format: str = "png") -> Path:
-    """Create ``directory`` if needed and return a fresh timestamped file path."""
+    """Create ``directory`` if needed and return a fresh timestamped file path.
+
+    The timestamp only resolves to seconds, so rapid consecutive captures can
+    land on the same name; a macOS-style `` (2)`` counter keeps each shot from
+    silently overwriting the previous one.
+    """
     out_dir = Path(directory).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = "jpg" if image_format.lower() in _JPEG_FORMATS else "png"
-    stamp = dt.datetime.now().strftime("%Y-%m-%d at %H.%M.%S")
-    return out_dir / f"ShotQuill {stamp}.{ext}"
+    stamp = dt.datetime.now().strftime("%Y-%m-%d %H.%M.%S")
+    path = out_dir / f"ShotQuill {stamp}.{ext}"
+    counter = 2
+    while path.exists():
+        path = out_dir / f"ShotQuill {stamp} ({counter}).{ext}"
+        counter += 1
+    return path
 
 
 def save(result: CaptureResult, directory: str, image_format: str = "png") -> Path:

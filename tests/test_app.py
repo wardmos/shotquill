@@ -29,6 +29,9 @@ class _FakeCapturer:
     def capture_region(self, region):  # pragma: no cover - unused here
         return self.capture_fullscreen()
 
+    def capture_window(self, window_id):
+        return self.capture_fullscreen()
+
     def list_windows(self):
         return []
 
@@ -205,6 +208,54 @@ def test_capture_fullscreen_does_nothing_on_failure(qapp, config, fakes, monkeyp
     )
     app._capture_fullscreen()
     assert opened == []
+    app.shutdown()
+
+
+def test_capture_window_image_delivers_capture(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+
+    app = _build_app(qapp, fakes)
+    delivered = []
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None: delivered.append((image, origin))
+    )
+    origin = QRect(10, 20, 4, 3)
+    app._capture_window_image(42, origin)
+    assert len(delivered) == 1
+    image, got_origin = delivered[0]
+    assert (image.width(), image.height()) == (4, 3)
+    assert got_origin == origin
+    app.shutdown()
+
+
+def test_capture_window_image_notifies_on_failure(qapp, config, fakes, monkeypatch):
+    # A window that vanished between overlay and click must report "capture
+    # failed" via the tray instead of crashing or opening an empty editor.
+    from PySide6.QtCore import QRect
+
+    from shotquill import i18n
+
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    capturer.fail = True
+    delivered = []
+    notified = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_window_image(42, QRect(0, 0, 4, 3))
+    assert delivered == []
+    assert notified == [i18n.t("notify.capture_failed").format(error="no permission")]
+    app.shutdown()
+
+
+def test_window_preview_image_returns_none_on_failure(qapp, config, fakes):
+    # The overlay's hover preview must degrade to the frozen screenshot (None)
+    # when the un-occluded window grab fails, never raise into the worker.
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    assert app._window_preview_image(42) is not None
+    capturer.fail = True
+    assert app._window_preview_image(42) is None
     app.shutdown()
 
 
