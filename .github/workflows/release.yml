@@ -23,9 +23,19 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
+        # Build deps are pinned so re-running this workflow on the same commit
+        # reproduces the same bundle; upgrades go through that file in a PR.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" pyinstaller
+          pip install -c packaging/constraints-release.txt -e ".[dev]" pyinstaller
+      - name: Record build dependency versions
+        run: |
+          {
+            echo "### Build dependency versions"
+            echo '```'
+            pip freeze | grep -iE '^(pyinstaller|pyside6|shiboken6|pyobjc)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       # Gate: never cut a release from a commit that fails the checks CI runs.
       # A tag can land on any commit, and workflow_dispatch could otherwise
       # bypass a red CI entirely.
