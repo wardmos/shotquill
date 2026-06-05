@@ -29,8 +29,10 @@ cross-platform architecture (Windows / Linux planned).
 
 - **Two capture hotkeys**, both customizable:
   - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: hover an
-    app window to grab just that window (real pixels, even when partly covered),
-    hover empty space to grab the whole screen, or drag a rectangle for a region
+    app window to grab just that window (real pixels, even when partly covered —
+    the hover preview lifts the window out from under whatever overlaps it, and
+    moving away restores the original view), hover empty space to grab the whole
+    screen, or drag a rectangle for a region
     with a live size readout. A pixel loupe follows the pointer — magnified
     pixels, a crosshair, and the position/colour under the cursor — so region
     boundaries land exactly where you want.

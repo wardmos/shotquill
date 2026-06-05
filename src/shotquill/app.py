@@ -197,7 +197,9 @@ class ShotquillApp(QObject):
         if screenshot is None:
             return
         geometry = self._app.primaryScreen().virtualGeometry()
-        overlay = SmartOverlay(screenshot, geometry, windows)
+        overlay = SmartOverlay(
+            screenshot, geometry, windows, window_preview=self._window_preview_image
+        )
         overlay.region_selected.connect(self._deliver_capture)
         overlay.window_selected.connect(self._capture_window_image)
         overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot, geometry))
@@ -206,6 +208,18 @@ class ShotquillApp(QObject):
         overlay.raise_()
         overlay.activateWindow()
         overlay.setFocus()
+
+    def _window_preview_image(self, window_id: int) -> QImage | None:
+        """One window's un-occluded pixels for the overlay's hover preview.
+
+        Called from the overlay's preview thread (capture_window only talks to
+        the window server, which is thread-safe; QImage is GUI-thread-free).
+        Returns None on failure — the overlay then keeps the frozen screenshot.
+        """
+        try:
+            return result_to_qimage(self._capturer.capture_window(window_id))
+        except Exception:
+            return None
 
     def _capture_window_image(self, window_id: int, origin: QRect) -> None:
         try:

@@ -30,10 +30,13 @@ def _windows():
     return [WindowInfo(window_id=42, owner="Demo", title="Doc", bounds=Rect(50, 0, 50, 50))]
 
 
-def _overlay(qtbot, native=(200, 100), logical=(100, 50), windows=None):
+def _overlay(qtbot, native=(200, 100), logical=(100, 50), windows=None, window_preview=None):
     # Native screenshot is 2x the logical geometry -> sx = sy = 2.0.
     overlay = SmartOverlay(
-        _screenshot(*native), QRect(0, 0, *logical), windows if windows is not None else []
+        _screenshot(*native),
+        QRect(0, 0, *logical),
+        windows if windows is not None else [],
+        window_preview=window_preview,
     )
     overlay.setAttribute(Qt.WA_DeleteOnClose, False)
     qtbot.addWidget(overlay)
@@ -180,6 +183,76 @@ def test_paint_with_loupe_does_not_crash(qtbot):
     _press(overlay, 10, 10)
     _move(overlay, 40, 30, buttons=Qt.LeftButton)  # drag path with loupe
     overlay.repaint()
+
+
+def test_hover_arms_preview_timer_and_leaving_disarms(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: _screenshot())
+
+    _move(overlay, 70, 25)  # onto the window
+    assert overlay._preview_timer.isActive()
+    _move(overlay, 10, 10)  # off again before the timer fires -> no fetch
+    assert not overlay._preview_timer.isActive()
+
+
+def test_no_provider_never_arms_preview_timer(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    _move(overlay, 70, 25)
+    assert not overlay._preview_timer.isActive()
+
+
+def test_preview_fetch_caches_result_from_worker_thread(qtbot):
+    calls = []
+
+    def provider(window_id):
+        calls.append(window_id)
+        return _screenshot(100, 100, "red")
+
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=provider)
+    _move(overlay, 70, 25)
+    with qtbot.waitSignal(overlay._preview_ready, timeout=2000):
+        overlay._request_preview()  # fire without waiting out the hover delay
+
+    assert calls == [42]
+    assert overlay._previews[42] is not None
+    # Hovering the same window again must not refetch.
+    _move(overlay, 10, 10)
+    _move(overlay, 70, 25)
+    assert not overlay._preview_timer.isActive()
+    assert calls == [42]
+
+
+def test_failed_preview_is_remembered_and_paint_falls_back(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: None)
+    overlay.resize(100, 50)
+    _move(overlay, 70, 25)
+    with qtbot.waitSignal(overlay._preview_ready, timeout=2000):
+        overlay._request_preview()
+
+    assert overlay._previews[42] is None
+    overlay.repaint()  # window path without a preview -> frozen screenshot
+    # A failure is not retried on the next hover.
+    _move(overlay, 10, 10)
+    _move(overlay, 70, 25)
+    assert not overlay._preview_timer.isActive()
+
+
+def test_painted_window_uses_unoccluded_preview_pixels(qtbot):
+    # A big overlay so the loupe and labels stay clear of the probed pixel.
+    window = WindowInfo(window_id=7, owner="Demo", title="", bounds=Rect(200, 0, 200, 200))
+    overlay = _overlay(
+        qtbot, native=(800, 400), logical=(400, 200), windows=[window], window_preview=None
+    )
+    overlay.resize(400, 200)
+    _move(overlay, 250, 100)
+
+    # Without a preview the (white) frozen screenshot shows through.
+    before = overlay.grab().toImage().pixelColor(220, 180)
+    assert before.red() == before.green() == before.blue() == 255
+
+    # Inject a fetched preview as the worker handoff would deliver it.
+    overlay._on_preview_ready(7, _screenshot(100, 100, "red"))
+    after = overlay.grab().toImage().pixelColor(220, 180)
+    assert (after.red(), after.green(), after.blue()) == (255, 0, 0)
 
 
 def test_paint_loupe_at_screen_corner_does_not_crash(qtbot):

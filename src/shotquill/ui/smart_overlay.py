@@ -11,13 +11,23 @@ capture mode from what the pointer does — no separate region/window hotkeys:
 
 Esc or a right-click cancels. This folds the old ``RegionOverlay`` and
 ``WindowPicker`` into one interaction.
+
+Hovered windows show a *live preview*: the frozen desktop screenshot renders
+windows as they were stacked, so a partially covered window would preview with
+its occluder baked in. Instead the overlay asks ``window_preview`` (a callable
+mapping a window id to that window's own un-occluded pixels, which the window
+server keeps even for covered windows) and composites the result over the
+window's bounds. Moving the pointer away simply falls back to the frozen
+screenshot — the real desktop's stacking order is never touched, so there is
+nothing to restore. Region and full-screen modes are unaffected.
 """
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -25,6 +35,8 @@ from shotquill.i18n import t
 from shotquill.ui.geometry import loupe_anchor, scale_rect, selection_rect, window_at_point
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from shotquill.capture.base import WindowInfo
 
 _DIM = QColor(0, 0, 0, 120)
@@ -39,6 +51,9 @@ _LOUPE_H = 90
 _LOUPE_ZOOM = 4  # one native pixel becomes a 4x4-point block inside the loupe
 _LOUPE_OFFSET = 20  # gap between the pointer and the loupe
 _LOUPE_LABEL_H = 20  # readout strip under the magnified pixels
+# How long the pointer must rest on a window before its un-occluded preview is
+# fetched — sweeping across windows must not fire a capture per window passed.
+_PREVIEW_DELAY_MS = 120
 
 
 class SmartOverlay(QWidget):
@@ -48,8 +63,17 @@ class SmartOverlay(QWidget):
     window_selected = Signal(int, QRect)
     fullscreen_selected = Signal()
     cancelled = Signal()
+    #: Internal: a fetched window preview (null QImage = fetch failed). Emitted
+    #: from the fetch thread; the queued delivery hops back to the GUI thread.
+    _preview_ready = Signal(int, QImage)
 
-    def __init__(self, screenshot: QImage, geometry: QRect, windows: list[WindowInfo]) -> None:
+    def __init__(
+        self,
+        screenshot: QImage,
+        geometry: QRect,
+        windows: list[WindowInfo],
+        window_preview: Callable[[int], QImage | None] | None = None,
+    ) -> None:
         super().__init__()
         self._screenshot = screenshot
         self._pixmap = QPixmap.fromImage(screenshot)
@@ -72,6 +96,19 @@ class SmartOverlay(QWidget):
         self._dragging = False
         self._press_hover: int | None = None
         self._activated = False
+
+        # Un-occluded per-window previews: window id -> pixmap, or None when the
+        # fetch failed (so it is not retried and painting falls back to the
+        # frozen screenshot). Fetches run on a thread — a wedged capture service
+        # must not freeze a screen-covering overlay — after a short hover rest.
+        self._window_preview = window_preview
+        self._previews: dict[int, QPixmap | None] = {}
+        self._previews_pending: set[int] = set()
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(_PREVIEW_DELAY_MS)
+        self._preview_timer.timeout.connect(self._request_preview)
+        self._preview_ready.connect(self._on_preview_ready)
 
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
@@ -123,8 +160,14 @@ class SmartOverlay(QWidget):
         bx, by, bw, bh = self._boxes[self._hover]
         sel = QRect(int(bx), int(by), int(bw), int(bh))
         source = QRectF(*scale_rect((bx, by, bw, bh), self._sx, self._sy))
-        # Restore the hovered window to full brightness, then outline it.
-        painter.drawPixmap(QRectF(sel), self._pixmap, source)
+        # Restore the hovered window to full brightness, then outline it. When
+        # its un-occluded preview has arrived, draw that instead so windows
+        # covered by others at trigger time still preview in full.
+        preview = self._previews.get(self._windows[self._hover].window_id)
+        if preview is not None:
+            painter.drawPixmap(QRectF(sel), preview, QRectF(preview.rect()))
+        else:
+            painter.drawPixmap(QRectF(sel), self._pixmap, source)
         painter.setPen(QPen(_ACCENT, 3))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(sel)
@@ -236,9 +279,54 @@ class SmartOverlay(QWidget):
                     self._dragging = True
             self.update()
             return
-        self._hover = window_at_point(self._boxes, pos.x(), pos.y())
+        hover = window_at_point(self._boxes, pos.x(), pos.y())
+        if hover != self._hover:
+            self._hover = hover
+            self._schedule_preview()
         # The loupe follows every move, so repaint unconditionally.
         self.update()
+
+    # --- un-occluded window previews ---------------------------------------
+
+    def _schedule_preview(self) -> None:
+        """(Re)arm the preview fetch for the newly hovered window, if needed."""
+        self._preview_timer.stop()
+        if self._window_preview is None or self._hover is None:
+            return
+        window_id = self._windows[self._hover].window_id
+        if window_id in self._previews or window_id in self._previews_pending:
+            return
+        self._preview_timer.start()
+
+    def _request_preview(self) -> None:
+        if self._window_preview is None or self._hover is None:
+            return
+        window_id = self._windows[self._hover].window_id
+        if window_id in self._previews or window_id in self._previews_pending:
+            return
+        self._previews_pending.add(window_id)
+        threading.Thread(
+            target=self._fetch_preview, args=(window_id,), daemon=True, name="sq-preview"
+        ).start()
+
+    def _fetch_preview(self, window_id: int) -> None:
+        """Worker thread: grab one window's pixels and hand them to the GUI thread."""
+        try:
+            image = self._window_preview(window_id)
+        except Exception:
+            image = None
+        try:
+            self._preview_ready.emit(window_id, image if image is not None else QImage())
+        except RuntimeError:
+            pass  # overlay closed (and deleted) while the fetch was in flight
+
+    def _on_preview_ready(self, window_id: int, image: QImage) -> None:
+        self._previews_pending.discard(window_id)
+        # A null image marks a failed fetch; remember it so it isn't retried and
+        # painting keeps using the frozen screenshot for that window.
+        self._previews[window_id] = None if image.isNull() else QPixmap.fromImage(image)
+        if self._hover is not None and self._windows[self._hover].window_id == window_id:
+            self.update()
 
     def leaveEvent(self, event) -> None:
         self._cursor = None
