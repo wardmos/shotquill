@@ -264,3 +264,49 @@ def test_paint_loupe_at_screen_corner_does_not_crash(qtbot):
     overlay.repaint()
     _move(overlay, 99, 49)  # opposite corner -> anchor flips on both axes
     overlay.repaint()
+
+
+def test_preview_fetches_are_single_flight(qtbot):
+    # Sweeping across windows must not pile one worker thread per window onto
+    # the window server: at most one fetch runs; the next is armed on landing.
+    import threading
+
+    release = threading.Event()
+    calls = []
+
+    def provider(window_id):
+        calls.append(window_id)
+        release.wait(timeout=5)
+        return _screenshot()
+
+    windows = [
+        WindowInfo(window_id=42, owner="A", title="", bounds=Rect(0, 0, 40, 50)),
+        WindowInfo(window_id=43, owner="B", title="", bounds=Rect(60, 0, 40, 50)),
+    ]
+    overlay = _overlay(qtbot, windows=windows, window_preview=provider)
+
+    _move(overlay, 10, 25)  # hover window 42
+    overlay._request_preview()  # bypass the hover delay
+    _move(overlay, 70, 25)  # hover window 43 while 42's fetch is stuck
+    overlay._request_preview()
+    assert calls == [42]  # second fetch deferred, not started
+
+    release.set()
+    # 42's fetch lands; the ready handler re-arms for the hovered 43.
+    qtbot.waitUntil(lambda: 43 in overlay._previews, timeout=3000)
+    assert calls == [42, 43]
+
+
+def test_no_preview_fetch_after_close(qtbot):
+    calls = []
+
+    def provider(window_id):
+        calls.append(window_id)
+        return _screenshot()
+
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=provider)
+    _move(overlay, 70, 25)
+    overlay.close()
+    overlay._request_preview()  # a queued timer tick after close must no-op
+    assert calls == []
+    assert not overlay._preview_timer.isActive()

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 
@@ -21,6 +22,25 @@ def scale_rect(
     """Scale a logical rect to integer physical pixels (e.g. for Retina cropping)."""
     x, y, w, h = rect
     return (round(x * sx), round(y * sy), round(w * sx), round(h * sy))
+
+
+def scale_rect_edges(
+    rect: tuple[float, float, float, float], sx: float, sy: float
+) -> tuple[int, int, int, int]:
+    """Scale a logical rect to physical pixels by its *edges*.
+
+    Floors the left/top edge and ceils the right/bottom edge so the physical
+    rect covers every pixel the logical selection touches. Rounding ``x`` and
+    ``width`` independently (as :func:`scale_rect` does, which is fine for
+    painting) can clip up to a pixel at the right/bottom edge under fractional
+    scale factors — use this variant when cropping.
+    """
+    x, y, w, h = rect
+    left = math.floor(x * sx)
+    top = math.floor(y * sy)
+    right = math.ceil((x + w) * sx)
+    bottom = math.ceil((y + h) * sy)
+    return (left, top, right - left, bottom - top)
 
 
 def loupe_anchor(

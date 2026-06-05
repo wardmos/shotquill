@@ -63,3 +63,29 @@ def test_window_at_point_right_and_bottom_edges_exclusive():
     # The box spans [0,100); the far edge belongs to no window.
     assert window_at_point([(0, 0, 100, 100)], 100, 50) is None
     assert window_at_point([(0, 0, 100, 100)], 0, 0) == 0
+
+
+def test_scale_rect_edges_matches_scale_rect_on_integer_products():
+    from shotquill.ui.geometry import scale_rect_edges
+
+    assert scale_rect_edges((1, 2, 3, 4), 2.0, 2.0) == (2, 4, 6, 8)
+
+
+def test_scale_rect_edges_covers_full_selection_under_fractional_scale():
+    from shotquill.ui.geometry import scale_rect_edges
+
+    # 1.5x: logical (1,1,2,2) spans physical 1.5..4.5; rounding x and width
+    # separately would give (2,2,3,3) and clip the edges. Edge conversion
+    # floors/ceils to fully cover: 1..5 -> (1,1,4,4).
+    assert scale_rect_edges((1, 1, 2, 2), 1.5, 1.5) == (1, 1, 4, 4)
+
+
+def test_scale_rect_edges_never_smaller_than_logical_span():
+    import itertools
+
+    from shotquill.ui.geometry import scale_rect_edges
+
+    for x, w, s in itertools.product((0, 1, 3, 7), (1, 2, 5), (1.0, 1.25, 1.5, 2.0)):
+        px, _, pw, _ = scale_rect_edges((x, 0, w, 1), s, 1.0)
+        assert px <= x * s
+        assert px + pw >= (x + w) * s

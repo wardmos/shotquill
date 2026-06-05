@@ -32,7 +32,13 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from shotquill.i18n import t
-from shotquill.ui.geometry import loupe_anchor, scale_rect, selection_rect, window_at_point
+from shotquill.ui.geometry import (
+    loupe_anchor,
+    scale_rect,
+    scale_rect_edges,
+    selection_rect,
+    window_at_point,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -101,9 +107,13 @@ class SmartOverlay(QWidget):
         # fetch failed (so it is not retried and painting falls back to the
         # frozen screenshot). Fetches run on a thread — a wedged capture service
         # must not freeze a screen-covering overlay — after a short hover rest.
+        # At most one fetch is in flight: sweeping the pointer across many
+        # windows must not pile worker threads onto the window server. When a
+        # fetch lands and the hover has moved on, the ready handler re-arms.
         self._window_preview = window_preview
         self._previews: dict[int, QPixmap | None] = {}
-        self._previews_pending: set[int] = set()
+        self._preview_busy = False
+        self._closed = False
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(_PREVIEW_DELAY_MS)
@@ -291,20 +301,22 @@ class SmartOverlay(QWidget):
     def _schedule_preview(self) -> None:
         """(Re)arm the preview fetch for the newly hovered window, if needed."""
         self._preview_timer.stop()
-        if self._window_preview is None or self._hover is None:
+        if self._closed or self._window_preview is None or self._hover is None:
             return
         window_id = self._windows[self._hover].window_id
-        if window_id in self._previews or window_id in self._previews_pending:
+        if window_id in self._previews:
             return
         self._preview_timer.start()
 
     def _request_preview(self) -> None:
-        if self._window_preview is None or self._hover is None:
+        if self._closed or self._window_preview is None or self._hover is None:
             return
         window_id = self._windows[self._hover].window_id
-        if window_id in self._previews or window_id in self._previews_pending:
+        if window_id in self._previews:
             return
-        self._previews_pending.add(window_id)
+        if self._preview_busy:
+            return  # single-flight: _on_preview_ready re-arms for the current hover
+        self._preview_busy = True
         threading.Thread(
             target=self._fetch_preview, args=(window_id,), daemon=True, name="sq-preview"
         ).start()
@@ -321,12 +333,25 @@ class SmartOverlay(QWidget):
             pass  # overlay closed (and deleted) while the fetch was in flight
 
     def _on_preview_ready(self, window_id: int, image: QImage) -> None:
-        self._previews_pending.discard(window_id)
+        self._preview_busy = False
+        if self._closed:
+            return
         # A null image marks a failed fetch; remember it so it isn't retried and
         # painting keeps using the frozen screenshot for that window.
         self._previews[window_id] = None if image.isNull() else QPixmap.fromImage(image)
         if self._hover is not None and self._windows[self._hover].window_id == window_id:
             self.update()
+        else:
+            # The pointer moved on while this fetch ran; arm a fetch for the
+            # now-hovered window (if any) so it isn't starved by the busy gate.
+            self._schedule_preview()
+
+    def closeEvent(self, event) -> None:
+        # No new preview fetches once the overlay is going away; an in-flight
+        # worker may still finish, but its result is dropped above.
+        self._closed = True
+        self._preview_timer.stop()
+        super().closeEvent(event)
 
     def leaveEvent(self, event) -> None:
         self._cursor = None
@@ -367,8 +392,15 @@ class SmartOverlay(QWidget):
         if sel.width() < _MIN_SIZE or sel.height() < _MIN_SIZE:
             self._cancel()
             return
-        phys = scale_rect((sel.x(), sel.y(), sel.width(), sel.height()), self._sx, self._sy)
-        cropped = self._screenshot.copy(QRect(*phys))
+        # Crop from the float drag points (not the int-snapped UI rect) and
+        # convert by edges, so fractional scale factors never clip the
+        # right/bottom pixel row; clamp to the screenshot so QImage.copy
+        # can't pad the crop with uninitialized pixels.
+        logical = selection_rect(
+            self._origin.x(), self._origin.y(), self._current.x(), self._current.y()
+        )
+        phys = QRect(*scale_rect_edges(logical, self._sx, self._sy))
+        cropped = self._screenshot.copy(phys.intersected(self._screenshot.rect()))
         # Overlay coordinates are relative to the virtual-desktop origin; shift
         # back so the emitted rect is in global screen coordinates.
         self.region_selected.emit(cropped, sel.translated(self._geometry.topLeft()))
