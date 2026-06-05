@@ -5,6 +5,9 @@ name: Package smoke
 on:
   pull_request:
     paths:
+      # The PyInstaller bundle imports the application source, so src changes
+      # (hidden imports, resources, bundle metadata) can break packaging too.
+      - "src/**"
       - "packaging/**"
       - "pyproject.toml"
       - ".github/workflows/package.yml"
