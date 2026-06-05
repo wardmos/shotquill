@@ -251,6 +251,20 @@ class SettingsDialog(QDialog):
         if path:
             self._save_dir.setText(path)
 
+    def _validate_capture_keys(self) -> bool:
+        """Refuse identical combos on the two capture hotkeys. The hotkey
+        manager keys its bindings by combo string, so the later registration
+        would silently replace the earlier one — smart capture would stop
+        working with no hint why."""
+        if (
+            self._smart.enabled()
+            and self._fullscreen.enabled()
+            and self._smart.combo() == self._fullscreen.combo()
+        ):
+            QMessageBox.warning(self, t("settings.title"), t("settings.capture_key_duplicate"))
+            return False
+        return True
+
     def _validate_editor_keys(self) -> bool:
         """Refuse finish keys that collide with built-in editor shortcuts,
         with each other, or with an enabled global capture hotkey (using the
@@ -286,7 +300,7 @@ class SettingsDialog(QDialog):
         return True
 
     def _save_and_accept(self) -> None:
-        if not self._validate_editor_keys():
+        if not (self._validate_capture_keys() and self._validate_editor_keys()):
             return  # keep the dialog open so the user can pick another key
         self._config.set_language(self._language.currentData())
         self._config.set_save_dir(self._save_dir.text())

@@ -47,6 +47,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "title.annotate": {"en": "ShotQuill — Annotate", "zh": "ShotQuill — 标注"},
     "title.copied": {"en": "ShotQuill — Copied to clipboard", "zh": "ShotQuill — 已复制到剪贴板"},
     "title.saved": {"en": "ShotQuill — Saved {name}", "zh": "ShotQuill — 已保存 {name}"},
+    "title.ocr_running": {
+        "en": "ShotQuill — Recognizing text…",
+        "zh": "ShotQuill — 正在识别文字…",
+    },
     "title.ocr_failed": {
         "en": "ShotQuill — OCR failed: {error}",
         "zh": "ShotQuill — OCR 失败：{error}",
@@ -100,6 +104,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "This key is already used by the editor (copy, save, undo, redo, or Esc). "
         "Choose another key.",
         "zh": "该按键已被编辑器占用（复制/保存/撤销/重做或 Esc），请换一个按键。",
+    },
+    "settings.capture_key_duplicate": {
+        "en": "Capture and Full Screen can't share the same hotkey — "
+        "one of them would silently stop working.",
+        "zh": "截图和全屏截图不能使用同一个快捷键，否则其中一个会静默失效。",
     },
     "settings.editor_key_duplicate": {
         "en": "Copy and save can't share the same key.",

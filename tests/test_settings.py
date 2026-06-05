@@ -115,6 +115,36 @@ def test_dialog_rejects_same_key_for_copy_and_save(qtbot, config, monkeypatch):
     assert dialog.result() != SettingsDialog.Accepted
 
 
+def test_dialog_rejects_same_combo_for_both_capture_hotkeys(qtbot, config, monkeypatch):
+    # The hotkey manager keys bindings by combo string, so identical combos
+    # would let the later registration silently replace the earlier one.
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Point fullscreen at smart capture's default <alt>+a.
+    key_index = dialog._fullscreen._key.findText("A")
+    dialog._fullscreen._key.setCurrentIndex(key_index)
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+    assert config.hotkey("fullscreen_capture") == "<alt>+s"  # unchanged
+
+
+def test_dialog_allows_same_capture_combo_when_one_is_disabled(qtbot, config, monkeypatch):
+    # A disabled hotkey never registers, so sharing its combo is harmless.
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    key_index = dialog._fullscreen._key.findText("A")
+    dialog._fullscreen._key.setCurrentIndex(key_index)
+    dialog._fullscreen._enabled.setChecked(False)
+    dialog._save_and_accept()
+    assert warnings == []
+    assert dialog.result() == SettingsDialog.Accepted
+    assert config.hotkey("fullscreen_capture") == "<alt>+a"
+    assert config.hotkey_enabled("fullscreen_capture") is False
+
+
 def test_capture_combo_sequence_maps_macos_modifiers(qtbot):
     from PySide6.QtGui import QKeySequence
 
