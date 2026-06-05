@@ -259,9 +259,10 @@ def test_window_preview_image_returns_none_on_failure(qapp, config, fakes):
     app.shutdown()
 
 
-def test_auto_save_failure_notifies_save_failed(qapp, config, fakes, monkeypatch):
-    # A failed auto-save must report "save failed", not "capture failed" — the
-    # capture itself succeeded; only the disk write went wrong.
+def test_auto_save_failure_notifies_and_falls_back_to_editor(qapp, config, fakes, monkeypatch):
+    # A failed auto-save must report "save failed" (not "capture failed") and
+    # return False so _deliver_capture opens the editor — otherwise the shot
+    # would be lost entirely, with only a notification to show for it.
     from PySide6.QtGui import QImage
 
     from shotquill import i18n
@@ -281,8 +282,30 @@ def test_auto_save_failure_notifies_save_failed(qapp, config, fakes, monkeypatch
     monkeypatch.setattr(app, "_notify", notified.append)
 
     image = QImage(4, 3, QImage.Format.Format_ARGB32)
-    assert app._auto_output(image) is True  # still handled, no editor fallback
+    assert app._auto_output(image) is False  # not handled: editor fallback
     assert notified == [i18n.t("notify.save_failed").format(error=err)]
+    app.shutdown()
+
+
+def test_deliver_capture_opens_editor_when_auto_save_fails(qapp, config, fakes, monkeypatch):
+    from PySide6.QtGui import QImage
+
+    from shotquill.output import saver
+
+    config.set_auto_save_after_capture(True)
+    config.set_auto_copy_after_capture(False)
+    app = _build_app(qapp, fakes)
+
+    def _failing_save(image, directory, image_format="png"):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(saver, "save_qimage", _failing_save)
+    monkeypatch.setattr(app, "_notify", lambda message: None)
+    opened = []
+    monkeypatch.setattr(app, "_open_editor", lambda image, origin=None: opened.append(image))
+
+    app._deliver_capture(QImage(4, 3, QImage.Format.Format_ARGB32))
+    assert len(opened) == 1
     app.shutdown()
 
 

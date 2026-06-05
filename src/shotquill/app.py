@@ -251,7 +251,13 @@ class ShotquillApp(QObject):
         self._open_editor(image, origin)
 
     def _auto_output(self, image: QImage) -> bool:
-        """Save and/or copy the raw shot per config; return True if it handled it."""
+        """Save and/or copy the raw shot per config; return True if it handled it.
+
+        A failed auto-save returns False so the editor opens as a fallback —
+        otherwise the shot would be lost entirely (a notification is no place
+        to keep an image). Any auto-copy has already run by then, so the
+        clipboard is intact either way.
+        """
         save = self._config.auto_save_after_capture()
         copy = self._config.auto_copy_after_capture()
         if not (save or copy):
@@ -267,6 +273,7 @@ class ShotquillApp(QObject):
                 save_qimage(image, self._config.save_dir(), self._config.image_format())
             except OSError as exc:
                 self._notify(t("notify.save_failed").format(error=exc))
+                return False
         return True
 
     def _open_editor(self, image: QImage, origin: QRect | None = None) -> None:
