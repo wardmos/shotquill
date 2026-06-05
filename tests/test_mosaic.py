@@ -54,3 +54,28 @@ def test_mosaic_item_ignores_empty_rect(qapp):
     item = MosaicItem(_pixmap(50, 50))
     item.update_rect(QRect(0, 0, 0, 0))
     assert item.pixmap().isNull()
+
+
+def test_mosaic_item_clears_stale_pixmap_when_drag_leaves_background(qapp):
+    # A drag that once had a valid region and then leaves the background must
+    # not keep showing the old pixelated patch (it would survive into export).
+    item = MosaicItem(_pixmap(100, 80))
+    item.update_rect(QRect(10, 10, 30, 20))
+    assert item.has_region() is True
+    item.update_rect(QRect(200, 200, 10, 10))  # no intersection
+    assert item.pixmap().isNull()
+    assert item.has_region() is False
+
+
+def test_fresh_mosaic_item_has_no_region(qapp):
+    assert MosaicItem(_pixmap(50, 50)).has_region() is False
+
+
+def test_canvas_treats_regionless_mosaic_as_negligible(qapp):
+    from shotquill.ui.canvas import AnnotationCanvas
+
+    item = MosaicItem(_pixmap(100, 80))
+    item.update_rect(QRect(10, 10, 30, 20))
+    assert AnnotationCanvas._is_negligible(item) is False
+    item.update_rect(QRect(200, 200, 10, 10))  # drag ended outside
+    assert AnnotationCanvas._is_negligible(item) is True

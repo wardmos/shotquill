@@ -226,3 +226,41 @@ def test_repeated_focus_out_after_commit_is_idempotent(qtbot):
     _finish_editing(item)
     assert len(_text_items(canvas)) == 1
     assert canvas.undo_stack().count() == 1
+
+
+def test_mosaic_drag_throttles_live_updates_but_release_renders_final_rect(qtbot, monkeypatch):
+    # Live pixelation is capped (expensive on big shots); the release must
+    # still render the exact final rect even if the last moves were skipped.
+    import types
+
+    from shotquill.ui import canvas as canvas_module
+    from shotquill.ui.items.mosaic import MosaicItem
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        canvas_module, "time", types.SimpleNamespace(monotonic=lambda: clock["now"])
+    )
+    updates = []
+    real_update = MosaicItem.update_rect
+
+    def _tracking_update(self, rect):
+        updates.append(rect)
+        real_update(self, rect)
+
+    monkeypatch.setattr(MosaicItem, "update_rect", _tracking_update)
+
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.MOSAIC)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(10, 10))
+    qtbot.mouseMove(viewport, pos=QPoint(30, 30))  # first move renders
+    assert len(updates) == 1
+    clock["now"] += 0.001  # within the throttle window
+    qtbot.mouseMove(viewport, pos=QPoint(50, 40))  # skipped by the throttle
+    qtbot.mouseMove(viewport, pos=QPoint(70, 50))  # skipped by the throttle
+    assert len(updates) == 1
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(70, 50))
+    # Release renders the latest drag rect exactly.
+    assert len(updates) == 2
+    assert updates[-1].width() > updates[0].width()
+    assert canvas.undo_stack().count() == 1

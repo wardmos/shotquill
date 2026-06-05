@@ -41,10 +41,20 @@ class MosaicItem(QGraphicsPixmapItem):
         super().__init__()
         self._background = background
         self._block = block
+        self._has_region = False
+
+    def has_region(self) -> bool:
+        """Whether the item currently shows a valid pixelated region."""
+        return self._has_region
 
     def update_rect(self, rect: QRect) -> None:
         rect = rect.intersected(self._background.rect())
         if rect.width() < 1 or rect.height() < 1:
+            # The drag left the background entirely: clear any earlier pixmap
+            # so a stale mosaic can't survive into undo/export.
+            self.setPixmap(QPixmap())
+            self._has_region = False
             return
         self.setPixmap(pixelate(self._background.copy(rect), self._block))
         self.setPos(rect.topLeft())
+        self._has_region = True

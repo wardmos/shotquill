@@ -9,6 +9,7 @@ screenshot plus annotations back to a QImage for copy/save.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
@@ -44,6 +45,10 @@ if TYPE_CHECKING:
 
 _DEFAULT_COLOR = "#ff3b30"
 _NEGLIGIBLE = 3.0
+# Pixelating the whole selection on every mouse move is expensive on big
+# (Retina) shots; cap live mosaic regeneration to roughly this rate. The
+# release handler always renders the final rect, so no precision is lost.
+_MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
 
 
 class _TextItem(QGraphicsTextItem):
@@ -106,6 +111,8 @@ class AnnotationCanvas(QGraphicsView):
         self._temp_item: QGraphicsItem | None = None
         self._path: QPainterPath | None = None
         self._start = QPointF()
+        self._mosaic_rect = None  # latest drag rect; release renders it exactly
+        self._mosaic_last = 0.0  # monotonic time of the last live mosaic render
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -203,6 +210,8 @@ class AnnotationCanvas(QGraphicsView):
             item = arrow_item
         elif tool == Tool.MOSAIC:
             item = MosaicItem(self._background_pixmap)
+            self._mosaic_rect = None
+            self._mosaic_last = 0.0  # first move renders immediately
 
         if item is not None:
             item.setZValue(self._next_z())
@@ -224,7 +233,11 @@ class AnnotationCanvas(QGraphicsView):
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))
         elif tool == Tool.MOSAIC:
-            self._temp_item.update_rect(QRectF(self._start, pos).normalized().toRect())
+            self._mosaic_rect = QRectF(self._start, pos).normalized().toRect()
+            now = time.monotonic()
+            if now - self._mosaic_last >= _MOSAIC_PREVIEW_INTERVAL:
+                self._mosaic_last = now
+                self._temp_item.update_rect(self._mosaic_rect)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._temp_item is None:
@@ -234,6 +247,11 @@ class AnnotationCanvas(QGraphicsView):
         item = self._temp_item
         self._temp_item = None
         self._path = None
+
+        if isinstance(item, MosaicItem) and self._mosaic_rect is not None:
+            # The live preview is throttled; render the final drag rect exactly.
+            item.update_rect(self._mosaic_rect)
+            self._mosaic_rect = None
 
         if self._is_negligible(item):
             self._scene.removeItem(item)
@@ -274,6 +292,10 @@ class AnnotationCanvas(QGraphicsView):
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
         if isinstance(item, QGraphicsLineItem):  # also covers ArrowItem
             return item.line().length() < _NEGLIGIBLE
+        if isinstance(item, MosaicItem):
+            # Explicit validity: a drag that ended outside the background has
+            # no region even if an earlier pixmap once gave it a bounding rect.
+            return not item.has_region()
         if isinstance(item, (QGraphicsPathItem, QGraphicsPixmapItem)):
             rect = item.boundingRect()
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
