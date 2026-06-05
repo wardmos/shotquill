@@ -180,7 +180,10 @@ class EditorWindow(QMainWindow):
 
     def _save(self) -> None:
         # Save to the configured folder, then close — shared by the toolbar
-        # button and the finish key.
+        # button and the finish key. On failure keep the editor open so the
+        # annotations aren't lost.
+        from PySide6.QtWidgets import QMessageBox
+
         from shotquill.output.saver import save_qimage
 
         try:
