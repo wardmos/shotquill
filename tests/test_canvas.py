@@ -148,11 +148,81 @@ def test_export_after_drawing_keeps_background_size(qtbot):
     assert (image.width(), image.height()) == (120, 90)
 
 
-def test_text_tool_creates_item_on_single_click(qtbot):
-    canvas = _canvas(qtbot)
+def _text_items(canvas):
+    from PySide6.QtWidgets import QGraphicsTextItem
+
+    return [item for item in canvas._scene.items() if isinstance(item, QGraphicsTextItem)]
+
+
+def _click_text_tool(qtbot, canvas):
     canvas.set_tool(Tool.TEXT)
     viewport = canvas.viewport()
-    # Text is placed on press (no drag needed) and is immediately undoable.
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(30, 30))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(30, 30))
+
+
+def _finish_editing(item):
+    """Deliver the focus-out that ends text editing.
+
+    Offscreen the scene is never active, so items never truly gain focus and
+    ``clearFocus`` won't emit the event; dispatch it directly to exercise the
+    ``_TextItem.focusOutEvent`` override the real desktop relies on.
+    """
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QFocusEvent
+
+    item.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+
+
+def test_text_tool_creates_item_on_single_click(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    assert len(_text_items(canvas)) == 1
+    # The undo entry is deferred until editing finishes (focus-out): an item
+    # that may yet be discarded as empty must not be undoable.
+    assert canvas.undo_stack().count() == 0
+
+
+def test_empty_text_item_is_discarded_on_focus_out(qtbot):
+    # A stray click with the text tool must not leave an invisible, selectable,
+    # undoable item behind.
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    _finish_editing(_text_items(canvas)[0])
+    assert _text_items(canvas) == []
+    assert canvas.undo_stack().count() == 0
+
+
+def test_text_item_with_content_becomes_undoable_on_focus_out(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText("note")
+    _finish_editing(item)
+    assert len(_text_items(canvas)) == 1
+    assert canvas.undo_stack().count() == 1
+    canvas.undo_stack().undo()
+    assert _text_items(canvas) == []
+
+
+def test_whitespace_only_text_item_is_discarded_on_focus_out(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText("   ")
+    _finish_editing(item)
+    assert _text_items(canvas) == []
+    assert canvas.undo_stack().count() == 0
+
+
+def test_repeated_focus_out_after_commit_is_idempotent(qtbot):
+    # Qt can deliver more focus-out events later (e.g. when the scene clears
+    # focus during removal); they must not double-push or discard the item.
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText("note")
+    _finish_editing(item)
+    _finish_editing(item)
+    assert len(_text_items(canvas)) == 1
     assert canvas.undo_stack().count() == 1

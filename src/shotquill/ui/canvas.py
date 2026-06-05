@@ -9,6 +9,8 @@ screenshot plus annotations back to a QImage for copy/save.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
@@ -37,8 +39,31 @@ from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
 from shotquill.ui.tools import Tool
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 _DEFAULT_COLOR = "#ff3b30"
 _NEGLIGIBLE = 3.0
+
+
+class _TextItem(QGraphicsTextItem):
+    """A text annotation that defers its undo entry until editing finishes.
+
+    Created empty and focused for typing; when focus leaves, the canvas decides
+    its fate — discard if still empty (a stray click must not leave an
+    invisible, undoable item behind), otherwise push it onto the undo stack.
+    ``committed`` flips once that decision is made so re-entrant focus-out
+    events (e.g. from the removal itself) do nothing.
+    """
+
+    def __init__(self, on_editing_finished: Callable[[_TextItem], None]) -> None:
+        super().__init__()
+        self.committed = False
+        self._on_editing_finished = on_editing_finished
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().focusOutEvent(event)
+        self._on_editing_finished(self)
 
 
 class _AddItemCommand(QUndoCommand):
@@ -218,7 +243,9 @@ class AnnotationCanvas(QGraphicsView):
         self._undo.push(_AddItemCommand(self._scene, item))
 
     def _create_text(self, pos: QPointF) -> None:
-        item = QGraphicsTextItem()
+        # The undo entry is deferred to _finish_text: only text that survives
+        # its first focus-out (i.e. is non-empty) becomes part of the document.
+        item = _TextItem(self._finish_text)
         item.setDefaultTextColor(self._color)
         font = QFont()
         font.setPointSize(max(self._width * 4, 16))
@@ -228,8 +255,17 @@ class AnnotationCanvas(QGraphicsView):
         item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
         item.setZValue(self._next_z())
         self._scene.addItem(item)
-        self._undo.push(_AddItemCommand(self._scene, item))
         item.setFocus()
+
+    def _finish_text(self, item: _TextItem) -> None:
+        """First focus-out commits a text item: empty → discarded, else undoable."""
+        if item.committed:
+            return
+        item.committed = True
+        if not item.toPlainText().strip():
+            self._scene.removeItem(item)
+            return
+        self._undo.push(_AddItemCommand(self._scene, item))
 
     @staticmethod
     def _is_negligible(item: QGraphicsItem) -> bool:
