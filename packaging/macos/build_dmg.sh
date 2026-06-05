@@ -78,6 +78,7 @@ build_one() {
     --icon "$ICNS" \
     --paths src \
     --strip \
+    --optimize 2 \
     --target-arch "$arch" \
     --workpath "build/$arch" \
     --distpath "dist/$arch" \
@@ -97,6 +98,26 @@ build_one() {
     || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
   "$PB" -c "Set :CFBundleVersion $VERSION" "$plist" 2>/dev/null \
     || "$PB" -c "Add :CFBundleVersion string $VERSION" "$plist"
+
+  # Trim payload --exclude-module cannot reach (it works per-module, not
+  # per-file). Prune both Contents/Frameworks and Contents/Resources:
+  # PyInstaller 6 mirrors each Qt tree into the other via symlinks, and a
+  # dangling leftover half would break the codesign below.
+  #   - translations: the UI is English-only.
+  #   - imageformats plugins: ShotQuill only writes PNG (built into QtGui)
+  #     and JPEG (libqjpeg); tiff/webp/gif/... are dead weight.
+  local qtdir
+  for qtdir in "$app/Contents/Frameworks/PySide6/Qt" "$app/Contents/Resources/PySide6/Qt"; do
+    rm -rf "$qtdir/translations"
+    if [ -d "$qtdir/plugins/imageformats" ]; then
+      find "$qtdir/plugins/imageformats" \( -type f -o -type l \) ! -name "libqjpeg*" -delete
+    fi
+  done
+  # Layout-drift guard: if PyInstaller relocates the plugins the prune above
+  # silently no-ops, and a later Qt/PyInstaller bump could also drop JPEG
+  # support unnoticed. Fail the build instead.
+  find "$app" -name "libqjpeg*" -type f | grep -q . \
+    || { echo "error: JPEG imageformat plugin missing after prune" >&2; exit 1; }
 
   # Ad-hoc signature: required to run on Apple Silicon; embeds no identity.
   codesign --force --deep --sign - "$app"
