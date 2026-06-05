@@ -18,11 +18,14 @@ _FLASH_DURATION_MS = 180
 
 
 class CaptureFeedback:
-    """Plays a capture flash and/or sound; keeps the flash window alive while it fades."""
+    """Plays a capture flash and/or sound; keeps each flash window alive while it fades."""
 
     def __init__(self) -> None:
-        self._flash: QWidget | None = None
-        self._animation: QPropertyAnimation | None = None
+        # Flashes still fading. Rapid captures can overlap two of them, so each
+        # animation closes only its own window — a shared "current flash" slot
+        # would let an old animation close the new flash and leak the old one.
+        # This list just keeps Python references alive until close/deletion.
+        self._flashes: list[QWidget] = []
 
     def trigger(self, geometry: QRect, *, flash: bool, sound: bool) -> None:
         """Show the flash over ``geometry`` and/or beep, per the given toggles."""
@@ -46,17 +49,14 @@ class CaptureFeedback:
         animation.setDuration(_FLASH_DURATION_MS)
         animation.setStartValue(_FLASH_PEAK_OPACITY)
         animation.setEndValue(0.0)
-        animation.finished.connect(self._on_finished)
+        animation.finished.connect(window.close)
+        window.destroyed.connect(lambda: self._discard(window))
 
-        self._flash = window
-        self._animation = animation
-
+        self._flashes.append(window)
         window.setWindowOpacity(_FLASH_PEAK_OPACITY)
         window.show()
         animation.start()
 
-    def _on_finished(self) -> None:
-        if self._flash is not None:
-            self._flash.close()
-        self._flash = None
-        self._animation = None
+    def _discard(self, window: QWidget) -> None:
+        if window in self._flashes:
+            self._flashes.remove(window)
