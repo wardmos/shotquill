@@ -123,6 +123,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "Choose another key.",
         "zh": "该按键与全局截图热键相同，会同时触发截图和编辑器动作，请换一个按键。",
     },
+    "settings.save_dir_invalid": {
+        "en": "This save folder can't be used — it must be a writable folder "
+        "(or one that can be created). Choose another folder.",
+        "zh": "无法使用该保存目录：必须是可写目录（或可以创建的目录），请换一个。",
+    },
     "settings.language": {"en": "Language", "zh": "界面语言"},
     "settings.browse": {"en": "Browse…", "zh": "浏览…"},
     "settings.choose_dir": {"en": "Choose Save Folder", "zh": "选择保存目录"},

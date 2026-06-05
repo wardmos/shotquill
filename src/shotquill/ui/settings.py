@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
@@ -51,6 +53,25 @@ def _capture_combo_sequence(combo: str) -> QKeySequence:
     parts = [qt for mod, qt in _PYNPUT_TO_QT_MODIFIER.items() if parsed[mod]]
     parts.append(str(parsed["key"]).upper())
     return QKeySequence("+".join(parts))
+
+
+def _is_usable_save_dir(text: str) -> bool:
+    """Whether ``text`` names a directory a capture could be saved into.
+
+    Accepts an existing writable directory, or a path that the saver could
+    create on demand (its nearest existing ancestor is a writable directory).
+    Auto-save is on by default, so a folder that can't take a file would
+    otherwise only surface as a failure on the next capture.
+    """
+    if not text.strip():
+        return False
+    probe = Path(text.strip()).expanduser()
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:  # ran out of ancestors (nonexistent root/anchor)
+            return False
+        probe = parent
+    return probe.is_dir() and os.access(probe, os.W_OK)
 
 
 def _reserved_editor_sequences() -> list[QKeySequence]:
@@ -251,6 +272,12 @@ class SettingsDialog(QDialog):
         if path:
             self._save_dir.setText(path)
 
+    def _validate_save_dir(self) -> bool:
+        if not _is_usable_save_dir(self._save_dir.text()):
+            QMessageBox.warning(self, t("settings.title"), t("settings.save_dir_invalid"))
+            return False
+        return True
+
     def _validate_capture_keys(self) -> bool:
         """Refuse identical combos on the two capture hotkeys. The hotkey
         manager keys its bindings by combo string, so the later registration
@@ -300,8 +327,12 @@ class SettingsDialog(QDialog):
         return True
 
     def _save_and_accept(self) -> None:
-        if not (self._validate_capture_keys() and self._validate_editor_keys()):
-            return  # keep the dialog open so the user can pick another key
+        if not (
+            self._validate_save_dir()
+            and self._validate_capture_keys()
+            and self._validate_editor_keys()
+        ):
+            return  # keep the dialog open so the user can fix the offending field
         self._config.set_language(self._language.currentData())
         self._config.set_save_dir(self._save_dir.text())
         self._config.set_image_format(self._format.currentText())

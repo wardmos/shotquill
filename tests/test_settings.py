@@ -293,3 +293,68 @@ def test_dialog_save_persists_hotkey_enabled_state(qtbot, config):
     dialog._save_and_accept()
     assert config.hotkey_enabled("smart_capture") is False
     assert config.hotkey_enabled("fullscreen_capture") is True
+
+
+def test_is_usable_save_dir_accepts_existing_writable_dir(tmp_path):
+    from shotquill.ui.settings import _is_usable_save_dir
+
+    assert _is_usable_save_dir(str(tmp_path)) is True
+
+
+def test_is_usable_save_dir_accepts_creatable_path(tmp_path):
+    from shotquill.ui.settings import _is_usable_save_dir
+
+    # Doesn't exist yet, but the saver can mkdir it under the writable tmp dir.
+    assert _is_usable_save_dir(str(tmp_path / "shots" / "2026")) is True
+
+
+def test_is_usable_save_dir_rejects_empty_and_whitespace():
+    from shotquill.ui.settings import _is_usable_save_dir
+
+    assert _is_usable_save_dir("") is False
+    assert _is_usable_save_dir("   ") is False
+
+
+def test_is_usable_save_dir_rejects_a_file_path(tmp_path):
+    from shotquill.ui.settings import _is_usable_save_dir
+
+    file_path = tmp_path / "shot.png"
+    file_path.touch()
+    assert _is_usable_save_dir(str(file_path)) is False
+
+
+def test_is_usable_save_dir_rejects_unwritable_dir(tmp_path):
+    import os
+
+    from shotquill.ui.settings import _is_usable_save_dir
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        if os.access(locked, os.W_OK):  # e.g. running as root
+            pytest.skip("cannot create an unwritable directory here")
+        assert _is_usable_save_dir(str(locked)) is False
+    finally:
+        locked.chmod(0o755)
+
+
+def test_dialog_rejects_invalid_save_dir(qtbot, config, monkeypatch, tmp_path):
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    original = config.save_dir()
+    dialog._save_dir.setText("")
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+    assert config.save_dir() == original  # unchanged
+
+
+def test_dialog_accepts_valid_save_dir(qtbot, config, tmp_path):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._save_dir.setText(str(tmp_path / "shots"))
+    dialog._save_and_accept()
+    assert dialog.result() == SettingsDialog.Accepted
+    assert config.save_dir() == str(tmp_path / "shots")
