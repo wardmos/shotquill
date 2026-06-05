@@ -66,8 +66,10 @@ def _finish_tip(sequence: QKeySequence, label: str) -> str:
 
 
 class EditorWindow(QMainWindow):
-    #: Emitted with the annotated image when the user pins the shot to the desktop.
-    pin_requested = Signal(QImage)
+    #: Emitted when the user pins the shot to the desktop: the annotated image
+    #: plus the capture's on-screen rect (or None) so the pin can size itself
+    #: for the screen the shot came from.
+    pin_requested = Signal(QImage, object)
     #: Internal: OCR finished on its worker thread — (lines, error). The queued
     #: delivery hops back to the GUI thread before touching clipboard/title.
     _ocr_done = Signal(object, object)
@@ -207,7 +209,7 @@ class EditorWindow(QMainWindow):
     def _pin(self) -> None:
         # Hand the annotated image to the app (which keeps the pin alive), then
         # close the editor — the floating pin replaces it.
-        self.pin_requested.emit(self._canvas.export_image())
+        self.pin_requested.emit(self._canvas.export_image(), self._origin)
         self.close()
 
     def _ocr(self) -> None:

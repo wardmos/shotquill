@@ -284,8 +284,8 @@ class ShotquillApp(QObject):
         editor.raise_()
         editor.activateWindow()
 
-    def _pin_image(self, image: QImage) -> None:
-        pinned = PinnedWindow(image)
+    def _pin_image(self, image: QImage, origin: QRect | None = None) -> None:
+        pinned = PinnedWindow(image, origin)
         self._track(pinned)
         pinned.show()
         pinned.raise_()

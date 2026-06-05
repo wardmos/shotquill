@@ -21,14 +21,20 @@ from PySide6.QtWidgets import QWidget
 from shotquill.i18n import t
 
 if TYPE_CHECKING:
-    from PySide6.QtGui import QImage
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage, QScreen
 
 _MAX_SCREEN_FRACTION = 0.8
 
 
-def _fit_pixmap(image: QImage) -> QPixmap:
-    """Build a display pixmap: tagged with the screen DPR and capped to the screen."""
-    screen = QGuiApplication.primaryScreen()
+def _fit_pixmap(image: QImage, screen: QScreen | None = None) -> QPixmap:
+    """Build a display pixmap: tagged with the screen DPR and capped to the screen.
+
+    ``screen`` should be the display the shot came from — on mixed-DPR
+    multi-monitor setups the primary screen's ratio would size shots from the
+    other display wrongly. Falls back to the primary screen when unknown.
+    """
+    screen = screen or QGuiApplication.primaryScreen()
     dpr = screen.devicePixelRatio() if screen is not None else 1.0
     pixmap = QPixmap.fromImage(image)
 
@@ -52,7 +58,7 @@ def _fit_pixmap(image: QImage) -> QPixmap:
 class PinnedWindow(QWidget):
     """A draggable, always-on-top window showing a pinned screenshot."""
 
-    def __init__(self, image: QImage) -> None:
+    def __init__(self, image: QImage, origin: QRect | None = None) -> None:
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
@@ -60,7 +66,11 @@ class PinnedWindow(QWidget):
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setToolTip(t("pin.tip"))
 
-        self._pixmap = _fit_pixmap(image)
+        # ``origin`` is the shot's on-screen rect (logical, global): use its
+        # screen for DPR/size so a shot from a secondary display fits *that*
+        # display, not the primary one.
+        screen = QGuiApplication.screenAt(origin.center()) if origin is not None else None
+        self._pixmap = _fit_pixmap(image, screen)
         self.setFixedSize(self._pixmap.deviceIndependentSize().toSize())
         self._drag_offset: QPoint | None = None
 

@@ -128,3 +128,29 @@ def test_drag_moves_the_window(qtbot):
     )
     QApplication.sendEvent(window, release)
     assert window._drag_offset is None
+
+
+def test_fit_pixmap_uses_the_given_screens_dpr(qtbot):
+    from PySide6.QtCore import QRect as _QRect
+
+    from shotquill.ui.pinned import _fit_pixmap
+
+    class _FakeScreen:
+        def devicePixelRatio(self):
+            return 2.0
+
+        def availableGeometry(self):
+            return _QRect(0, 0, 5000, 5000)
+
+    pixmap = _fit_pixmap(_image(100, 80), _FakeScreen())
+    assert pixmap.devicePixelRatio() == 2.0
+
+
+def test_pinned_window_accepts_an_origin_rect(qtbot):
+    from PySide6.QtCore import QRect as _QRect
+
+    # The origin selects the source screen (single screen offscreen: primary).
+    window = PinnedWindow(_image(100, 80), _QRect(0, 0, 50, 40))
+    qtbot.addWidget(window)
+    dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+    assert window.width() == round(100 / dpr)

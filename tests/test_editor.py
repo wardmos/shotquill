@@ -23,8 +23,8 @@ def _image(width=60, height=40, color="white") -> QImage:
     return image
 
 
-def _editor(qtbot, config):
-    window = EditorWindow(_image(), config)
+def _editor(qtbot, config, origin=None):
+    window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     return window
 
@@ -71,14 +71,19 @@ def test_save_failure_keeps_editor_open(qtbot, config, monkeypatch):
     assert "disk full" in str(warnings[0])
 
 
-def test_pin_emits_image_and_closes(qtbot, config):
-    window = _editor(qtbot, config)
+def test_pin_emits_image_with_origin_and_closes(qtbot, config):
+    from PySide6.QtCore import QRect
+
+    origin = QRect(10, 20, 4, 3)
+    window = _editor(qtbot, config, origin=origin)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
     received = []
-    window.pin_requested.connect(received.append)
+    window.pin_requested.connect(lambda image, org: received.append((image, org)))
     window._pin()
     assert len(received) == 1
-    assert isinstance(received[0], QImage)
+    image, got_origin = received[0]
+    assert isinstance(image, QImage)
+    assert got_origin == origin
     assert not window.isVisible()
 
 
