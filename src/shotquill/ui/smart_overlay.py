@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from shotquill.i18n import t
-from shotquill.ui.geometry import scale_rect, selection_rect, window_at_point
+from shotquill.ui.geometry import loupe_anchor, scale_rect, selection_rect, window_at_point
 
 if TYPE_CHECKING:
     from shotquill.capture.base import WindowInfo
@@ -33,6 +33,12 @@ _MIN_SIZE = 2
 # How far the pointer must travel after a press before we treat it as a region
 # drag rather than a click on the hovered window / full screen.
 _DRAG_THRESHOLD = 4
+# Pixel loupe that follows the pointer so region edges can be placed precisely.
+_LOUPE_W = 120  # loupe display size, logical points
+_LOUPE_H = 90
+_LOUPE_ZOOM = 4  # one native pixel becomes a 4x4-point block inside the loupe
+_LOUPE_OFFSET = 20  # gap between the pointer and the loupe
+_LOUPE_LABEL_H = 20  # readout strip under the magnified pixels
 
 
 class SmartOverlay(QWidget):
@@ -60,6 +66,7 @@ class SmartOverlay(QWidget):
         self._sy = screenshot.height() / max(geometry.height(), 1)
 
         self._hover: int | None = None  # window under the pointer, or None for full screen
+        self._cursor: QPointF | None = None  # last pointer position, drives the loupe
         self._origin = None
         self._current = None
         self._dragging = False
@@ -97,6 +104,9 @@ class SmartOverlay(QWidget):
             self._paint_window(painter)
         else:
             self._paint_fullscreen(painter)
+
+        if self._cursor is not None:
+            self._paint_loupe(painter)
 
     def _paint_region(self, painter: QPainter) -> None:
         sel = self._selection()
@@ -150,6 +160,52 @@ class SmartOverlay(QWidget):
         painter.setPen(Qt.white)
         painter.drawText(box.adjusted(8, 0, -8, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
 
+    def _paint_loupe(self, painter: QPainter) -> None:
+        cx, cy = self._cursor.x(), self._cursor.y()
+        # Native pixel under the pointer (clamped so edge hovering stays valid).
+        px = min(max(int(cx * self._sx), 0), self._screenshot.width() - 1)
+        py = min(max(int(cy * self._sy), 0), self._screenshot.height() - 1)
+        ax, ay = loupe_anchor(
+            cx, cy, _LOUPE_W, _LOUPE_H + _LOUPE_LABEL_H, self.width(), self.height(), _LOUPE_OFFSET
+        )
+        view = QRectF(ax, ay, _LOUPE_W, _LOUPE_H)
+
+        # A native-resolution patch centred on the pointer, blown up without
+        # smoothing so individual pixels (and thus the exact region boundary)
+        # stay visible. Near screen edges the patch is clamped to the
+        # screenshot and the remainder left dark.
+        painter.fillRect(view, QColor(0, 0, 0, 220))
+        src_w = _LOUPE_W / _LOUPE_ZOOM
+        src_h = _LOUPE_H / _LOUPE_ZOOM
+        source = QRectF(px + 0.5 - src_w / 2, py + 0.5 - src_h / 2, src_w, src_h)
+        clamped = source.intersected(QRectF(0, 0, self._pixmap.width(), self._pixmap.height()))
+        if not clamped.isEmpty():
+            target = QRectF(
+                ax + (clamped.x() - source.x()) * _LOUPE_ZOOM,
+                ay + (clamped.y() - source.y()) * _LOUPE_ZOOM,
+                clamped.width() * _LOUPE_ZOOM,
+                clamped.height() * _LOUPE_ZOOM,
+            )
+            painter.drawPixmap(target, self._pixmap, clamped)
+
+        # Crosshair over the centre pixel, then a frame around the loupe.
+        painter.setPen(QPen(_ACCENT, 1))
+        center = view.center()
+        painter.drawLine(QPointF(view.left(), center.y()), QPointF(view.right(), center.y()))
+        painter.drawLine(QPointF(center.x(), view.top()), QPointF(center.x(), view.bottom()))
+        painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(view)
+
+        # Pointer position (native pixels) and the colour under it.
+        color = self._screenshot.pixelColor(px, py)
+        label = f"({px}, {py})  {color.name().upper()}"
+        box = QRectF(ax, ay + _LOUPE_H, _LOUPE_W, _LOUPE_LABEL_H)
+        painter.fillRect(box, QColor(0, 0, 0, 200))
+        painter.setFont(QFont("", 10))
+        painter.setPen(Qt.white)
+        painter.drawText(box, Qt.AlignCenter, label)
+
     def _draw_hint(self, painter: QPainter) -> None:
         hint = t("smart.hint")
         painter.setFont(QFont("", 14))
@@ -170,6 +226,7 @@ class SmartOverlay(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        self._cursor = pos
         if self._origin is not None:
             self._current = pos
             if not self._dragging:
@@ -179,10 +236,14 @@ class SmartOverlay(QWidget):
                     self._dragging = True
             self.update()
             return
-        hover = window_at_point(self._boxes, pos.x(), pos.y())
-        if hover != self._hover:
-            self._hover = hover
-            self.update()
+        self._hover = window_at_point(self._boxes, pos.x(), pos.y())
+        # The loupe follows every move, so repaint unconditionally.
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        self._cursor = None
+        self.update()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.RightButton:

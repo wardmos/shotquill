@@ -23,6 +23,24 @@ def scale_rect(
     return (round(x * sx), round(y * sy), round(w * sx), round(h * sy))
 
 
+def loupe_anchor(
+    x: float, y: float, w: float, h: float, bound_w: float, bound_h: float, offset: float
+) -> tuple[float, float]:
+    """Top-left corner for a loupe of ``w``x``h`` following the pointer at ``(x, y)``.
+
+    The loupe sits below-right of the pointer by ``offset`` and flips to the
+    other side of each axis independently when it would leave the
+    ``bound_w``x``bound_h`` area, so it never covers the pixels being inspected.
+    """
+    ax = x + offset
+    if ax + w > bound_w:
+        ax = x - offset - w
+    ay = y + offset
+    if ay + h > bound_h:
+        ay = y - offset - h
+    return (max(ax, 0.0), max(ay, 0.0))
+
+
 def window_at_point(
     boxes: Sequence[tuple[float, float, float, float]], x: float, y: float
 ) -> int | None:

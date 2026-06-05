@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-from shotquill.ui.geometry import scale_rect, selection_rect, window_at_point
+from shotquill.ui.geometry import loupe_anchor, scale_rect, selection_rect, window_at_point
 
 
 def test_selection_rect_normalizes_reverse_drag():
@@ -18,6 +18,29 @@ def test_scale_rect_applies_device_pixel_ratio():
 
 def test_scale_rect_rounds():
     assert scale_rect((0, 0, 1, 1), 1.5, 1.5) == (0, 0, 2, 2)
+
+
+def test_loupe_anchor_sits_below_right_of_pointer():
+    assert loupe_anchor(100, 100, 120, 110, 1000, 800, 20) == (120, 120)
+
+
+def test_loupe_anchor_flips_left_near_right_edge():
+    # 950 + 20 + 120 would overflow the 1000-wide bound -> flip to the left.
+    assert loupe_anchor(950, 100, 120, 110, 1000, 800, 20) == (950 - 20 - 120, 120)
+
+
+def test_loupe_anchor_flips_up_near_bottom_edge():
+    assert loupe_anchor(100, 780, 120, 110, 1000, 800, 20) == (120, 780 - 20 - 110)
+
+
+def test_loupe_anchor_axes_flip_independently():
+    # Bottom-right corner: both axes flip.
+    assert loupe_anchor(990, 790, 120, 110, 1000, 800, 20) == (990 - 140, 790 - 130)
+
+
+def test_loupe_anchor_clamps_to_origin_when_bounds_too_small():
+    # A bound smaller than the loupe on both sides: never go negative.
+    assert loupe_anchor(5, 5, 120, 110, 100, 100, 20) == (0, 0)
 
 
 _BOXES = [(0, 0, 100, 100), (50, 50, 100, 100)]

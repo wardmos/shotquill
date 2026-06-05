@@ -31,7 +31,9 @@ cross-platform architecture (Windows / Linux planned).
   - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: hover an
     app window to grab just that window (real pixels, even when partly covered),
     hover empty space to grab the whole screen, or drag a rectangle for a region
-    with a live size readout.
+    with a live size readout. A pixel loupe follows the pointer — magnified
+    pixels, a crosshair, and the position/colour under the cursor — so region
+    boundaries land exactly where you want.
   - **Full screen** (`⌥S`) — every display at once, instantly.
 - **Hands-free by default** — a capture is saved to your folder **and** copied to
   the clipboard automatically, no extra keypress. Fully configurable (see below).

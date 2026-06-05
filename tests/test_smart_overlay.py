@@ -155,3 +155,39 @@ def test_paint_before_interaction_does_not_crash(qtbot):
     overlay.resize(100, 50)
     overlay.repaint()  # no hover, no drag -> full-screen hint path
     assert overlay._hover is None
+    assert overlay._cursor is None  # no move yet -> no loupe
+
+
+def test_move_tracks_cursor_for_loupe(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    _move(overlay, 70, 25)
+    assert overlay._cursor is not None
+    assert (overlay._cursor.x(), overlay._cursor.y()) == (70, 25)
+
+
+def test_leave_hides_loupe(qtbot):
+    overlay = _overlay(qtbot)
+    _move(overlay, 10, 10)
+    overlay.leaveEvent(QEvent(QEvent.Leave))
+    assert overlay._cursor is None
+
+
+def test_paint_with_loupe_does_not_crash(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    overlay.resize(100, 50)
+    _move(overlay, 70, 25)  # hover path with loupe
+    overlay.repaint()
+    _press(overlay, 10, 10)
+    _move(overlay, 40, 30, buttons=Qt.LeftButton)  # drag path with loupe
+    overlay.repaint()
+
+
+def test_paint_loupe_at_screen_corner_does_not_crash(qtbot):
+    # At (0, 0) the magnified source patch extends past the screenshot and the
+    # loupe placement clamps; both paths must stay valid.
+    overlay = _overlay(qtbot)
+    overlay.resize(100, 50)
+    _move(overlay, 0, 0)
+    overlay.repaint()
+    _move(overlay, 99, 49)  # opposite corner -> anchor flips on both axes
+    overlay.repaint()
