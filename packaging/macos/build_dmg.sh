@@ -9,7 +9,13 @@
 # thins the fat (universal2) Python/Qt binaries down to one slice. Building a
 # non-native or universal2 app requires a universal2 Python and universal2
 # wheels for every binary dependency; PyInstaller fails loudly if that does not
-# hold, and the package smoke workflow exercises all three arches on PRs.
+# hold. universal2 is therefore the strictest arch: the package smoke workflow
+# builds only it on PRs, since the thinned arm64/x86_64 slices cannot fail
+# independently of it.
+#
+# SHOTQUILL_DMG_FORMAT overrides the DMG compression (default ULMO = LZMA,
+# smallest but slow); smoke builds use UDZO (zlib) since their DMG is a
+# short-lived artifact where speed matters more than size.
 set -euo pipefail
 
 VERSION="${1:-0.0.0}"
@@ -132,7 +138,8 @@ build_one() {
   local dmg="dist/ShotQuill-$VERSION-$arch.dmg"
   # ULMO = LZMA-compressed DMG: noticeably smaller than UDZO (zlib). Mountable on
   # macOS 10.15+, which is well below ShotQuill's target.
-  hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$staging" -ov -format ULMO "$dmg"
+  hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$staging" -ov \
+    -format "${SHOTQUILL_DMG_FORMAT:-ULMO}" "$dmg"
   rm -rf "$staging"
 
   echo "Built $dmg"

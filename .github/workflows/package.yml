@@ -45,7 +45,14 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Build .app + DMG (smoke)
-        run: bash packaging/macos/build_dmg.sh v0.0.0-smoke
+        # universal2 only: it needs universal2 wheels for every binary dep, so
+        # it is the strictest of the three arches — the thinned arm64/x86_64
+        # release slices can't fail independently of it. UDZO because the smoke
+        # DMG is a 7-day throwaway artifact; zlib compresses much faster than
+        # the LZMA default releases ship with.
+        env:
+          SHOTQUILL_DMG_FORMAT: UDZO
+        run: bash packaging/macos/build_dmg.sh v0.0.0-smoke universal2
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v7
         with:
