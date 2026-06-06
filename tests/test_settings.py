@@ -103,6 +103,25 @@ def test_dialog_save_persists_hover_switch(qtbot, config):
     assert config.hover_switch_delay_ms() == 0
 
 
+def test_dialog_prefills_region_adjust_from_config(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._region_adjust.isChecked() is True  # on by default
+
+    config.set_region_adjust(False)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._region_adjust.isChecked() is False
+
+
+def test_dialog_save_persists_region_adjust(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._region_adjust.setChecked(False)
+    dialog._save_and_accept()
+    assert config.region_adjust() is False
+
+
 def _silence_warnings(monkeypatch):
     """Swallow the QMessageBox.warning popup (it would block offscreen tests)."""
     from PySide6.QtWidgets import QMessageBox

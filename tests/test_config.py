@@ -160,6 +160,21 @@ def test_config_bool_round_trips(config):
     assert config.include_cursor() is True
 
 
+def test_region_adjust_defaults_on(config):
+    from shotquill.config import DEFAULT_REGION_ADJUST
+
+    # Releasing a region drag pins the selection for keyboard nudging.
+    assert DEFAULT_REGION_ADJUST is True
+    assert config.region_adjust() is True
+
+
+def test_region_adjust_round_trip(config):
+    config.set_region_adjust(False)
+    assert config.region_adjust() is False
+    config.set_region_adjust(True)
+    assert config.region_adjust() is True
+
+
 def test_hover_switch_delay_round_trip_and_default(config):
     assert config.hover_switch_delay_ms() == DEFAULT_HOVER_SWITCH_DELAY_MS
     config.set_hover_switch_delay_ms(0)

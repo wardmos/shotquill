@@ -203,6 +203,7 @@ class ShotquillApp(QObject):
             windows,
             window_preview=self._window_preview_image,
             hover_switch_delay_ms=self._config.hover_switch_delay_ms(),
+            region_adjust=self._config.region_adjust(),
         )
         overlay.region_selected.connect(self._deliver_capture)
         overlay.window_selected.connect(self._capture_window_image)

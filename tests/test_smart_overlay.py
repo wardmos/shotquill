@@ -71,14 +71,27 @@ def _hover(overlay, x, y):
         overlay._commit_hover()
 
 
+def _key(overlay, key, modifiers=Qt.NoModifier):
+    overlay.keyPressEvent(QKeyEvent(QEvent.KeyPress, key, modifiers))
+
+
+def _drag_region(overlay, x0, y0, x1, y1):
+    _press(overlay, x0, y0)
+    _move(overlay, x1, y1, buttons=Qt.LeftButton)
+    _release(overlay, x1, y1)
+
+
 def test_drag_emits_region_crop_scaled_to_native(qtbot):
     overlay = _overlay(qtbot)
     received = []
     overlay.region_selected.connect(lambda image, rect: received.append((image, rect)))
 
-    _press(overlay, 10, 10)
-    _move(overlay, 40, 30, buttons=Qt.LeftButton)
-    _release(overlay, 40, 30)
+    # With adjustment on (the default) the release pins the selection for
+    # keyboard nudging; Enter then captures it.
+    _drag_region(overlay, 10, 10, 40, 30)
+    assert received == []
+    assert overlay._pinned is True
+    _key(overlay, Qt.Key_Return)
 
     assert len(received) == 1
     image, rect = received[0]
@@ -98,9 +111,8 @@ def test_region_rect_is_translated_to_global_coordinates(qtbot):
     received = []
     overlay.region_selected.connect(lambda image, rect: received.append(rect))
 
-    _press(overlay, 10, 10)
-    _move(overlay, 40, 30, buttons=Qt.LeftButton)
-    _release(overlay, 40, 30)
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Return)
 
     assert received == [QRect(110, 210, 30, 20)]
 
@@ -380,6 +392,187 @@ def test_preview_fetches_are_single_flight(qtbot):
     # 42's fetch lands; the ready handler re-arms for the hovered 43.
     qtbot.waitUntil(lambda: 43 in overlay._previews, timeout=3000)
     assert calls == [42, 43]
+
+
+# --- pinned-selection keyboard adjustment -----------------------------------
+
+
+def test_release_pins_selection_and_normalizes_corners(qtbot):
+    overlay = _overlay(qtbot)
+    # Drag from bottom-right to top-left: pinning must still normalize so
+    # _origin is the top-left corner (resizing acts on _current).
+    _drag_region(overlay, 40, 30, 10, 10)
+    assert overlay._pinned is True
+    assert (overlay._origin.x(), overlay._origin.y()) == (10, 10)
+    assert (overlay._current.x(), overlay._current.y()) == (40, 30)
+
+
+def test_region_adjust_off_captures_on_release(qtbot):
+    overlay = _overlay(qtbot, region_adjust=False)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+    _drag_region(overlay, 10, 10, 40, 30)
+    assert received == [QRect(10, 10, 30, 20)]
+    assert overlay._pinned is False
+
+
+def test_arrow_moves_selection_one_native_pixel(qtbot):
+    # sx = sy = 1 here, so one native pixel is one logical point and the
+    # emitted rect shifts by exactly 1.
+    overlay = _overlay(qtbot, native=(100, 50), logical=(100, 50))
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Right)
+    _key(overlay, Qt.Key_Down)
+    _key(overlay, Qt.Key_Down)
+    _key(overlay, Qt.Key_Return)
+
+    assert received == [QRect(11, 12, 30, 20)]
+
+
+def test_arrow_step_is_native_not_logical_on_retina(qtbot):
+    # At the default 2x scale a press moves the crop by one *screenshot*
+    # pixel, i.e. half a logical point — not a whole point.
+    overlay = _overlay(qtbot)
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Right)
+    assert overlay._origin.x() == 10.5
+    assert overlay._current.x() == 40.5
+    # Width is untouched: both corners moved together.
+    assert overlay._current.x() - overlay._origin.x() == 30
+
+
+def test_shift_arrow_moves_ten_native_pixels(qtbot):
+    overlay = _overlay(qtbot, native=(100, 50), logical=(100, 50))
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Right, Qt.ShiftModifier)
+    assert overlay._origin.x() == 20
+
+
+def test_alt_arrow_resizes_right_and_bottom_edge(qtbot):
+    overlay = _overlay(qtbot, native=(100, 50), logical=(100, 50))
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Right, Qt.AltModifier)  # width +1
+    _key(overlay, Qt.Key_Up, Qt.AltModifier)  # height -1
+    _key(overlay, Qt.Key_Return)
+
+    assert received == [QRect(10, 10, 31, 19)]
+
+
+def test_move_clamps_to_screen_edges(qtbot):
+    overlay = _overlay(qtbot, native=(100, 50), logical=(100, 50))
+    _drag_region(overlay, 10, 10, 40, 30)
+    for _ in range(3):
+        _key(overlay, Qt.Key_Left, Qt.ShiftModifier)  # 30 px left of x=10
+    assert overlay._origin.x() == 0
+    assert overlay._current.x() == 30  # width preserved while clamped
+    for _ in range(9):
+        _key(overlay, Qt.Key_Right, Qt.ShiftModifier)
+    assert overlay._current.x() == 100
+    assert overlay._origin.x() == 70
+
+
+def test_resize_clamps_at_min_size_and_screen_edge(qtbot):
+    overlay = _overlay(qtbot, native=(100, 50), logical=(100, 50))
+    _drag_region(overlay, 10, 10, 40, 30)
+    for _ in range(5):
+        _key(overlay, Qt.Key_Left, Qt.AltModifier | Qt.ShiftModifier)
+    assert overlay._current.x() == 12  # origin + _MIN_SIZE
+    for _ in range(10):
+        _key(overlay, Qt.Key_Right, Qt.AltModifier | Qt.ShiftModifier)
+    assert overlay._current.x() == 100  # right edge of the overlay
+
+
+def test_arrow_keys_ignored_when_not_pinned(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    _hover(overlay, 70, 25)
+    _key(overlay, Qt.Key_Right)
+    assert overlay._origin is None  # nothing selected, nothing moved
+
+
+def test_keyboard_nudge_parks_loupe_on_the_adjusted_edge(qtbot):
+    overlay = _overlay(qtbot, native=(100, 50), logical=(100, 50))
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Right)  # move: loupe at the middle of the right edge
+    assert (overlay._cursor.x(), overlay._cursor.y()) == (41, 20)
+    _key(overlay, Qt.Key_Down, Qt.AltModifier)  # resize: bottom edge
+    assert (overlay._cursor.x(), overlay._cursor.y()) == (26, 31)
+
+
+def test_mouse_move_does_not_disturb_pinned_selection(qtbot):
+    overlay = _overlay(qtbot)
+    _drag_region(overlay, 10, 10, 40, 30)
+    _move(overlay, 80, 45)
+    assert (overlay._current.x(), overlay._current.y()) == (40, 30)
+    assert overlay._pinned is True
+
+
+def test_click_inside_pinned_selection_captures(qtbot):
+    overlay = _overlay(qtbot)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _drag_region(overlay, 10, 10, 40, 30)
+    _press(overlay, 25, 20)
+    _release(overlay, 25, 20)
+
+    assert received == [QRect(10, 10, 30, 20)]
+
+
+def test_click_outside_pinned_selection_discards_without_capturing(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    region = []
+    fullscreen = []
+    windows = []
+    overlay.region_selected.connect(lambda image, rect: region.append(rect))
+    overlay.fullscreen_selected.connect(lambda: fullscreen.append(True))
+    overlay.window_selected.connect(lambda window_id, rect: windows.append(window_id))
+
+    _drag_region(overlay, 5, 5, 30, 30)
+    _press(overlay, 70, 40)  # over the window, outside the selection
+    _release(overlay, 70, 40)
+
+    # The pin is dropped, but the click must not capture the window or screen
+    # under it — it only dismisses the selection.
+    assert overlay._pinned is False
+    assert overlay._origin is None
+    assert (region, fullscreen, windows) == ([], [], [])
+
+
+def test_drag_outside_pinned_selection_starts_a_new_one(qtbot):
+    overlay = _overlay(qtbot)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _drag_region(overlay, 5, 5, 20, 20)
+    _drag_region(overlay, 50, 10, 90, 40)  # starts outside the old selection
+    assert overlay._pinned is True
+    _key(overlay, Qt.Key_Return)
+
+    assert received == [QRect(50, 10, 40, 30)]
+
+
+def test_escape_while_pinned_cancels(qtbot):
+    overlay = _overlay(qtbot)
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    _drag_region(overlay, 10, 10, 40, 30)
+    _key(overlay, Qt.Key_Escape)
+    assert cancelled == [True]
+
+
+def test_paint_pinned_selection_with_hint_does_not_crash(qtbot):
+    overlay = _overlay(qtbot)
+    overlay.resize(100, 50)
+    _drag_region(overlay, 10, 10, 40, 30)
+    overlay.repaint()  # pinned path: region + size label + adjust hint
+    _drag_region(overlay, 2, 2, 98, 48)  # hint won't fit below -> tucked inside
+    overlay.repaint()
 
 
 def test_no_preview_fetch_after_close(qtbot):

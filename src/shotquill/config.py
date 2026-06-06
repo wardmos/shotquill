@@ -57,6 +57,11 @@ DEFAULT_AUTO_COPY = True
 DEFAULT_HOVER_SWITCH_DELAY_MS = 3000
 HOVER_SWITCH_NEVER = -1
 
+# Region capture: releasing the drag pins the selection for pixel-accurate
+# keyboard adjustment (arrow keys nudge, Enter/click captures) instead of
+# capturing immediately. Turning this off restores capture-on-release.
+DEFAULT_REGION_ADJUST = True
+
 
 def _to_bool(value: object, default: bool) -> bool:
     """Coerce a QSettings value (which may come back as a string) into a bool."""
@@ -180,3 +185,9 @@ class Config:
 
     def set_hover_switch_delay_ms(self, delay_ms: int) -> None:
         self._settings.setValue("capture/hover_switch_delay_ms", int(delay_ms))
+
+    def region_adjust(self) -> bool:
+        return _to_bool(self._settings.value("capture/region_adjust"), DEFAULT_REGION_ADJUST)
+
+    def set_region_adjust(self, enabled: bool) -> None:
+        self._settings.setValue("capture/region_adjust", bool(enabled))
