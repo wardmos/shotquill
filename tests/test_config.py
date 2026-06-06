@@ -59,9 +59,9 @@ def test_auto_output_defaults_on():
 
 
 def test_hover_switch_defaults():
-    # The overlay waits 3 s before switching its highlighted window; NEVER is
-    # the "only switch when a window is clicked" sentinel.
-    assert DEFAULT_HOVER_SWITCH_DELAY_MS == 3000
+    # By default the overlay only switches its highlighted window when one is
+    # clicked; NEVER is the sentinel for that mode (any negative value).
+    assert DEFAULT_HOVER_SWITCH_DELAY_MS == HOVER_SWITCH_NEVER
     assert HOVER_SWITCH_NEVER < 0
 
 

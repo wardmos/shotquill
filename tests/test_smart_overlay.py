@@ -63,10 +63,10 @@ def _release(overlay, x, y):
 
 
 def _hover(overlay, x, y):
-    """Move the pointer and let the debounced highlight switch land, as a real
-    pointer rest would."""
+    """Move the pointer and land the highlight switch, whatever the configured
+    delay — as a pointer rest (or, under NEVER, a press) would."""
     _move(overlay, x, y)
-    if overlay._hover_timer.isActive():
+    if overlay._pending_hover != overlay._hover:
         overlay._hover_timer.stop()
         overlay._commit_hover()
 
@@ -160,7 +160,7 @@ def test_tiny_move_counts_as_click_not_drag(qtbot):
 
 
 def test_highlight_switch_waits_for_pointer_rest(qtbot):
-    overlay = _overlay(qtbot, windows=_windows())
+    overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=3000)
 
     # Sweeping onto the window arms the switch but does not relight yet.
     _move(overlay, 70, 25)
@@ -179,7 +179,7 @@ def test_highlight_switch_waits_for_pointer_rest(qtbot):
 
 
 def test_returning_to_current_target_cancels_pending_switch(qtbot):
-    overlay = _overlay(qtbot, windows=_windows())
+    overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=3000)
     _hover(overlay, 70, 25)
 
     # Briefly straying off the window and coming back must not flicker the
@@ -221,7 +221,7 @@ def test_never_delay_only_switches_highlight_on_press(qtbot):
 
 
 def test_press_settles_pending_hover_so_quick_clicks_hit_the_window(qtbot):
-    overlay = _overlay(qtbot, windows=_windows())
+    overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=3000)
     received = []
     overlay.window_selected.connect(lambda window_id, rect: received.append(window_id))
 

@@ -28,12 +28,14 @@ cross-platform architecture (Windows / Linux planned).
 ## Highlights
 
 - **Two capture hotkeys**, both customizable:
-  - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: hover an
-    app window to grab just that window (real pixels, even when partly covered —
-    the hover preview lifts the window out from under whatever overlaps it, and
-    moving away restores the original view), hover empty space to grab the whole
-    screen, or drag a rectangle for a region
-    with a live size readout. A pixel loupe follows the pointer — magnified
+  - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: click an
+    app window to grab just that window (real pixels, even when partly
+    covered), click empty space to grab the whole screen, or drag a rectangle
+    for a region
+    with a live size readout. Hovering can also highlight the target before
+    the click — with the window's own pixels lifted out from under whatever
+    overlaps it — after a configurable rest time (Settings, "Highlight window
+    after"; off by default). A pixel loupe follows the pointer — magnified
     pixels, a crosshair, and the position/colour under the cursor — so region
     boundaries land exactly where you want.
   - **Full screen** (`⌥S`) — every display at once, instantly.
@@ -93,7 +95,7 @@ hotkeys from anywhere.
 
 | Action         | Default | Notes                                                                                |
 | -------------- | ------- | ------------------------------------------------------------------------------------ |
-| Capture        | `⌥A`    | Hover a window to grab it, hover empty space for full screen, or drag for a region. `Esc` / right-click cancels. |
+| Capture        | `⌥A`    | Click a window to grab it, click empty space for full screen, or drag for a region. `Esc` / right-click cancels. |
 | Full-screen    | `⌥S`    | All displays composited into one image, instantly.                                   |
 
 Both are remappable in **Settings** (any combination of `⌘ ⌃ ⌥ ⇧` + a key).

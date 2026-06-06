@@ -53,9 +53,11 @@ DEFAULT_AUTO_COPY = True
 # How long the pointer must rest on a new target before the capture overlay
 # switches its highlighted window, in milliseconds. 0 switches the moment the
 # pointer crosses a window edge; HOVER_SWITCH_NEVER turns automatic switching
-# off entirely — a window is then only selected by clicking it.
-DEFAULT_HOVER_SWITCH_DELAY_MS = 3000
+# off entirely — a window is then only selected by clicking it. That is the
+# default: timed switching either reads as a hang (long delays) or strobes
+# the preview through every window swept over (short ones).
 HOVER_SWITCH_NEVER = -1
+DEFAULT_HOVER_SWITCH_DELAY_MS = HOVER_SWITCH_NEVER
 
 # Region capture: releasing the drag pins the selection for pixel-accurate
 # keyboard adjustment (arrow keys nudge, Enter/click captures) instead of
