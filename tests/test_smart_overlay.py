@@ -352,6 +352,30 @@ def test_painted_window_uses_unoccluded_preview_pixels(qtbot):
     assert (after.red(), after.green(), after.blue()) == (255, 0, 0)
 
 
+def test_pointed_window_gets_hairline_before_highlight_switches(qtbot):
+    # Pointing must give instant feedback even though the highlight only
+    # switches on a click (the default): the window under the pointer is
+    # traced with a hairline, without being lit up.
+    from shotquill.ui.smart_overlay import _ACCENT
+
+    window = WindowInfo(window_id=7, owner="Demo", title="", bounds=Rect(200, 0, 200, 200))
+    overlay = _overlay(qtbot, native=(800, 400), logical=(400, 200), windows=[window])
+    overlay.resize(400, 200)
+
+    # Probe the window's left edge, clear of the loupe and the centred hint.
+    before = overlay.grab().toImage().pixelColor(200, 20)
+    assert before.red() == before.green() == before.blue() == 255
+
+    _move(overlay, 250, 100)
+    assert overlay._hover is None  # the highlight itself has not switched
+    after = overlay.grab().toImage().pixelColor(200, 20)
+    assert (after.red(), after.green(), after.blue()) == (
+        _ACCENT.red(),
+        _ACCENT.green(),
+        _ACCENT.blue(),
+    )
+
+
 def test_paint_loupe_at_screen_corner_does_not_crash(qtbot):
     # At (0, 0) the magnified source patch extends past the screenshot and the
     # loupe placement clamps; both paths must stay valid.

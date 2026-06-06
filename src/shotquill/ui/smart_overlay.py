@@ -194,10 +194,12 @@ class SmartOverlay(QWidget):
         has_selection = self._origin is not None and self._current is not None
         if (self._dragging or self._pinned) and has_selection:
             self._paint_region(painter)
-        elif self._hover is not None:
-            self._paint_window(painter)
         else:
-            self._paint_fullscreen(painter)
+            if self._hover is not None:
+                self._paint_window(painter)
+            else:
+                self._paint_fullscreen(painter)
+            self._paint_pending_outline(painter)
 
         if self._cursor is not None:
             self._paint_loupe(painter)
@@ -231,6 +233,18 @@ class SmartOverlay(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(sel)
         self._draw_window_label(painter, sel, self._windows[self._hover])
+
+    def _paint_pending_outline(self, painter: QPainter) -> None:
+        # Instant pointing feedback: a hairline around the window under the
+        # pointer while it is not (yet) the highlighted target — under
+        # HOVER_SWITCH_NEVER the only hover cue there is — so it is always
+        # clear which window a click would select, without lighting it up.
+        if self._pending_hover is None or self._pending_hover == self._hover:
+            return
+        bx, by, bw, bh = self._boxes[self._pending_hover]
+        painter.setPen(QPen(_ACCENT, 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRect(int(bx), int(by), int(bw), int(bh)).adjusted(0, 0, -1, -1))
 
     def _paint_fullscreen(self, painter: QPainter) -> None:
         # Pointer is over empty space: restore the whole desktop to full
