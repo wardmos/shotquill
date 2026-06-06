@@ -242,7 +242,9 @@ class SmartOverlay(QWidget):
         if self._pending_hover is None or self._pending_hover == self._hover:
             return
         bx, by, bw, bh = self._boxes[self._pending_hover]
-        painter.setPen(QPen(_ACCENT, 1))
+        # 2 points: clearly visible on the dimmed desktop yet still a step
+        # below the committed highlight's 3-point border.
+        painter.setPen(QPen(_ACCENT, 2))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(QRect(int(bx), int(by), int(bw), int(bh)).adjusted(0, 0, -1, -1))
 
