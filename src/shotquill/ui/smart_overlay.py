@@ -60,6 +60,14 @@ _LOUPE_LABEL_H = 20  # readout strip under the magnified pixels
 # How long the pointer must rest on a window before its un-occluded preview is
 # fetched — sweeping across windows must not fire a capture per window passed.
 _PREVIEW_DELAY_MS = 120
+# How long the pointer must rest on a new target before the highlight switches
+# to it. Without this, sweeping the pointer (say, heading somewhere to start a
+# region drag) strobes the preview through every window crossed on the way.
+# Deliberately long: region drags are the common case, so window highlighting
+# only kicks in after a clearly intentional rest. A press settles the pending
+# target immediately, so a quick move-and-click still captures what's under
+# the cursor.
+_HOVER_SWITCH_DELAY_MS = 3000
 
 
 class SmartOverlay(QWidget):
@@ -96,6 +104,13 @@ class SmartOverlay(QWidget):
         self._sy = screenshot.height() / max(geometry.height(), 1)
 
         self._hover: int | None = None  # window under the pointer, or None for full screen
+        # Debounced hover switching: the target the pointer has moved onto but
+        # not yet rested on. Committed by ``_hover_timer`` (or a press).
+        self._pending_hover: int | None = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(_HOVER_SWITCH_DELAY_MS)
+        self._hover_timer.timeout.connect(self._commit_hover)
         self._cursor: QPointF | None = None  # last pointer position, drives the loupe
         self._origin = None
         self._current = None
@@ -291,9 +306,20 @@ class SmartOverlay(QWidget):
             return
         hover = window_at_point(self._boxes, pos.x(), pos.y())
         if hover != self._hover:
-            self._hover = hover
-            self._schedule_preview()
+            # Switch the highlight only after the pointer rests on the new
+            # target. The timer is not restarted while the candidate stays the
+            # same, so moving around inside one window still commits it.
+            if not self._hover_timer.isActive() or hover != self._pending_hover:
+                self._pending_hover = hover
+                self._hover_timer.start()
+        elif self._hover_timer.isActive():
+            self._hover_timer.stop()  # wandered back to the current target
         # The loupe follows every move, so repaint unconditionally.
+        self.update()
+
+    def _commit_hover(self) -> None:
+        self._hover = self._pending_hover
+        self._schedule_preview()
         self.update()
 
     # --- un-occluded window previews ---------------------------------------
@@ -350,6 +376,7 @@ class SmartOverlay(QWidget):
         # No new preview fetches once the overlay is going away; an in-flight
         # worker may still finish, but its result is dropped above.
         self._closed = True
+        self._hover_timer.stop()
         self._preview_timer.stop()
         super().closeEvent(event)
 
@@ -363,6 +390,11 @@ class SmartOverlay(QWidget):
             self._cancel()
             return
         if event.button() == Qt.LeftButton:
+            # A quick move-and-click means "the thing under the cursor", even
+            # when the debounced highlight hasn't caught up yet.
+            if self._hover_timer.isActive():
+                self._hover_timer.stop()
+                self._commit_hover()
             self._origin = event.position()
             self._current = event.position()
             self._dragging = False

@@ -61,6 +61,15 @@ def _release(overlay, x, y):
     overlay.mouseReleaseEvent(_mouse(QEvent.MouseButtonRelease, x, y, Qt.LeftButton, Qt.LeftButton))
 
 
+def _hover(overlay, x, y):
+    """Move the pointer and let the debounced highlight switch land, as a real
+    pointer rest would."""
+    _move(overlay, x, y)
+    if overlay._hover_timer.isActive():
+        overlay._hover_timer.stop()
+        overlay._commit_hover()
+
+
 def test_drag_emits_region_crop_scaled_to_native(qtbot):
     overlay = _overlay(qtbot)
     received = []
@@ -137,6 +146,52 @@ def test_tiny_move_counts_as_click_not_drag(qtbot):
     assert windows == [42]
 
 
+def test_highlight_switch_waits_for_pointer_rest(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+
+    # Sweeping onto the window arms the switch but does not relight yet.
+    _move(overlay, 70, 25)
+    assert overlay._hover is None
+    assert overlay._hover_timer.isActive()
+
+    # Resting (the timer firing) commits the switch.
+    overlay._hover_timer.stop()
+    overlay._commit_hover()
+    assert overlay._hover == 0
+
+    # Sweeping back off is debounced the same way.
+    _move(overlay, 10, 10)
+    assert overlay._hover == 0
+    assert overlay._hover_timer.isActive()
+
+
+def test_returning_to_current_target_cancels_pending_switch(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    _hover(overlay, 70, 25)
+
+    # Briefly straying off the window and coming back must not flicker the
+    # highlight: the pending switch to full screen is dropped.
+    _move(overlay, 10, 10)
+    assert overlay._hover_timer.isActive()
+    _move(overlay, 70, 25)
+    assert not overlay._hover_timer.isActive()
+    assert overlay._hover == 0
+
+
+def test_press_settles_pending_hover_so_quick_clicks_hit_the_window(qtbot):
+    overlay = _overlay(qtbot, windows=_windows())
+    received = []
+    overlay.window_selected.connect(lambda window_id, rect: received.append(window_id))
+
+    # Move onto the window and click before the debounce delay elapses.
+    _move(overlay, 70, 25)
+    assert overlay._hover is None
+    _press(overlay, 70, 25)
+    _release(overlay, 70, 25)
+
+    assert received == [42]
+
+
 def test_right_click_cancels(qtbot):
     overlay = _overlay(qtbot)
     cancelled = []
@@ -178,7 +233,7 @@ def test_leave_hides_loupe(qtbot):
 def test_paint_with_loupe_does_not_crash(qtbot):
     overlay = _overlay(qtbot, windows=_windows())
     overlay.resize(100, 50)
-    _move(overlay, 70, 25)  # hover path with loupe
+    _hover(overlay, 70, 25)  # hover path with loupe
     overlay.repaint()
     _press(overlay, 10, 10)
     _move(overlay, 40, 30, buttons=Qt.LeftButton)  # drag path with loupe
@@ -188,15 +243,15 @@ def test_paint_with_loupe_does_not_crash(qtbot):
 def test_hover_arms_preview_timer_and_leaving_disarms(qtbot):
     overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: _screenshot())
 
-    _move(overlay, 70, 25)  # onto the window
+    _hover(overlay, 70, 25)  # onto the window
     assert overlay._preview_timer.isActive()
-    _move(overlay, 10, 10)  # off again before the timer fires -> no fetch
+    _hover(overlay, 10, 10)  # off again before the timer fires -> no fetch
     assert not overlay._preview_timer.isActive()
 
 
 def test_no_provider_never_arms_preview_timer(qtbot):
     overlay = _overlay(qtbot, windows=_windows())
-    _move(overlay, 70, 25)
+    _hover(overlay, 70, 25)
     assert not overlay._preview_timer.isActive()
 
 
@@ -208,15 +263,15 @@ def test_preview_fetch_caches_result_from_worker_thread(qtbot):
         return _screenshot(100, 100, "red")
 
     overlay = _overlay(qtbot, windows=_windows(), window_preview=provider)
-    _move(overlay, 70, 25)
+    _hover(overlay, 70, 25)
     with qtbot.waitSignal(overlay._preview_ready, timeout=2000):
         overlay._request_preview()  # fire without waiting out the hover delay
 
     assert calls == [42]
     assert overlay._previews[42] is not None
     # Hovering the same window again must not refetch.
-    _move(overlay, 10, 10)
-    _move(overlay, 70, 25)
+    _hover(overlay, 10, 10)
+    _hover(overlay, 70, 25)
     assert not overlay._preview_timer.isActive()
     assert calls == [42]
 
@@ -224,15 +279,15 @@ def test_preview_fetch_caches_result_from_worker_thread(qtbot):
 def test_failed_preview_is_remembered_and_paint_falls_back(qtbot):
     overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: None)
     overlay.resize(100, 50)
-    _move(overlay, 70, 25)
+    _hover(overlay, 70, 25)
     with qtbot.waitSignal(overlay._preview_ready, timeout=2000):
         overlay._request_preview()
 
     assert overlay._previews[42] is None
     overlay.repaint()  # window path without a preview -> frozen screenshot
     # A failure is not retried on the next hover.
-    _move(overlay, 10, 10)
-    _move(overlay, 70, 25)
+    _hover(overlay, 10, 10)
+    _hover(overlay, 70, 25)
     assert not overlay._preview_timer.isActive()
 
 
@@ -243,7 +298,7 @@ def test_painted_window_uses_unoccluded_preview_pixels(qtbot):
         qtbot, native=(800, 400), logical=(400, 200), windows=[window], window_preview=None
     )
     overlay.resize(400, 200)
-    _move(overlay, 250, 100)
+    _hover(overlay, 250, 100)
 
     # Without a preview the (white) frozen screenshot shows through.
     before = overlay.grab().toImage().pixelColor(220, 180)
@@ -285,9 +340,9 @@ def test_preview_fetches_are_single_flight(qtbot):
     ]
     overlay = _overlay(qtbot, windows=windows, window_preview=provider)
 
-    _move(overlay, 10, 25)  # hover window 42
+    _hover(overlay, 10, 25)  # hover window 42
     overlay._request_preview()  # bypass the hover delay
-    _move(overlay, 70, 25)  # hover window 43 while 42's fetch is stuck
+    _hover(overlay, 70, 25)  # hover window 43 while 42's fetch is stuck
     overlay._request_preview()
     assert calls == [42]  # second fetch deferred, not started
 
@@ -305,7 +360,7 @@ def test_no_preview_fetch_after_close(qtbot):
         return _screenshot()
 
     overlay = _overlay(qtbot, windows=_windows(), window_preview=provider)
-    _move(overlay, 70, 25)
+    _hover(overlay, 70, 25)
     overlay.close()
     overlay._request_preview()  # a queued timer tick after close must no-op
     assert calls == []
