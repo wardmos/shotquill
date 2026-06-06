@@ -48,6 +48,26 @@ def test_drawing_a_rectangle_pushes_one_undo_command(qtbot):
     assert canvas.undo_stack().count() == 1
 
 
+def test_right_release_mid_drag_does_not_commit_the_item(qtbot):
+    # A stray right-button release while the left button is still dragging must
+    # not finish the annotation early — the drag continues and only the left
+    # release commits it (regression: mouseReleaseEvent ignored the button).
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.RECT)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(40, 35))
+    qtbot.mouseRelease(viewport, Qt.RightButton, pos=QPoint(40, 35))
+    assert canvas.undo_stack().count() == 0  # nothing committed yet
+
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+    assert canvas.undo_stack().count() == 1
+    rects = [i for i in canvas.scene().items() if hasattr(i, "rect") and i.zValue() > -1000]
+    assert len(rects) == 1
+    assert rects[0].rect().width() > 40  # the drag kept going past the right-release point
+
+
 def test_tiny_click_is_discarded(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.RECT)

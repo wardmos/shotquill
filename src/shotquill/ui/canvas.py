@@ -240,7 +240,10 @@ class AnnotationCanvas(QGraphicsView):
                 self._temp_item.update_rect(self._mosaic_rect)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._temp_item is None:
+        # Only the left button finishes a drag: a stray right/middle release
+        # mid-drag must not commit the half-drawn item (the press handler only
+        # ever starts items on the left button).
+        if event.button() != Qt.LeftButton or self._temp_item is None:
             super().mouseReleaseEvent(event)
             return
 
