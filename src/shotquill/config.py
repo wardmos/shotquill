@@ -50,6 +50,13 @@ DEFAULT_AUTOSTART = False
 DEFAULT_AUTO_SAVE = True
 DEFAULT_AUTO_COPY = True
 
+# How long the pointer must rest on a new target before the capture overlay
+# switches its highlighted window, in milliseconds. 0 switches the moment the
+# pointer crosses a window edge; HOVER_SWITCH_NEVER turns automatic switching
+# off entirely — a window is then only selected by clicking it.
+DEFAULT_HOVER_SWITCH_DELAY_MS = 3000
+HOVER_SWITCH_NEVER = -1
+
 
 def _to_bool(value: object, default: bool) -> bool:
     """Coerce a QSettings value (which may come back as a string) into a bool."""
@@ -60,6 +67,14 @@ def _to_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def _to_int(value: object, default: int) -> int:
+    """Coerce a QSettings value (which may come back as a string) into an int."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 _MODIFIER_SYMBOLS = {
@@ -155,3 +170,13 @@ class Config:
 
     def set_auto_copy_after_capture(self, enabled: bool) -> None:
         self._settings.setValue("output/auto_copy", bool(enabled))
+
+    def hover_switch_delay_ms(self) -> int:
+        """Overlay highlight-switch delay; any negative value reads as NEVER."""
+        value = _to_int(
+            self._settings.value("capture/hover_switch_delay_ms"), DEFAULT_HOVER_SWITCH_DELAY_MS
+        )
+        return HOVER_SWITCH_NEVER if value < 0 else value
+
+    def set_hover_switch_delay_ms(self, delay_ms: int) -> None:
+        self._settings.setValue("capture/hover_switch_delay_ms", int(delay_ms))

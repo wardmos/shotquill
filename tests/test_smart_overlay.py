@@ -30,13 +30,14 @@ def _windows():
     return [WindowInfo(window_id=42, owner="Demo", title="Doc", bounds=Rect(50, 0, 50, 50))]
 
 
-def _overlay(qtbot, native=(200, 100), logical=(100, 50), windows=None, window_preview=None):
+def _overlay(qtbot, native=(200, 100), logical=(100, 50), windows=None, window_preview=None, **kw):
     # Native screenshot is 2x the logical geometry -> sx = sy = 2.0.
     overlay = SmartOverlay(
         _screenshot(*native),
         QRect(0, 0, *logical),
         windows if windows is not None else [],
         window_preview=window_preview,
+        **kw,
     )
     overlay.setAttribute(Qt.WA_DeleteOnClose, False)
     qtbot.addWidget(overlay)
@@ -176,6 +177,35 @@ def test_returning_to_current_target_cancels_pending_switch(qtbot):
     _move(overlay, 70, 25)
     assert not overlay._hover_timer.isActive()
     assert overlay._hover == 0
+
+
+def test_zero_delay_switches_highlight_immediately(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=0)
+
+    _move(overlay, 70, 25)
+    assert overlay._hover == 0  # no debounce: relit on the spot
+    assert not overlay._hover_timer.isActive()
+    _move(overlay, 10, 10)
+    assert overlay._hover is None
+
+
+def test_never_delay_only_switches_highlight_on_press(qtbot):
+    from shotquill.config import HOVER_SWITCH_NEVER
+
+    overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=HOVER_SWITCH_NEVER)
+    received = []
+    overlay.window_selected.connect(lambda window_id, rect: received.append(window_id))
+
+    # Hovering never relights, no matter how long the pointer rests.
+    _move(overlay, 70, 25)
+    assert overlay._hover is None
+    assert not overlay._hover_timer.isActive()
+
+    # A click still selects the window under the cursor.
+    _press(overlay, 70, 25)
+    assert overlay._hover == 0
+    _release(overlay, 70, 25)
+    assert received == [42]
 
 
 def test_press_settles_pending_hover_so_quick_clicks_hit_the_window(qtbot):

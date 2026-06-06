@@ -76,6 +76,33 @@ def test_dialog_save_persists_editor_keys(qtbot, config):
     assert config.hotkey_enabled("editor_save") is False
 
 
+def test_dialog_prefills_hover_switch_from_config(qtbot, config):
+    from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
+
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._hover_switch.currentData() == DEFAULT_HOVER_SWITCH_DELAY_MS
+
+    # A value set outside the dialog (hand-edited prefs) stays selectable.
+    config.set_hover_switch_delay_ms(1234)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._hover_switch.currentData() == 1234
+
+    config.set_hover_switch_delay_ms(HOVER_SWITCH_NEVER)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._hover_switch.currentData() == HOVER_SWITCH_NEVER
+
+
+def test_dialog_save_persists_hover_switch(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._hover_switch.setCurrentIndex(dialog._hover_switch.findData(0))
+    dialog._save_and_accept()
+    assert config.hover_switch_delay_ms() == 0
+
+
 def _silence_warnings(monkeypatch):
     """Swallow the QMessageBox.warning popup (it would block offscreen tests)."""
     from PySide6.QtWidgets import QMessageBox

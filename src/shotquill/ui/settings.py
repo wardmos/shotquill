@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from shotquill.config import HOVER_SWITCH_NEVER
 from shotquill.hotkeys.combo import parse_combo, to_pynput_combo
 from shotquill.i18n import LANGUAGE_NAMES, LANGUAGES, t
 from shotquill.ui.toolbar import RESERVED_SHORTCUTS
@@ -35,6 +36,17 @@ if TYPE_CHECKING:
 
 _KEYS = [*"abcdefghijklmnopqrstuvwxyz", *"0123456789", *(f"f{i}" for i in range(1, 13))]
 _FORMATS = ["png", "jpg"]
+# Overlay highlight-switch delay choices (ms); HOVER_SWITCH_NEVER means the
+# highlight only ever moves when a window is clicked.
+_HOVER_SWITCH_CHOICES = [0, 500, 1000, 3000, 5000, HOVER_SWITCH_NEVER]
+
+
+def _hover_switch_label(delay_ms: int) -> str:
+    if delay_ms == HOVER_SWITCH_NEVER:
+        return t("settings.hover_switch_never")
+    if delay_ms == 0:
+        return t("settings.hover_switch_instant")
+    return t("settings.hover_switch_seconds").format(seconds=f"{delay_ms / 1000:g}")
 
 
 # pynput modifiers → the Qt portable names Qt reports for the same physical
@@ -245,6 +257,17 @@ class SettingsDialog(QDialog):
         self._include_cursor.setChecked(config.include_cursor())
         form.addRow("", self._include_cursor)
 
+        self._hover_switch = QComboBox()
+        for choice in _HOVER_SWITCH_CHOICES:
+            self._hover_switch.addItem(_hover_switch_label(choice), choice)
+        delay = config.hover_switch_delay_ms()
+        delay_index = self._hover_switch.findData(delay)
+        if delay_index < 0:  # a value set outside the dialog: keep it selectable
+            self._hover_switch.addItem(_hover_switch_label(delay), delay)
+            delay_index = self._hover_switch.count() - 1
+        self._hover_switch.setCurrentIndex(delay_index)
+        form.addRow(t("settings.hover_switch"), self._hover_switch)
+
         self._autostart = QCheckBox(t("settings.autostart"))
         self._autostart.setChecked(config.autostart())
         form.addRow("", self._autostart)
@@ -347,6 +370,7 @@ class SettingsDialog(QDialog):
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_include_cursor(self._include_cursor.isChecked())
+        self._config.set_hover_switch_delay_ms(self._hover_switch.currentData())
         self._config.set_autostart(self._autostart.isChecked())
         self._config.set_flash_on_capture(self._flash.isChecked())
         self._config.set_sound_on_capture(self._sound.isChecked())

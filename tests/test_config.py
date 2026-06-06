@@ -7,10 +7,13 @@ from shotquill.config import (
     DEFAULT_EDITOR_HOTKEYS,
     DEFAULT_FLASH,
     DEFAULT_HOTKEYS,
+    DEFAULT_HOVER_SWITCH_DELAY_MS,
     DEFAULT_IMAGE_FORMAT,
     DEFAULT_INCLUDE_CURSOR,
     DEFAULT_SOUND,
+    HOVER_SWITCH_NEVER,
     _to_bool,
+    _to_int,
     human_readable_hotkey,
 )
 
@@ -53,6 +56,21 @@ def test_auto_output_defaults_on():
     # Hands-free by default: a capture is saved AND copied without the editor.
     assert DEFAULT_AUTO_SAVE is True
     assert DEFAULT_AUTO_COPY is True
+
+
+def test_hover_switch_defaults():
+    # The overlay waits 3 s before switching its highlighted window; NEVER is
+    # the "only switch when a window is clicked" sentinel.
+    assert DEFAULT_HOVER_SWITCH_DELAY_MS == 3000
+    assert HOVER_SWITCH_NEVER < 0
+
+
+def test_to_int_parses_qsettings_strings():
+    # QSettings can round-trip ints as strings depending on the backend.
+    assert _to_int("3000", 0) == 3000
+    assert _to_int("-1", 0) == -1
+    assert _to_int(None, 7) == 7
+    assert _to_int("garbage", 7) == 7
 
 
 def test_to_bool_falls_back_to_default_when_unset():
@@ -140,6 +158,17 @@ def test_config_bool_round_trips(config):
     assert config.sound_on_capture() is True
     assert config.autostart() is True
     assert config.include_cursor() is True
+
+
+def test_hover_switch_delay_round_trip_and_default(config):
+    assert config.hover_switch_delay_ms() == DEFAULT_HOVER_SWITCH_DELAY_MS
+    config.set_hover_switch_delay_ms(0)
+    assert config.hover_switch_delay_ms() == 0
+    config.set_hover_switch_delay_ms(HOVER_SWITCH_NEVER)
+    assert config.hover_switch_delay_ms() == HOVER_SWITCH_NEVER
+    # Any negative value (e.g. hand-edited prefs) normalizes to NEVER.
+    config.set_hover_switch_delay_ms(-42)
+    assert config.hover_switch_delay_ms() == HOVER_SWITCH_NEVER
 
 
 def test_config_persists_across_instances(config):

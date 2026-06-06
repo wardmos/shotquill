@@ -198,7 +198,11 @@ class ShotquillApp(QObject):
             return
         geometry = self._app.primaryScreen().virtualGeometry()
         overlay = SmartOverlay(
-            screenshot, geometry, windows, window_preview=self._window_preview_image
+            screenshot,
+            geometry,
+            windows,
+            window_preview=self._window_preview_image,
+            hover_switch_delay_ms=self._config.hover_switch_delay_ms(),
         )
         overlay.region_selected.connect(self._deliver_capture)
         overlay.window_selected.connect(self._capture_window_image)
