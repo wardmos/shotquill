@@ -11,14 +11,13 @@ format, and UI language are editable in Settings.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from shotquill import __version__
+from shotquill import __version__, permissions
 from shotquill.autostart.macos import MacAutostartManager
 from shotquill.capture.macos import MacScreenCapturer
 from shotquill.config import Config, human_readable_hotkey
@@ -30,14 +29,6 @@ from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay
-
-_PRIVACY_SCREEN_CAPTURE = (
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-)
-# Global hotkeys require Input Monitoring, a *different* pane from screen capture.
-_PRIVACY_INPUT_MONITORING = (
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-)
 
 
 def _build_icon() -> QIcon:
@@ -138,10 +129,6 @@ class ShotquillApp(QObject):
         fullscreen.triggered.connect(self._capture_fullscreen)
         settings = QAction(t("menu.settings"), menu)
         settings.triggered.connect(self._open_settings)
-        permissions = QAction(t("menu.permissions"), menu)
-        permissions.triggered.connect(self._open_privacy_settings)
-        input_monitoring = QAction(t("menu.input_monitoring"), menu)
-        input_monitoring.triggered.connect(self._open_input_monitoring_settings)
         about = QAction(t("menu.about"), menu)
         about.triggered.connect(self._show_about)
         quit_action = QAction(t("menu.quit"), menu)
@@ -151,8 +138,6 @@ class ShotquillApp(QObject):
         menu.addAction(fullscreen)
         menu.addSeparator()
         menu.addAction(settings)
-        menu.addAction(permissions)
-        menu.addAction(input_monitoring)
         menu.addAction(about)
         menu.addSeparator()
         menu.addAction(quit_action)
@@ -176,7 +161,7 @@ class ShotquillApp(QObject):
             self._hotkeys.start()
         except PermissionError:
             self._notify(t("notify.hotkeys_need_input_monitoring"))
-            self._open_input_monitoring_settings()
+            permissions.open_input_monitoring_pane()
 
     @Slot()
     def _capture_fullscreen(self) -> None:
@@ -340,12 +325,6 @@ class ShotquillApp(QObject):
     def _forget(self, window: object) -> None:
         if window in self._windows:
             self._windows.remove(window)
-
-    def _open_privacy_settings(self) -> None:
-        subprocess.run(["open", _PRIVACY_SCREEN_CAPTURE], check=False)
-
-    def _open_input_monitoring_settings(self) -> None:
-        subprocess.run(["open", _PRIVACY_INPUT_MONITORING], check=False)
 
     def shutdown(self) -> None:
         self._hotkeys.stop()

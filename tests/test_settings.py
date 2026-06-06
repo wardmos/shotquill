@@ -404,3 +404,58 @@ def test_dialog_accepts_valid_save_dir(qtbot, config, tmp_path):
     dialog._save_and_accept()
     assert dialog.result() == SettingsDialog.Accepted
     assert config.save_dir() == str(tmp_path / "shots")
+
+
+def test_permission_rows_show_status_and_open_the_right_pane(qtbot, config, monkeypatch):
+    from PySide6.QtWidgets import QPushButton
+
+    from shotquill import permissions
+    from shotquill.i18n import t
+    from shotquill.permissions import PermissionStatus
+
+    opened = []
+    monkeypatch.setattr(permissions, "screen_capture_status", lambda: PermissionStatus.GRANTED)
+    monkeypatch.setattr(permissions, "input_monitoring_status", lambda: PermissionStatus.DENIED)
+    monkeypatch.setattr(permissions, "open_screen_capture_pane", lambda: opened.append("screen"))
+    monkeypatch.setattr(permissions, "open_input_monitoring_pane", lambda: opened.append("input"))
+
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._screen_permission._label.text() == t("settings.permission_granted")
+    assert dialog._input_permission._label.text() == t("settings.permission_denied")
+
+    dialog._screen_permission.findChild(QPushButton).click()
+    dialog._input_permission.findChild(QPushButton).click()
+    assert opened == ["screen", "input"]
+
+
+def test_permission_rows_show_unknown_when_state_is_unreadable(qtbot, config, monkeypatch):
+    from shotquill import permissions
+    from shotquill.i18n import t
+    from shotquill.permissions import PermissionStatus
+
+    monkeypatch.setattr(permissions, "screen_capture_status", lambda: PermissionStatus.UNKNOWN)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._screen_permission._label.text() == t("settings.permission_unknown")
+
+
+def test_permission_rows_refresh_when_dialog_reactivates(qtbot, config, monkeypatch):
+    # Granting happens over in System Settings; coming back must re-read the
+    # state without closing and reopening the dialog.
+    from PySide6.QtCore import QEvent
+
+    from shotquill import permissions
+    from shotquill.i18n import t
+    from shotquill.permissions import PermissionStatus
+
+    status = [PermissionStatus.DENIED]
+    monkeypatch.setattr(permissions, "screen_capture_status", lambda: status[0])
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._screen_permission._label.text() == t("settings.permission_denied")
+
+    status[0] = PermissionStatus.GRANTED
+    monkeypatch.setattr(dialog, "isActiveWindow", lambda: True)
+    dialog.changeEvent(QEvent(QEvent.ActivationChange))
+    assert dialog._screen_permission._label.text() == t("settings.permission_granted")

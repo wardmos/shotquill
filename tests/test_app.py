@@ -136,14 +136,16 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
     hotkeys.raise_permission_error = True
     opened = []
     messages = []
-    monkeypatch.setattr(app_module.subprocess, "run", lambda args, check=False: opened.append(args))
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append(True)
+    )
     monkeypatch.setattr(
         app_module.QSystemTrayIcon, "showMessage", lambda *args: messages.append(args)
     )
 
     app = _build_app(qapp, fakes)
 
-    assert opened == [["open", app_module._PRIVACY_INPUT_MONITORING]]
+    assert opened == [True]
     assert messages
     app.shutdown()
 

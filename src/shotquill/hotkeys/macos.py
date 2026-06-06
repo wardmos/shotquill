@@ -24,6 +24,7 @@ from pynput.keyboard import Key
 
 from shotquill.hotkeys.base import HotkeyManager
 from shotquill.hotkeys.combo import parse_combo
+from shotquill.permissions import quartz_function
 
 _INPUT_MONITORING_ERROR = "Input Monitoring permission is required for global hotkeys."
 
@@ -113,24 +114,14 @@ def _vk_of(key: object) -> int | None:
     return vk
 
 
-def _quartz_function(name: str) -> Callable[[], bool] | None:
-    """Return a Quartz TCC helper when running on macOS, else ``None``.
-
-    Tests and Linux development import this module without PyObjC/Quartz, so the
-    permission preflight must be best-effort and fail open when the OS helper is
-    unavailable. On macOS 10.15+, these helpers are the correct way to check and
-    request the Input Monitoring permission that raw keyboard listeners need.
-    """
-    try:
-        import Quartz  # type: ignore[import-not-found]
-    except Exception:
-        return None
-    return getattr(Quartz, name, None)
-
-
 def has_input_monitoring_access() -> bool:
-    """Whether macOS currently allows this process to listen for key events."""
-    preflight = _quartz_function("CGPreflightListenEventAccess")
+    """Whether macOS currently allows this process to listen for key events.
+
+    Fails *open* (True) when the state can't be read — the listener gate must
+    not block hotkeys on Linux development or an old macOS, unlike the
+    settings UI, which shows the same situation as "unknown".
+    """
+    preflight = quartz_function("CGPreflightListenEventAccess")
     if preflight is None:
         return True
     try:
@@ -143,7 +134,7 @@ def request_input_monitoring_access() -> bool:
     """Ask macOS for Input Monitoring access if needed; return whether it is granted."""
     if has_input_monitoring_access():
         return True
-    request = _quartz_function("CGRequestListenEventAccess")
+    request = quartz_function("CGRequestListenEventAccess")
     if request is None:
         return True
     try:

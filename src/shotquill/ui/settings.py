@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QKeySequenceEdit,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -26,12 +27,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from shotquill import permissions
 from shotquill.config import HOVER_SWITCH_NEVER
 from shotquill.hotkeys.combo import parse_combo, to_pynput_combo
 from shotquill.i18n import LANGUAGE_NAMES, LANGUAGES, t
+from shotquill.permissions import PermissionStatus
 from shotquill.ui.toolbar import RESERVED_SHORTCUTS
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from shotquill.config import Config
 
 _KEYS = [*"abcdefghijklmnopqrstuvwxyz", *"0123456789", *(f"f{i}" for i in range(1, 13))]
@@ -194,6 +199,48 @@ class _EditorKeyRow(QWidget):
         return self._edit.keySequence() if self.enabled() else QKeySequence()
 
 
+# Status text key and colour per permission state. DENIED is the case worth
+# shouting about; UNKNOWN (can't read the state) stays muted, not alarming.
+_PERMISSION_LABELS = {
+    PermissionStatus.GRANTED: ("settings.permission_granted", "#2e9e44"),
+    PermissionStatus.DENIED: ("settings.permission_denied", "#d04545"),
+    PermissionStatus.UNKNOWN: ("settings.permission_unknown", "#888888"),
+}
+
+
+class _PermissionRow(QWidget):
+    """Live status of one macOS privacy permission plus a System Settings link.
+
+    The permission itself can only be granted in System Settings, so the row
+    is read-only feedback: a coloured status label and a button that deep-links
+    to the right privacy pane. ``refresh()`` re-reads the state — the dialog
+    calls it when it regains focus, so a grant made in System Settings shows
+    up as soon as the user comes back.
+    """
+
+    def __init__(
+        self, status: Callable[[], PermissionStatus], open_pane: Callable[[], None]
+    ) -> None:
+        super().__init__()
+        self._status = status
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._label = QLabel()
+        open_button = QPushButton(t("settings.open_system_settings"))
+        open_button.clicked.connect(open_pane)
+
+        layout.addWidget(self._label)
+        layout.addWidget(open_button)
+        layout.addStretch()
+        self.refresh()
+
+    def refresh(self) -> None:
+        key, color = _PERMISSION_LABELS[self._status()]
+        self._label.setText(t(key))
+        self._label.setStyleSheet(f"color: {color};")
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -284,6 +331,15 @@ class SettingsDialog(QDialog):
         self._sound.setChecked(config.sound_on_capture())
         form.addRow("", self._sound)
 
+        self._screen_permission = _PermissionRow(
+            permissions.screen_capture_status, permissions.open_screen_capture_pane
+        )
+        self._input_permission = _PermissionRow(
+            permissions.input_monitoring_status, permissions.open_input_monitoring_pane
+        )
+        form.addRow(t("settings.permission_screen"), self._screen_permission)
+        form.addRow(t("settings.permission_input"), self._input_permission)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
@@ -291,6 +347,14 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
+
+    def changeEvent(self, event) -> None:
+        # Granting a permission happens over in System Settings; coming back
+        # re-activates this dialog, so that's the moment to re-read the states.
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._screen_permission.refresh()
+            self._input_permission.refresh()
+        super().changeEvent(event)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(

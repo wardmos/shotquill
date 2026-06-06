@@ -220,6 +220,9 @@ On first run, grant these in **System Settings → Privacy & Security**:
 - **Input Monitoring** — required for the global capture hotkeys to work while
   other apps are focused.
 
+ShotQuill's Settings dialog shows the live status of both permissions, with a
+button that jumps straight to the right privacy pane.
+
 ---
 
 ## Roadmap

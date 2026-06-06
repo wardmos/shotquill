@@ -21,14 +21,6 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
-    "menu.permissions": {
-        "en": "Open Screen Recording Settings…",
-        "zh": "打开屏幕录制权限设置…",
-    },
-    "menu.input_monitoring": {
-        "en": "Open Input Monitoring Settings…",
-        "zh": "打开输入监控权限设置…",
-    },
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
@@ -153,6 +145,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.hover_switch_instant": {"en": "Immediately", "zh": "立即"},
     "settings.hover_switch_seconds": {"en": "{seconds} s", "zh": "{seconds} 秒"},
     "settings.hover_switch_never": {"en": "Only when clicked", "zh": "仅点击时选中"},
+    "settings.permission_screen": {"en": "Screen Recording", "zh": "屏幕录制权限"},
+    "settings.permission_input": {"en": "Input Monitoring", "zh": "输入监控权限"},
+    "settings.permission_granted": {"en": "✓ Granted", "zh": "✓ 已授权"},
+    "settings.permission_denied": {"en": "✕ Not granted", "zh": "✕ 未授权"},
+    "settings.permission_unknown": {"en": "Status unknown", "zh": "状态未知"},
+    "settings.open_system_settings": {
+        "en": "Open System Settings…",
+        "zh": "打开系统设置…",
+    },
 }
 
 # Localized display names for keys shown in tooltips, keyed by the Qt
