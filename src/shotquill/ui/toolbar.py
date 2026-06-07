@@ -54,6 +54,13 @@ _BUTTON_STYLES: dict[str, Qt.ToolButtonStyle] = {
     "text": Qt.ToolButtonTextOnly,
 }
 
+# Pack the buttons tighter than the platform default: with sixteen buttons in
+# the bar the per-button horizontal padding adds up, and stacked icon-over-
+# label buttons read fine with a small caption (as macOS toolbars do). Only
+# box-model and font properties are set, so the buttons keep their native
+# hover/checked rendering.
+_TIGHT_BUTTONS = "QToolButton { padding: 1px 0px; font-size: 11px; }"
+
 
 def _pick_color(canvas: AnnotationCanvas) -> None:
     color = QColorDialog.getColor(canvas.color(), None, t("dialog.pick_color"))
@@ -74,6 +81,7 @@ def create_toolbar(
     # Match the glyphs' emitted size; the platform default (24+) would pad
     # every button back out around the smaller icons.
     toolbar.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
+    toolbar.setStyleSheet(_TIGHT_BUTTONS)
     group = QActionGroup(toolbar)
     group.setExclusive(True)
 

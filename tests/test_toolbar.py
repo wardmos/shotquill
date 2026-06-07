@@ -127,6 +127,16 @@ def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
     assert toolbar.iconSize() == QSize(ICON_SIZE, ICON_SIZE)
 
 
+def test_buttons_are_packed_tighter_than_the_platform_default(qtbot):
+    # The tightening stylesheet must actually narrow the buttons; clearing it
+    # restores the (wider) platform metrics, proving the effect is real.
+    _canvas_, toolbar = _toolbar(qtbot)
+    button = toolbar.widgetForAction(toolbar.actions()[0])
+    tight = button.sizeHint().width()
+    toolbar.setStyleSheet("")
+    assert button.sizeHint().width() > tight
+
+
 @pytest.mark.parametrize(
     ("style", "expected"),
     [
