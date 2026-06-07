@@ -34,9 +34,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Click a window · drag for a region · click here for full screen · Esc cancels",
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · Esc 取消",
     },
-    "smart.adjust_hint": {
-        "en": "Arrows move · ⌥ resizes · ⇧ ×10 · Enter or click inside captures",
-        "zh": "方向键移动 · ⌥ 调大小 · ⇧ ×10 · Enter 或点击选区内截图",
+    "editor.adjust_hint": {
+        "en": "Arrows move crop · ⌥ resizes · ⇧ ×10 · until first annotation",
+        "zh": "方向键微调选区 · ⌥ 调大小 · ⇧ ×10 · 开始标注后固定",
     },
     "about.body": {"en": "Screenshot & annotation tool.", "zh": "截图与标注工具。"},
     # Editor window titles
@@ -139,8 +139,8 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},
     "settings.hover_switch": {"en": "Highlight window after", "zh": "悬停高亮窗口"},
     "settings.region_adjust": {
-        "en": "Adjust region with arrow keys before capture",
-        "zh": "区域截图松手后可用方向键微调",
+        "en": "Adjust region with arrow keys in the editor",
+        "zh": "区域截图后可在编辑器中用方向键微调",
     },
     "settings.editor_backdrop": {
         "en": "Edit in place over the dimmed screen (frameless editor)",

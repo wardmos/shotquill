@@ -9,15 +9,12 @@ capture mode from what the pointer does — no separate region/window hotkeys:
 * Hovering empty space lights the whole desktop; a click captures full screen.
 * Pressing and dragging draws a rectangle and selects that region.
 
-By default releasing a region drag *pins* the selection instead of capturing
-immediately: hand-drawn edges are rarely pixel-accurate, so the pinned
-rectangle can be nudged with the arrow keys (one native pixel per press;
-Shift steps by 10, Option moves the right/bottom edge to resize) before Enter
-or a click inside it captures. A click outside discards it — a drag from
-there starts a fresh selection. Arrow keys would be useless *during* the
-drag (any pointer tremor overwrites the nudged corner on the next move
-event), which is why adjustment only starts once the mouse is released. The
-pin step can be turned off in Settings, restoring capture-on-release.
+Releasing a region drag captures immediately and hands off to the editor,
+which opens in place over the selection; hand-drawn edges are rarely
+pixel-accurate, so the *editor* keeps the selection adjustable with the
+arrow keys until the first annotation lands (see ``EditorWindow``). There
+used to be a separate pinned-adjustment step here between release and the
+editor; folding it into the editor removed one mode from the flow.
 
 Esc or a right-click cancels. This folds the old ``RegionOverlay`` and
 ``WindowPicker`` into one interaction.
@@ -41,11 +38,7 @@ from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from shotquill.config import (
-    DEFAULT_HOVER_SWITCH_DELAY_MS,
-    DEFAULT_REGION_ADJUST,
-    HOVER_SWITCH_NEVER,
-)
+from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
 from shotquill.i18n import t
 from shotquill.ui.geometry import (
     loupe_anchor,
@@ -75,15 +68,6 @@ _LOUPE_LABEL_H = 20  # readout strip under the magnified pixels
 # How long the pointer must rest on a window before its un-occluded preview is
 # fetched — sweeping across windows must not fire a capture per window passed.
 _PREVIEW_DELAY_MS = 120
-# Keyboard adjustment of a pinned selection: arrows step by one *native* pixel
-# (what the loupe and size label read in), Shift steps by _NUDGE_COARSE.
-_NUDGE_COARSE = 10
-_ARROW_DELTAS = {
-    Qt.Key_Left: (-1, 0),
-    Qt.Key_Right: (1, 0),
-    Qt.Key_Up: (0, -1),
-    Qt.Key_Down: (0, 1),
-}
 
 
 class SmartOverlay(QWidget):
@@ -104,7 +88,6 @@ class SmartOverlay(QWidget):
         windows: list[WindowInfo],
         window_preview: Callable[[int], QImage | None] | None = None,
         hover_switch_delay_ms: int = DEFAULT_HOVER_SWITCH_DELAY_MS,
-        region_adjust: bool = DEFAULT_REGION_ADJUST,
     ) -> None:
         super().__init__()
         self._screenshot = screenshot
@@ -141,13 +124,6 @@ class SmartOverlay(QWidget):
         self._dragging = False
         self._press_hover: int | None = None
         self._activated = False
-        # Pinned-selection (keyboard adjustment) state. While pinned, _origin
-        # is normalized to the top-left and _current to the bottom-right corner
-        # so resizing always knows which point owns the right/bottom edge.
-        self._region_adjust = region_adjust
-        self._pinned = False
-        self._confirm_press = False  # press inside the pinned selection: capture on release
-        self._repick = False  # press outside it: drop the pin; a drag re-selects
 
         # Un-occluded per-window previews: window id -> pixmap, or None when the
         # fetch failed (so it is not retried and painting falls back to the
@@ -192,7 +168,7 @@ class SmartOverlay(QWidget):
         painter.fillRect(self.rect(), _DIM)
 
         has_selection = self._origin is not None and self._current is not None
-        if (self._dragging or self._pinned) and has_selection:
+        if self._dragging and has_selection:
             self._paint_region(painter)
         elif self._hover is not None:
             self._paint_window(painter)
@@ -215,8 +191,6 @@ class SmartOverlay(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(sel)
         self._draw_size_label(painter, sel, source)
-        if self._pinned:
-            self._draw_adjust_hint(painter, sel)
 
     def _paint_window(self, painter: QPainter) -> None:
         bx, by, bw, bh = self._boxes[self._hover]
@@ -285,21 +259,6 @@ class SmartOverlay(QWidget):
         painter.setPen(Qt.white)
         painter.drawText(box.adjusted(8, 0, -8, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
 
-    def _draw_adjust_hint(self, painter: QPainter, sel: QRect) -> None:
-        # Shortcut hint for the pinned selection, below its bottom edge (or
-        # tucked inside it near the bottom when the selection touches the
-        # screen edge), so the keyboard-adjust step is discoverable.
-        hint = t("smart.adjust_hint")
-        painter.setFont(QFont("", 11))
-        text_w = painter.fontMetrics().horizontalAdvance(hint) + 16
-        box = QRect(sel.x(), sel.bottom() + 6, text_w, 20)
-        if box.bottom() > self.height() - 2:
-            box.moveBottom(sel.bottom() - 6)
-        box.moveLeft(min(max(box.left(), 2), max(self.width() - box.width() - 2, 2)))
-        painter.fillRect(box, QColor(0, 0, 0, 180))
-        painter.setPen(Qt.white)
-        painter.drawText(box, Qt.AlignCenter, hint)
-
     def _paint_loupe(self, painter: QPainter) -> None:
         cx, cy = self._cursor.x(), self._cursor.y()
         # Native pixel under the pointer (clamped so edge hovering stays valid).
@@ -367,12 +326,6 @@ class SmartOverlay(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
         self._cursor = pos
-        if self._pinned:
-            # The selection is fixed; only the loupe follows the pointer. The
-            # drag branch below must not run — it would drag _current (the
-            # bottom-right corner) along with every pointer move.
-            self.update()
-            return
         if self._origin is not None:
             self._current = pos
             if not self._dragging:
@@ -471,20 +424,6 @@ class SmartOverlay(QWidget):
             self._cancel()
             return
         if event.button() == Qt.LeftButton:
-            if self._pinned:
-                if self._selection().contains(event.position().toPoint()):
-                    # Click inside the pinned selection: capture on release.
-                    self._confirm_press = True
-                else:
-                    # Click outside discards the pin; dragging from here draws
-                    # a fresh selection, a bare click just returns to hovering.
-                    self._pinned = False
-                    self._repick = True
-                    self._origin = event.position()
-                    self._current = event.position()
-                    self._dragging = False
-                self.update()
-                return
             # A quick move-and-click means "the thing under the cursor", even
             # when the debounced highlight hasn't caught up yet (and this is
             # the only way the highlight moves under HOVER_SWITCH_NEVER).
@@ -500,26 +439,9 @@ class SmartOverlay(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._origin is None:
             return
-        if self._confirm_press:
-            # Click inside the pinned selection; _current must stay put — it
-            # is the selection's bottom-right corner, not the release point.
-            self._confirm_press = False
-            self._accept_region()
-            return
-        repick = self._repick
-        self._repick = False
         self._current = event.position()
         if self._dragging:
-            if self._region_adjust:
-                self._pin_selection()
-            else:
-                self._accept_region()
-        elif repick:
-            # A bare click outside the old pinned selection: just back to
-            # hover mode — it must not capture the window/screen under it.
-            self._origin = None
-            self._current = None
-            self.update()
+            self._accept_region()
         else:
             self._accept_target(self._press_hover)
 
@@ -527,65 +449,10 @@ class SmartOverlay(QWidget):
         if event.key() == Qt.Key_Escape:
             self._cancel()
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            if self._dragging or self._pinned:
+            if self._dragging:
                 self._accept_region()
             else:
                 self._accept_target(self._hover)
-        elif self._pinned and event.key() in _ARROW_DELTAS:
-            self._keyboard_adjust(event)
-
-    # --- pinned-selection keyboard adjustment -------------------------------
-
-    def _pin_selection(self) -> None:
-        # Normalize the drag points so _origin is the top-left and _current
-        # the bottom-right corner regardless of drag direction; keyboard
-        # resizing can then always act on _current.
-        x, y, w, h = selection_rect(
-            self._origin.x(), self._origin.y(), self._current.x(), self._current.y()
-        )
-        self._origin = QPointF(x, y)
-        self._current = QPointF(x + w, y + h)
-        self._dragging = False
-        self._pinned = True
-        self.update()
-
-    def _keyboard_adjust(self, event) -> None:
-        dx, dy = _ARROW_DELTAS[event.key()]
-        step = _NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
-        # One step is one *native* pixel expressed in logical points, so on a
-        # Retina screen a press moves the crop (and the size label readout) by
-        # exactly one screenshot pixel, not one 2x point.
-        lx = dx * step / self._sx
-        ly = dy * step / self._sy
-        if event.modifiers() & Qt.AltModifier:
-            self._resize_selection(lx, ly)
-        else:
-            self._move_selection(lx, ly)
-        self.update()
-
-    def _move_selection(self, lx: float, ly: float) -> None:
-        w = self._current.x() - self._origin.x()
-        h = self._current.y() - self._origin.y()
-        nx = min(max(self._origin.x() + lx, 0.0), self.width() - w)
-        ny = min(max(self._origin.y() + ly, 0.0), self.height() - h)
-        self._origin = QPointF(nx, ny)
-        self._current = QPointF(nx + w, ny + h)
-        # Park the loupe at the middle of the leading edge so the nudge can be
-        # verified pixel-by-pixel without touching the mouse.
-        cx = nx if lx < 0 else nx + w if lx > 0 else nx + w / 2
-        cy = ny if ly < 0 else ny + h if ly > 0 else ny + h / 2
-        self._cursor = QPointF(cx, cy)
-
-    def _resize_selection(self, lx: float, ly: float) -> None:
-        # Option+arrows move the bottom-right corner; combined with plain
-        # arrows (which move the whole box) any edge can be placed exactly.
-        nx = min(max(self._current.x() + lx, self._origin.x() + _MIN_SIZE), float(self.width()))
-        ny = min(max(self._current.y() + ly, self._origin.y() + _MIN_SIZE), float(self.height()))
-        self._current = QPointF(nx, ny)
-        # Loupe onto the edge being resized (its middle).
-        cx = nx if lx else (self._origin.x() + nx) / 2
-        cy = ny if ly else (self._origin.y() + ny) / 2
-        self._cursor = QPointF(cx, cy)
 
     def _accept_region(self) -> None:
         sel = self._selection()

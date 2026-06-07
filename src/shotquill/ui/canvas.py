@@ -45,6 +45,9 @@ if TYPE_CHECKING:
 
 _DEFAULT_COLOR = "#ff3b30"
 _NEGLIGIBLE = 3.0
+# Keys the editor window uses to adjust the crop region; the canvas must not
+# swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
+_CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
 # Pixelating the whole selection on every mouse move is expensive on big
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
@@ -124,6 +127,22 @@ class AnnotationCanvas(QGraphicsView):
         """The original (un-annotated) screenshot, for OCR."""
         return self._background_pixmap.toImage()
 
+    def set_background(self, background: QPixmap) -> None:
+        """Swap the screenshot under the (empty) scene — crop adjustment.
+
+        Only called while the canvas is pristine (see ``is_pristine``), so no
+        annotation can be left misaligned over the re-cropped pixels.
+        """
+        self._background_pixmap = background
+        self._background.setPixmap(background)
+        self._scene.setSceneRect(QRectF(background.rect()))
+
+    def is_pristine(self) -> bool:
+        """True while nothing has been annotated: no undo history and nothing
+        on the scene beyond the background screenshot (an uncommitted text
+        item counts as an annotation)."""
+        return self._undo.count() == 0 and len(self._scene.items()) == 1
+
     def color(self) -> QColor:
         return QColor(self._color)
 
@@ -173,6 +192,16 @@ class AnnotationCanvas(QGraphicsView):
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         return pen
+
+    def keyPressEvent(self, event) -> None:
+        # Arrow keys belong to the window's crop adjustment while no text
+        # annotation has focus (a focused text item still gets them for cursor
+        # movement via the scene). Without this, QAbstractScrollArea would
+        # accept them for scrolling and the window would never see them.
+        if event.key() in _CROP_ADJUST_KEYS and self._scene.focusItem() is None:
+            event.ignore()
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._tool == Tool.SELECT:

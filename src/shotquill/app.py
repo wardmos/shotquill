@@ -24,7 +24,7 @@ from shotquill.config import Config, human_readable_hotkey
 from shotquill.hotkeys.macos import MacHotkeyManager
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
-from shotquill.ui.editor import EditorWindow
+from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
@@ -223,9 +223,14 @@ class ShotquillApp(QObject):
             windows,
             window_preview=self._window_preview_image,
             hover_switch_delay_ms=self._config.hover_switch_delay_ms(),
-            region_adjust=self._config.region_adjust(),
         )
-        overlay.region_selected.connect(self._deliver_capture)
+        # Region captures carry the full screenshot along so the editor can
+        # keep the crop adjustable (arrow-key nudging) until annotation starts.
+        overlay.region_selected.connect(
+            lambda image, rect: self._deliver_capture(
+                image, rect, region=RegionContext(screenshot, geometry)
+            )
+        )
         overlay.window_selected.connect(self._capture_window_image)
         overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot, geometry))
         self._track(overlay)
@@ -268,15 +273,21 @@ class ShotquillApp(QObject):
     def _notify(self, message: str) -> None:
         self._tray.showMessage("ShotQuill", message, QSystemTrayIcon.MessageIcon.Critical)
 
-    def _deliver_capture(self, image: QImage, origin: QRect | None = None) -> None:
+    def _deliver_capture(
+        self,
+        image: QImage,
+        origin: QRect | None = None,
+        region: RegionContext | None = None,
+    ) -> None:
         # Single exit for every capture mode. Flash/sound feedback fires either
         # way; then auto-output (if enabled) saves/copies the raw shot hands-free
         # and skips the editor. With both auto toggles off, the editor opens —
-        # placed over ``origin`` (the shot's on-screen rect) when known.
+        # placed over ``origin`` (the shot's on-screen rect) when known, with
+        # ``region`` keeping a region capture's crop arrow-key adjustable there.
         self._signal_capture()
         if self._auto_output(image):
             return
-        self._open_editor(image, origin)
+        self._open_editor(image, origin, region)
 
     def _auto_output(self, image: QImage) -> bool:
         """Save and/or copy the raw shot per config; return True if it handled it.
@@ -304,8 +315,15 @@ class ShotquillApp(QObject):
                 return False
         return True
 
-    def _open_editor(self, image: QImage, origin: QRect | None = None) -> None:
-        editor = EditorWindow(image, self._config, origin)
+    def _open_editor(
+        self,
+        image: QImage,
+        origin: QRect | None = None,
+        region: RegionContext | None = None,
+    ) -> None:
+        if not self._config.region_adjust():
+            region = None  # the user turned crop adjustment off in Settings
+        editor = EditorWindow(image, self._config, origin, region)
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)
         editor.show()
