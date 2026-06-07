@@ -32,10 +32,10 @@ cross-platform architecture (Windows / Linux planned).
     app window to grab just that window (real pixels, even when partly
     covered), click empty space to grab the whole screen, or drag a rectangle
     for a region
-    with a live size readout. The window under the pointer is traced with a
-    thin outline so the click target is always clear; hovering can also fully
-    highlight it before the click — with the window's own pixels lifted out
-    from under whatever overlaps it — after a configurable rest time
+    with a live size readout. The window under the pointer is spotlit against
+    the dimmed desktop so the click target is always clear; hovering can also
+    fully highlight it before the click — with the window's own pixels lifted
+    out from under whatever overlaps it — after a configurable rest time
     (Settings, "Highlight window after"; off by default). A pixel loupe follows the pointer — magnified
     pixels, a crosshair, and the position/colour under the cursor — so region
     boundaries land exactly where you want.

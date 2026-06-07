@@ -194,12 +194,13 @@ class SmartOverlay(QWidget):
         has_selection = self._origin is not None and self._current is not None
         if (self._dragging or self._pinned) and has_selection:
             self._paint_region(painter)
+        elif self._hover is not None:
+            self._paint_window(painter)
+            self._paint_pending_window(painter)
+        elif self._pending_hover is not None:
+            self._paint_pending_window(painter)
         else:
-            if self._hover is not None:
-                self._paint_window(painter)
-            else:
-                self._paint_fullscreen(painter)
-            self._paint_pending_outline(painter)
+            self._paint_fullscreen(painter)
 
         if self._cursor is not None:
             self._paint_loupe(painter)
@@ -234,19 +235,25 @@ class SmartOverlay(QWidget):
         painter.drawRect(sel)
         self._draw_window_label(painter, sel, self._windows[self._hover])
 
-    def _paint_pending_outline(self, painter: QPainter) -> None:
-        # Instant pointing feedback: a hairline around the window under the
-        # pointer while it is not (yet) the highlighted target — under
-        # HOVER_SWITCH_NEVER the only hover cue there is — so it is always
-        # clear which window a click would select, without lighting it up.
+    def _paint_pending_window(self, painter: QPainter) -> None:
+        # Instant pointing feedback: the window under the pointer keeps its
+        # frozen-screenshot pixels at full brightness against the dimmed
+        # desktop, traced with a thin outline — under HOVER_SWITCH_NEVER the
+        # only hover cue there is — so it is always clear which window a click
+        # would select. Deliberately *not* the full highlight: no un-occluded
+        # preview is fetched (nothing appears to jump to the front) and no
+        # label is drawn.
         if self._pending_hover is None or self._pending_hover == self._hover:
             return
         bx, by, bw, bh = self._boxes[self._pending_hover]
+        sel = QRect(int(bx), int(by), int(bw), int(bh))
+        source = QRectF(*scale_rect((bx, by, bw, bh), self._sx, self._sy))
+        painter.drawPixmap(QRectF(sel), self._pixmap, source)
         # 2 points: clearly visible on the dimmed desktop yet still a step
         # below the committed highlight's 3-point border.
         painter.setPen(QPen(_ACCENT, 2))
         painter.setBrush(Qt.NoBrush)
-        painter.drawRect(QRect(int(bx), int(by), int(bw), int(bh)).adjusted(0, 0, -1, -1))
+        painter.drawRect(sel.adjusted(0, 0, -1, -1))
 
     def _paint_fullscreen(self, painter: QPainter) -> None:
         # Pointer is over empty space: restore the whole desktop to full

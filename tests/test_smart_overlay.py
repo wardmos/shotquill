@@ -376,6 +376,30 @@ def test_pointed_window_gets_hairline_before_highlight_switches(qtbot):
     )
 
 
+def test_pointed_window_is_spotlit_against_dimmed_desktop(qtbot):
+    # The pointed window keeps its frozen pixels at full brightness while the
+    # rest of the desktop stays dimmed — without the un-occluded preview, so
+    # nothing appears to jump to the front.
+    window = WindowInfo(window_id=7, owner="Demo", title="", bounds=Rect(200, 0, 200, 200))
+    fetched = []
+    overlay = _overlay(
+        qtbot,
+        native=(800, 400),
+        logical=(400, 200),
+        windows=[window],
+        window_preview=lambda wid: fetched.append(wid),
+    )
+    overlay.resize(400, 200)
+
+    _move(overlay, 250, 100)
+    image = overlay.grab().toImage()
+    inside = image.pixelColor(220, 150)  # window interior, clear of loupe/outline
+    outside = image.pixelColor(100, 150)  # desktop next to it
+    assert inside.red() == inside.green() == inside.blue() == 255
+    assert outside.red() < 200  # still dimmed
+    assert not overlay._preview_timer.isActive() and fetched == []  # no lift-to-front
+
+
 def test_paint_loupe_at_screen_corner_does_not_crash(qtbot):
     # At (0, 0) the magnified source patch extends past the screenshot and the
     # loupe placement clamps; both paths must stay valid.
