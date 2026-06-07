@@ -112,18 +112,28 @@ def test_every_button_has_an_icon(qtbot):
         assert not action.icon().isNull(), action.text()
 
 
-def test_toolbar_shows_icon_and_text_by_default(qtbot):
+def test_toolbar_shows_text_under_icon_by_default(qtbot):
+    # Icon on top, label underneath: icons share one row, labels another.
     _canvas_, toolbar = _toolbar(qtbot)
-    assert toolbar.toolButtonStyle() == Qt.ToolButtonTextBesideIcon
+    assert toolbar.toolButtonStyle() == Qt.ToolButtonTextUnderIcon
+
+
+def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
+    from PySide6.QtCore import QSize
+
+    from shotquill.ui.icons import ICON_SIZE
+
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert toolbar.iconSize() == QSize(ICON_SIZE, ICON_SIZE)
 
 
 @pytest.mark.parametrize(
     ("style", "expected"),
     [
-        ("both", Qt.ToolButtonTextBesideIcon),
+        ("both", Qt.ToolButtonTextUnderIcon),
         ("icon", Qt.ToolButtonIconOnly),
         ("text", Qt.ToolButtonTextOnly),
-        ("sideways", Qt.ToolButtonTextBesideIcon),  # unknown value: default look
+        ("sideways", Qt.ToolButtonTextUnderIcon),  # unknown value: default look
     ],
 )
 def test_toolbar_button_style_follows_setting(qtbot, style, expected):

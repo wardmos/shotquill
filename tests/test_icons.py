@@ -6,7 +6,14 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from shotquill.ui.icons import ICON_NAMES, toolbar_icon  # noqa: E402
+from shotquill.ui.icons import _SCALE, ICON_NAMES, ICON_SIZE, toolbar_icon  # noqa: E402
+
+
+def test_glyphs_are_emitted_at_the_configured_size(qtbot):
+    from PySide6.QtCore import QSize
+
+    physical = QSize(ICON_SIZE * _SCALE, ICON_SIZE * _SCALE)
+    assert toolbar_icon("rect").availableSizes() == [physical]
 
 
 def test_every_glyph_renders_visible_pixels(qtbot):

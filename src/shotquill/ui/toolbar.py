@@ -7,13 +7,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QColorDialog, QSpinBox, QToolBar
 
 from shotquill.config import DEFAULT_TOOLBAR_STYLE
 from shotquill.i18n import t
-from shotquill.ui.icons import toolbar_icon
+from shotquill.ui.icons import ICON_SIZE, toolbar_icon
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
@@ -42,11 +42,14 @@ _TOOLS: list[tuple[str, Tool, str]] = [
     ("tool.text", Tool.TEXT, "text"),
 ]
 
-# Configured style string → how QToolBar lays out each button. Icon-only keeps
-# the label readable through the tooltip (a QAction's tooltip defaults to its
-# text, and the actions with bespoke tooltips already mention their function).
+# Configured style string → how QToolBar lays out each button. "both" stacks
+# the label under its icon, so across the bar the icons share one row and the
+# labels another — same-size glyphs centred over their text line up cleanly.
+# Icon-only keeps the label readable through the tooltip (a QAction's tooltip
+# defaults to its text, and the actions with bespoke tooltips already mention
+# their function).
 _BUTTON_STYLES: dict[str, Qt.ToolButtonStyle] = {
-    "both": Qt.ToolButtonTextBesideIcon,
+    "both": Qt.ToolButtonTextUnderIcon,
     "icon": Qt.ToolButtonIconOnly,
     "text": Qt.ToolButtonTextOnly,
 }
@@ -68,6 +71,9 @@ def create_toolbar(
 ) -> QToolBar:
     toolbar = QToolBar()
     toolbar.setToolButtonStyle(_BUTTON_STYLES.get(style, _BUTTON_STYLES[DEFAULT_TOOLBAR_STYLE]))
+    # Match the glyphs' emitted size; the platform default (24+) would pad
+    # every button back out around the smaller icons.
+    toolbar.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
     group = QActionGroup(toolbar)
     group.setExclusive(True)
 

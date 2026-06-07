@@ -31,6 +31,12 @@ _CANVAS = 24
 _SCALE = 2
 _STROKE = 1.8
 
+# Logical size the icons are emitted (and shown) at: the glyphs keep their
+# 24-grid design coordinates and are scaled down at paint time, so shrinking
+# the toolbar's icons is a one-constant change here. The toolbar sets its
+# icon size to this so the buttons don't pad the glyph back out.
+ICON_SIZE = 16
+
 
 def _draw_select(p: QPainter) -> None:
     # Classic pointer: arrow body with a short tail off the heel.
@@ -229,11 +235,14 @@ def toolbar_icon(name: str) -> QIcon:
     so a theme change between captures picks up the new palette automatically.
     """
     draw = _GLYPHS[name]
-    pixmap = QPixmap(_CANVAS * _SCALE, _CANVAS * _SCALE)
+    pixmap = QPixmap(ICON_SIZE * _SCALE, ICON_SIZE * _SCALE)
     pixmap.setDevicePixelRatio(_SCALE)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
+    # Glyphs are drawn in their 24-grid design coordinates; this scale maps
+    # them onto the (smaller) emitted size, pen width included.
+    painter.scale(ICON_SIZE / _CANVAS, ICON_SIZE / _CANVAS)
     pen = QPen(QGuiApplication.palette().color(QPalette.Text), _STROKE)
     pen.setCapStyle(Qt.RoundCap)
     pen.setJoinStyle(Qt.RoundJoin)
