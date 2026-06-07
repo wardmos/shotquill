@@ -12,6 +12,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtWidgets import QDialog  # noqa: E402
+
 from shotquill import app as app_module  # noqa: E402
 from shotquill.capture.base import CaptureResult  # noqa: E402
 
@@ -339,22 +341,23 @@ def test_capturer_gets_cursor_preference_from_config(qapp, config, fakes):
     app.shutdown()
 
 
+class _FakeSettingsDialog(QDialog):
+    """Stands in for SettingsDialog: a plain QDialog that ignores the config."""
+
+    def __init__(self, cfg):
+        super().__init__()
+
+
 def test_open_settings_syncs_capturer_cursor_preference(qapp, config, fakes, monkeypatch):
     capturer, _hotkeys, _autostart = fakes
     app = _build_app(qapp, fakes)
     assert capturer.include_cursor is False
 
-    class _FakeDialog:
-        def __init__(self, cfg):
-            pass
-
-        def exec(self):
-            # Simulate the user turning the cursor toggle on in the dialog.
-            config.set_include_cursor(True)
-            return True
-
-    monkeypatch.setattr(app_module, "SettingsDialog", _FakeDialog)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
     app._open_settings()
+    # Simulate the user turning the cursor toggle on, then pressing OK.
+    config.set_include_cursor(True)
+    app._settings_dialog.accept()
     assert capturer.include_cursor is True
     app.shutdown()
 
@@ -362,17 +365,35 @@ def test_open_settings_syncs_capturer_cursor_preference(qapp, config, fakes, mon
 def test_open_settings_reapplies_on_accept(qapp, config, fakes, monkeypatch):
     app = _build_app(qapp, fakes)
 
-    class _FakeDialog:
-        def __init__(self, cfg):
-            self._cfg = cfg
-
-        def exec(self):
-            return True
-
-    monkeypatch.setattr(app_module, "SettingsDialog", _FakeDialog)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
     rebuilt = []
     monkeypatch.setattr(app, "_rebuild_menu", lambda: rebuilt.append(True))
     monkeypatch.setattr(app, "_apply_hotkeys", lambda: rebuilt.append("hotkeys"))
     app._open_settings()
+    app._settings_dialog.accept()
     assert "hotkeys" in rebuilt and True in rebuilt
+    app.shutdown()
+
+
+def test_settings_dialog_is_modeless_and_reused(qapp, config, fakes, monkeypatch):
+    # exec() would make the dialog application-modal, which macOS floats above
+    # every other app's windows — it must open modeless. A second menu trigger
+    # re-fronts the open dialog instead of stacking another one; cancelling
+    # drops the reference without re-applying settings.
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+
+    app._open_settings()
+    first = app._settings_dialog
+    assert first.isVisible()
+    assert first.isModal() is False
+
+    app._open_settings()
+    assert app._settings_dialog is first  # reused, not replaced
+
+    applied = []
+    monkeypatch.setattr(app, "_apply_settings", lambda: applied.append(True))
+    first.reject()
+    assert app._settings_dialog is None
+    assert applied == []
     app.shutdown()

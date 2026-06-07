@@ -94,6 +94,7 @@ class ShotquillApp(QObject):
         self._autostart = MacAutostartManager()
         self._sync_autostart()
         self._windows: list[object] = []  # keep overlays/editors alive
+        self._settings_dialog: SettingsDialog | None = None
 
         self._bridge = _HotkeyBridge()
         # Hotkeys are emitted from pynput's listener thread. Force queued delivery
@@ -296,18 +297,40 @@ class ShotquillApp(QObject):
             pass  # non-fatal: launch-at-login is a convenience, not core function
 
     def _open_settings(self) -> None:
+        # Modeless on purpose. exec() would make the dialog application-modal,
+        # which Qt elevates to a macOS panel window level — and window levels
+        # are global, so the dialog would float above *other apps'* windows
+        # even with ShotQuill in the background. There is no main window for
+        # modality to protect anyway; re-triggering the menu item while the
+        # dialog is open just brings it back to front.
+        if self._settings_dialog is not None:
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
         dialog = SettingsDialog(self._config)
-        if dialog.exec():
-            set_language(self._config.language())
-            self._capturer.include_cursor = self._config.include_cursor()
-            self._apply_hotkeys()
-            self._sync_autostart()
-            self._rebuild_menu()
-            # Editors resolve their finish keys at creation; push the new
-            # bindings into any that are still open.
-            for window in self._windows:
-                if isinstance(window, EditorWindow):
-                    window.reload_finish_keys()
+        dialog.accepted.connect(self._apply_settings)
+        dialog.finished.connect(self._forget_settings_dialog)
+        self._settings_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _apply_settings(self) -> None:
+        set_language(self._config.language())
+        self._capturer.include_cursor = self._config.include_cursor()
+        self._apply_hotkeys()
+        self._sync_autostart()
+        self._rebuild_menu()
+        # Editors resolve their finish keys at creation; push the new
+        # bindings into any that are still open.
+        for window in self._windows:
+            if isinstance(window, EditorWindow):
+                window.reload_finish_keys()
+
+    def _forget_settings_dialog(self) -> None:
+        if self._settings_dialog is not None:
+            self._settings_dialog.deleteLater()
+            self._settings_dialog = None
 
     def _show_about(self) -> None:
         body = (
