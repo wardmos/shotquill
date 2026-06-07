@@ -175,7 +175,14 @@ class EditorWindow(QMainWindow):
             self._status_badge = QLabel(self._canvas.viewport())
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
-        toolbar = create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin)
+        toolbar = create_toolbar(
+            self._canvas,
+            self._copy,
+            self._save,
+            self._ocr,
+            self._pin,
+            style=config.toolbar_style(),
+        )
         # The toolbar lands in the corner nearest the pointer (e.g. the
         # bottom-right after a region drag towards the bottom of the screen),
         # so finishing a shot never means crossing the whole capture.

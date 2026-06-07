@@ -210,3 +210,27 @@ def test_editor_backdrop_round_trip(config):
     assert config.editor_backdrop() is False
     config.set_editor_backdrop(True)
     assert config.editor_backdrop() is True
+
+
+def test_toolbar_style_defaults_to_icon_and_text(config):
+    from shotquill.config import DEFAULT_TOOLBAR_STYLE, TOOLBAR_STYLES
+
+    assert DEFAULT_TOOLBAR_STYLE == "both"
+    assert DEFAULT_TOOLBAR_STYLE in TOOLBAR_STYLES
+    assert config.toolbar_style() == DEFAULT_TOOLBAR_STYLE
+
+
+def test_toolbar_style_round_trip(config):
+    config.set_toolbar_style("icon")
+    assert config.toolbar_style() == "icon"
+    config.set_toolbar_style("text")
+    assert config.toolbar_style() == "text"
+
+
+def test_toolbar_style_unknown_value_falls_back(config):
+    from shotquill.config import DEFAULT_TOOLBAR_STYLE
+
+    # E.g. a hand-edited prefs file: read back as the default, not passed on
+    # to the toolbar verbatim.
+    config.set_toolbar_style("sideways")
+    assert config.toolbar_style() == DEFAULT_TOOLBAR_STYLE

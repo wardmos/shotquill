@@ -69,6 +69,12 @@ DEFAULT_REGION_ADJUST = True
 # like during capture. Turning this off restores a regular titled window.
 DEFAULT_EDITOR_BACKDROP = True
 
+# How the editor toolbar labels its buttons: an icon next to the text (the
+# default), just the icon (compact; the text moves into the tooltip), or just
+# the text (the classic pre-icon look).
+TOOLBAR_STYLES = ("both", "icon", "text")
+DEFAULT_TOOLBAR_STYLE = "both"
+
 
 def _to_bool(value: object, default: bool) -> bool:
     """Coerce a QSettings value (which may come back as a string) into a bool."""
@@ -204,3 +210,11 @@ class Config:
 
     def set_editor_backdrop(self, enabled: bool) -> None:
         self._settings.setValue("editor/backdrop", bool(enabled))
+
+    def toolbar_style(self) -> str:
+        """One of TOOLBAR_STYLES; unknown stored values fall back to the default."""
+        value = str(self._settings.value("editor/toolbar_style", DEFAULT_TOOLBAR_STYLE))
+        return value if value in TOOLBAR_STYLES else DEFAULT_TOOLBAR_STYLE
+
+    def set_toolbar_style(self, style: str) -> None:
+        self._settings.setValue("editor/toolbar_style", style)

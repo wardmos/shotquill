@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from shotquill import permissions
-from shotquill.config import HOVER_SWITCH_NEVER
+from shotquill.config import HOVER_SWITCH_NEVER, TOOLBAR_STYLES
 from shotquill.hotkeys.combo import parse_combo, to_pynput_combo
 from shotquill.i18n import LANGUAGE_NAMES, LANGUAGES, t
 from shotquill.permissions import PermissionStatus
@@ -323,6 +323,14 @@ class SettingsDialog(QDialog):
         self._editor_backdrop.setChecked(config.editor_backdrop())
         form.addRow("", self._editor_backdrop)
 
+        self._toolbar_style = QComboBox()
+        for choice in TOOLBAR_STYLES:
+            self._toolbar_style.addItem(t(f"settings.toolbar_style_{choice}"), choice)
+        style_index = self._toolbar_style.findData(config.toolbar_style())
+        if style_index >= 0:
+            self._toolbar_style.setCurrentIndex(style_index)
+        form.addRow(t("settings.toolbar_style"), self._toolbar_style)
+
         self._autostart = QCheckBox(t("settings.autostart"))
         self._autostart.setChecked(config.autostart())
         form.addRow("", self._autostart)
@@ -445,6 +453,7 @@ class SettingsDialog(QDialog):
         self._config.set_hover_switch_delay_ms(self._hover_switch.currentData())
         self._config.set_region_adjust(self._region_adjust.isChecked())
         self._config.set_editor_backdrop(self._editor_backdrop.isChecked())
+        self._config.set_toolbar_style(self._toolbar_style.currentData())
         self._config.set_autostart(self._autostart.isChecked())
         self._config.set_flash_on_capture(self._flash.isChecked())
         self._config.set_sound_on_capture(self._sound.isChecked())

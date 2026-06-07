@@ -141,6 +141,25 @@ def test_dialog_save_persists_editor_backdrop(qtbot, config):
     assert config.editor_backdrop() is False
 
 
+def test_dialog_prefills_toolbar_style_from_config(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._toolbar_style.currentData() == "both"  # icon and text by default
+
+    config.set_toolbar_style("icon")
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._toolbar_style.currentData() == "icon"
+
+
+def test_dialog_save_persists_toolbar_style(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._toolbar_style.setCurrentIndex(dialog._toolbar_style.findData("text"))
+    dialog._save_and_accept()
+    assert config.toolbar_style() == "text"
+
+
 def _silence_warnings(monkeypatch):
     """Swallow the QMessageBox.warning popup (it would block offscreen tests)."""
     from PySide6.QtWidgets import QMessageBox

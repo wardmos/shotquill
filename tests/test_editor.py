@@ -434,3 +434,12 @@ def test_ocr_runs_off_the_gui_thread_and_ignores_reentry(qtbot, config, monkeypa
     _wait_ocr_done(qtbot, window)
     assert recognizer.instances == 1
     assert window.windowTitle() == "ShotQuill — Copied 1 line(s)"
+
+
+def test_editor_toolbar_style_follows_config(qtbot, config):
+    from PySide6.QtWidgets import QToolBar
+
+    config.set_toolbar_style("icon")
+    window = _editor(qtbot, config)
+    toolbar = window.findChild(QToolBar)
+    assert toolbar.toolButtonStyle() == Qt.ToolButtonIconOnly

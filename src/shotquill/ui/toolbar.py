@@ -7,10 +7,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QColorDialog, QSpinBox, QToolBar
 
+from shotquill.config import DEFAULT_TOOLBAR_STYLE
 from shotquill.i18n import t
+from shotquill.ui.icons import toolbar_icon
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
@@ -26,17 +29,27 @@ RESERVED_SHORTCUTS: tuple[QKeySequence.StandardKey, ...] = (
     QKeySequence.Redo,
 )
 
-_TOOLS: list[tuple[str, Tool]] = [
-    ("tool.select", Tool.SELECT),
-    ("tool.rect", Tool.RECT),
-    ("tool.ellipse", Tool.ELLIPSE),
-    ("tool.arrow", Tool.ARROW),
-    ("tool.line", Tool.LINE),
-    ("tool.pen", Tool.PEN),
-    ("tool.highlighter", Tool.HIGHLIGHTER),
-    ("tool.mosaic", Tool.MOSAIC),
-    ("tool.text", Tool.TEXT),
+# (i18n key, tool, icon name) — the icon names index shotquill.ui.icons.
+_TOOLS: list[tuple[str, Tool, str]] = [
+    ("tool.select", Tool.SELECT, "select"),
+    ("tool.rect", Tool.RECT, "rect"),
+    ("tool.ellipse", Tool.ELLIPSE, "ellipse"),
+    ("tool.arrow", Tool.ARROW, "arrow"),
+    ("tool.line", Tool.LINE, "line"),
+    ("tool.pen", Tool.PEN, "pen"),
+    ("tool.highlighter", Tool.HIGHLIGHTER, "highlighter"),
+    ("tool.mosaic", Tool.MOSAIC, "mosaic"),
+    ("tool.text", Tool.TEXT, "text"),
 ]
+
+# Configured style string → how QToolBar lays out each button. Icon-only keeps
+# the label readable through the tooltip (a QAction's tooltip defaults to its
+# text, and the actions with bespoke tooltips already mention their function).
+_BUTTON_STYLES: dict[str, Qt.ToolButtonStyle] = {
+    "both": Qt.ToolButtonTextBesideIcon,
+    "icon": Qt.ToolButtonIconOnly,
+    "text": Qt.ToolButtonTextOnly,
+}
 
 
 def _pick_color(canvas: AnnotationCanvas) -> None:
@@ -51,13 +64,15 @@ def create_toolbar(
     on_save: Callable[[], None],
     on_ocr: Callable[[], None],
     on_pin: Callable[[], None],
+    style: str = DEFAULT_TOOLBAR_STYLE,
 ) -> QToolBar:
     toolbar = QToolBar()
+    toolbar.setToolButtonStyle(_BUTTON_STYLES.get(style, _BUTTON_STYLES[DEFAULT_TOOLBAR_STYLE]))
     group = QActionGroup(toolbar)
     group.setExclusive(True)
 
-    for key, tool in _TOOLS:
-        action = QAction(t(key), toolbar)
+    for key, tool, icon in _TOOLS:
+        action = QAction(toolbar_icon(icon), t(key), toolbar)
         action.setCheckable(True)
         action.setChecked(tool == Tool.SELECT)
         action.triggered.connect(lambda _checked=False, bound=tool: canvas.set_tool(bound))
@@ -66,7 +81,7 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
-    color_action = QAction(t("toolbar.color"), toolbar)
+    color_action = QAction(toolbar_icon("color"), t("toolbar.color"), toolbar)
     color_action.triggered.connect(lambda: _pick_color(canvas))
     toolbar.addAction(color_action)
 
@@ -80,31 +95,33 @@ def create_toolbar(
     toolbar.addSeparator()
 
     undo_action = canvas.undo_stack().createUndoAction(toolbar, t("toolbar.undo"))
+    undo_action.setIcon(toolbar_icon("undo"))
     undo_action.setShortcut(QKeySequence.Undo)
     redo_action = canvas.undo_stack().createRedoAction(toolbar, t("toolbar.redo"))
+    redo_action.setIcon(toolbar_icon("redo"))
     redo_action.setShortcut(QKeySequence.Redo)
     toolbar.addAction(undo_action)
     toolbar.addAction(redo_action)
 
     toolbar.addSeparator()
 
-    ocr_action = QAction(t("toolbar.ocr"), toolbar)
+    ocr_action = QAction(toolbar_icon("ocr"), t("toolbar.ocr"), toolbar)
     ocr_action.setToolTip(t("toolbar.ocr_tip"))
     ocr_action.triggered.connect(on_ocr)
     toolbar.addAction(ocr_action)
 
-    pin_action = QAction(t("toolbar.pin"), toolbar)
+    pin_action = QAction(toolbar_icon("pin"), t("toolbar.pin"), toolbar)
     pin_action.setToolTip(t("toolbar.pin_tip"))
     pin_action.triggered.connect(on_pin)
     toolbar.addAction(pin_action)
 
-    copy_action = QAction(t("toolbar.copy"), toolbar)
+    copy_action = QAction(toolbar_icon("copy"), t("toolbar.copy"), toolbar)
     copy_action.setShortcut(QKeySequence.Copy)
     copy_action.setToolTip(t("toolbar.copy_tip"))
     copy_action.triggered.connect(on_copy)
     toolbar.addAction(copy_action)
 
-    save_action = QAction(t("toolbar.save"), toolbar)
+    save_action = QAction(toolbar_icon("save"), t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
     save_action.setToolTip(t("toolbar.save_tip"))
     save_action.triggered.connect(on_save)

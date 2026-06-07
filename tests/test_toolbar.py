@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QSpinBox  # noqa: E402
 
@@ -22,7 +23,7 @@ def _canvas(qtbot):
     return canvas
 
 
-def _toolbar(qtbot, **callbacks):
+def _toolbar(qtbot, style=None, **callbacks):
     canvas = _canvas(qtbot)
     cbs = {
         "on_copy": lambda: None,
@@ -31,7 +32,10 @@ def _toolbar(qtbot, **callbacks):
         "on_pin": lambda: None,
     }
     cbs.update(callbacks)
-    toolbar = create_toolbar(canvas, cbs["on_copy"], cbs["on_save"], cbs["on_ocr"], cbs["on_pin"])
+    kwargs = {} if style is None else {"style": style}
+    toolbar = create_toolbar(
+        canvas, cbs["on_copy"], cbs["on_save"], cbs["on_ocr"], cbs["on_pin"], **kwargs
+    )
     qtbot.addWidget(toolbar)
     return canvas, toolbar
 
@@ -97,3 +101,31 @@ def test_copy_and_save_callbacks_are_wired(qtbot):
     for label in ("Copy", "Save", "Copy Text", "Pin"):
         texts[label].trigger()
     assert set(calls) == {"copy", "save", "ocr", "pin"}
+
+
+def test_every_button_has_an_icon(qtbot):
+    _canvas_, toolbar = _toolbar(qtbot)
+    for action in toolbar.actions():
+        # Separators and the width spinbox carry no icon by design.
+        if action.isSeparator() or isinstance(toolbar.widgetForAction(action), QSpinBox):
+            continue
+        assert not action.icon().isNull(), action.text()
+
+
+def test_toolbar_shows_icon_and_text_by_default(qtbot):
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert toolbar.toolButtonStyle() == Qt.ToolButtonTextBesideIcon
+
+
+@pytest.mark.parametrize(
+    ("style", "expected"),
+    [
+        ("both", Qt.ToolButtonTextBesideIcon),
+        ("icon", Qt.ToolButtonIconOnly),
+        ("text", Qt.ToolButtonTextOnly),
+        ("sideways", Qt.ToolButtonTextBesideIcon),  # unknown value: default look
+    ],
+)
+def test_toolbar_button_style_follows_setting(qtbot, style, expected):
+    _canvas_, toolbar = _toolbar(qtbot, style=style)
+    assert toolbar.toolButtonStyle() == expected
