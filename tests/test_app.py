@@ -397,3 +397,59 @@ def test_settings_dialog_is_modeless_and_reused(qapp, config, fakes, monkeypatch
     assert app._settings_dialog is None
     assert applied == []
     app.shutdown()
+
+
+def test_smart_capture_shelves_open_settings_until_overlay_closes(qapp, config, fakes, monkeypatch):
+    # A modeless Settings window fights the overlay for activation (the
+    # overlay cancels itself when deactivated) and would appear in the shot:
+    # capturing must hide it, then bring it back once the overlay is gone.
+    from PySide6.QtCore import QEvent
+
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    app._open_settings()
+    dialog = app._settings_dialog
+    assert dialog.isVisible()
+
+    app._capture_smart()
+    assert not dialog.isVisible()  # shelved for the duration of the capture
+    overlay = next(w for w in app._windows if isinstance(w, app_module.SmartOverlay))
+    overlay.close()  # every accept/cancel path ends in close()
+    qapp.sendPostedEvents(None, QEvent.DeferredDelete)  # let WA_DeleteOnClose land
+    assert dialog.isVisible()  # restored, not closed: edits survive
+    app.shutdown()
+
+
+def test_fullscreen_capture_shelves_settings_during_the_grab(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    app._open_settings()
+    dialog = app._settings_dialog
+
+    seen = []
+    original = capturer.capture_fullscreen
+    monkeypatch.setattr(
+        capturer,
+        "capture_fullscreen",
+        lambda: seen.append(dialog.isVisible()) or original(),
+    )
+    monkeypatch.setattr(app, "_deliver_capture", lambda *args: None)
+    app._capture_fullscreen()
+    assert seen == [False]  # hidden while the screen was grabbed
+    assert dialog.isVisible()  # and back right after
+    app.shutdown()
+
+
+def test_failed_smart_grab_restores_shelved_settings(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    capturer.fail = True
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    monkeypatch.setattr(app_module.QSystemTrayIcon, "showMessage", lambda *args: None)
+    app._open_settings()
+    dialog = app._settings_dialog
+
+    app._capture_smart()  # grab fails -> no overlay ever opens
+    assert dialog.isVisible()
+    app.shutdown()

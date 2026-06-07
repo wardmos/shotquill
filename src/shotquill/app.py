@@ -95,6 +95,7 @@ class ShotquillApp(QObject):
         self._sync_autostart()
         self._windows: list[object] = []  # keep overlays/editors alive
         self._settings_dialog: SettingsDialog | None = None
+        self._settings_shelved = False  # Settings hidden while a capture runs
 
         self._bridge = _HotkeyBridge()
         # Hotkeys are emitted from pynput's listener thread. Force queued delivery
@@ -164,14 +165,46 @@ class ShotquillApp(QObject):
             self._notify(t("notify.hotkeys_need_input_monitoring"))
             permissions.open_input_monitoring_pane()
 
+    def _shelve_settings_dialog(self) -> None:
+        """Hide an open (modeless) Settings window while a capture runs.
+
+        Two reasons. The capture overlay cancels itself when it loses
+        activation (hot corners, Cmd-Tab — see SmartOverlay.changeEvent), and
+        a modeless Settings window contends for activation the moment the
+        overlay appears, wedging the capture flow. And ShotQuill's own UI
+        doesn't belong in the shot. Hidden rather than closed, so in-progress
+        edits survive; ``_unshelve_settings_dialog`` brings it back.
+        """
+        dialog = self._settings_dialog
+        if dialog is None or not dialog.isVisible():
+            return
+        self._settings_shelved = True
+        dialog.hide()
+        # Give the hide a chance to reach the window server before the grab.
+        self._app.processEvents()
+
+    def _unshelve_settings_dialog(self) -> None:
+        if not self._settings_shelved:
+            return
+        if any(isinstance(window, SmartOverlay) for window in self._windows):
+            return  # another capture overlay is still up; its close retries
+        self._settings_shelved = False
+        if self._settings_dialog is not None:
+            self._settings_dialog.show()
+
     @Slot()
     def _capture_fullscreen(self) -> None:
-        screenshot = self._grab()
+        self._shelve_settings_dialog()
+        try:
+            screenshot = self._grab()
+        finally:
+            self._unshelve_settings_dialog()
         if screenshot is not None:
             self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
 
     @Slot()
     def _capture_smart(self) -> None:
+        self._shelve_settings_dialog()
         # Snapshot the window list *before* showing the overlay so our own
         # window isn't a target. An empty/failed list is fine — the overlay
         # then only offers full-screen and region modes.
@@ -181,6 +214,7 @@ class ShotquillApp(QObject):
             windows = []
         screenshot = self._grab()
         if screenshot is None:
+            self._unshelve_settings_dialog()
             return
         geometry = self._app.primaryScreen().virtualGeometry()
         overlay = SmartOverlay(
@@ -195,6 +229,9 @@ class ShotquillApp(QObject):
         overlay.window_selected.connect(self._capture_window_image)
         overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot, geometry))
         self._track(overlay)
+        # After _track: _forget must drop the overlay from _windows first, so
+        # the unshelve check doesn't still count the dying overlay as alive.
+        overlay.destroyed.connect(self._unshelve_settings_dialog)
         overlay.show()
         overlay.raise_()
         overlay.activateWindow()
