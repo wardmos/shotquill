@@ -319,6 +319,10 @@ class SettingsDialog(QDialog):
         self._region_adjust.setChecked(config.region_adjust())
         form.addRow("", self._region_adjust)
 
+        self._editor_backdrop = QCheckBox(t("settings.editor_backdrop"))
+        self._editor_backdrop.setChecked(config.editor_backdrop())
+        form.addRow("", self._editor_backdrop)
+
         self._autostart = QCheckBox(t("settings.autostart"))
         self._autostart.setChecked(config.autostart())
         form.addRow("", self._autostart)
@@ -440,6 +444,7 @@ class SettingsDialog(QDialog):
         self._config.set_include_cursor(self._include_cursor.isChecked())
         self._config.set_hover_switch_delay_ms(self._hover_switch.currentData())
         self._config.set_region_adjust(self._region_adjust.isChecked())
+        self._config.set_editor_backdrop(self._editor_backdrop.isChecked())
         self._config.set_autostart(self._autostart.isChecked())
         self._config.set_flash_on_capture(self._flash.isChecked())
         self._config.set_sound_on_capture(self._sound.isChecked())

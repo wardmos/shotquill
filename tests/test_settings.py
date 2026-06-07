@@ -122,6 +122,25 @@ def test_dialog_save_persists_region_adjust(qtbot, config):
     assert config.region_adjust() is False
 
 
+def test_dialog_prefills_editor_backdrop_from_config(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._editor_backdrop.isChecked() is True  # on by default
+
+    config.set_editor_backdrop(False)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._editor_backdrop.isChecked() is False
+
+
+def test_dialog_save_persists_editor_backdrop(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._editor_backdrop.setChecked(False)
+    dialog._save_and_accept()
+    assert config.editor_backdrop() is False
+
+
 def _silence_warnings(monkeypatch):
     """Swallow the QMessageBox.warning popup (it would block offscreen tests)."""
     from PySide6.QtWidgets import QMessageBox

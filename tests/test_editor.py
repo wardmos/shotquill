@@ -213,6 +213,74 @@ def test_editor_near_screen_edge_is_clamped_on_screen(qtbot, config):
     assert frame.top() >= screen.top()
 
 
+def test_editor_opens_frameless_with_dim_backdrop_by_default(qtbot, config):
+    # Spotlight mode (default): no title bar / traffic lights, and a dim layer
+    # behind the editor keeps the rest of the desktop dark while editing.
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    assert window.windowFlags() & Qt.FramelessWindowHint
+    assert window._backdrop is not None
+    window.show()
+    qtbot.waitExposed(window)
+    assert window._backdrop.isVisible()
+
+
+def test_editor_backdrop_closes_with_the_editor(qtbot, config):
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+    backdrop = window._backdrop
+    window.close()
+    assert not backdrop.isVisible()
+    assert window._backdrop is None
+
+
+def test_editor_backdrop_hides_while_deactivated(qtbot, config, monkeypatch):
+    # Cmd-Tab away: the dim layer must not darken whatever the user switched
+    # to. Coming back restores it. Activation can't be driven for real on the
+    # offscreen platform, so the editor's view of it is faked and the
+    # ActivationChange event delivered by hand.
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    monkeypatch.setattr(EditorWindow, "isActiveWindow", lambda self: False)
+    QApplication.sendEvent(window, QEvent(QEvent.ActivationChange))
+    assert not window._backdrop.isVisible()
+
+    monkeypatch.setattr(EditorWindow, "isActiveWindow", lambda self: True)
+    QApplication.sendEvent(window, QEvent(QEvent.ActivationChange))
+    assert window._backdrop.isVisible()
+
+
+def test_editor_backdrop_off_restores_titled_window(qtbot, config):
+    config.set_editor_backdrop(False)
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    assert not (window.windowFlags() & Qt.FramelessWindowHint)
+    assert window._backdrop is None
+    assert window._status_badge is None
+
+
+def test_ocr_status_shown_as_badge_in_frameless_mode(qtbot, config, monkeypatch):
+    # Frameless mode has no title bar, so the OCR outcome must surface as the
+    # canvas badge (the title is still set for tests/tooling).
+    _patch_recognizer(monkeypatch, lines=["hi"])
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+    window._ocr()
+    _wait_ocr_done(qtbot, window)
+    assert window._status_badge.isVisible()
+    assert window._status_badge.text() == window.windowTitle() == "ShotQuill — Copied 1 line(s)"
+
+
 def test_editor_without_origin_still_opens(qtbot, config):
     window = EditorWindow(_image(), config)
     qtbot.addWidget(window)

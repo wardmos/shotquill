@@ -1,15 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""The annotation editor window: screenshot + toolbar + copy/save."""
+"""The annotation editor window: screenshot + toolbar + copy/save.
+
+By default it opens in *spotlight* mode: frameless (no macOS title bar or
+traffic-light buttons) over a translucent dim layer covering the rest of the
+desktop, so the shot stays lit in place exactly like the capture overlay
+highlighted it. A Settings toggle restores the regular titled window.
+"""
 
 from __future__ import annotations
 
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QKeyCombination, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QShortcut,
+)
+from PySide6.QtWidgets import QLabel, QMainWindow, QWidget
 
 from shotquill.i18n import key_display_name, t
 from shotquill.ui.canvas import AnnotationCanvas
@@ -23,6 +37,43 @@ _MAX_INITIAL_HEIGHT = 900
 
 # Pure-modifier presses never match a finish key; ignore them outright.
 _MODIFIER_KEYS = (Qt.Key_unknown, Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta)
+
+# Same dim the capture overlay paints over the desktop, so the editor's
+# backdrop reads as a continuation of the capture rather than a new layer.
+_BACKDROP_DIM = QColor(0, 0, 0, 120)
+
+# OCR status badge shown over the canvas in frameless mode (no title bar to
+# carry the text); styled like the overlay's labels.
+_BADGE_STYLE = (
+    "background-color: rgba(0, 0, 0, 180); color: white;padding: 3px 8px; border-radius: 4px;"
+)
+
+
+class _EditorBackdrop(QWidget):
+    """A translucent dim layer behind a frameless editor.
+
+    Covers the whole virtual desktop with the same dim the capture overlay
+    used, so editing feels like the capture's spotlight never went away: the
+    shot stays lit while everything around it stays dark. Deliberately inert —
+    it never takes focus (the editor keeps keyboard input) and clicks on it do
+    nothing, so a stray click can't discard annotations. The editor shows and
+    hides it with its own activation and closes it from ``closeEvent``.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.FramelessWindowHint
+            | Qt.WindowDoesNotAcceptFocus
+            | Qt.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setGeometry(QGuiApplication.primaryScreen().virtualGeometry())
+
+    def paintEvent(self, event) -> None:
+        QPainter(self).fillRect(self.rect(), _BACKDROP_DIM)
 
 
 def _finish_sequence(config: Config, action: str) -> QKeySequence:
@@ -82,6 +133,16 @@ class EditorWindow(QMainWindow):
         self._origin = origin
         self._placed = False
 
+        # Spotlight mode (default, toggleable in Settings): the editor opens
+        # frameless — no macOS title bar or traffic lights — over a dim
+        # backdrop, so the shot stays lit in place against the darkened
+        # desktop exactly like the capture overlay showed it.
+        self._backdrop: _EditorBackdrop | None = None
+        self._status_badge: QLabel | None = None
+        if config.editor_backdrop():
+            self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+            self._backdrop = _EditorBackdrop()
+
         pixmap = QPixmap.fromImage(image)
         self._canvas = AnnotationCanvas(pixmap)
         # The image is always fitted to the view (below and in resizeEvent), so
@@ -90,6 +151,12 @@ class EditorWindow(QMainWindow):
         self._canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setCentralWidget(self._canvas)
+        if self._backdrop is not None:
+            # Frameless means no title bar to carry the OCR status text; a
+            # small badge over the canvas shows it instead (see _set_status).
+            self._status_badge = QLabel(self._canvas.viewport())
+            self._status_badge.setStyleSheet(_BADGE_STYLE)
+            self._status_badge.hide()
         toolbar = create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin)
         self.addToolBar(toolbar)
         self._copy_action = toolbar.copy_action
@@ -114,10 +181,40 @@ class EditorWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        if self._backdrop is not None:
+            # Shown without activating, so the editor keeps keyboard focus;
+            # raise_ keeps the editor above the dim layer.
+            self._backdrop.show()
+            self.raise_()
         if self._origin is not None and not self._placed:
             self._placed = True
             self._place_over_origin()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+
+    def changeEvent(self, event) -> None:
+        # The dim backdrop tracks the editor's activation: it hides while the
+        # user is in another app (it must not darken whatever they switched
+        # to) and comes back when the editor regains activation. Visibility is
+        # guarded so the deactivation that accompanies closing can't resurrect
+        # a backdrop that closeEvent already took down.
+        if (
+            event.type() == QEvent.ActivationChange
+            and self._backdrop is not None
+            and self.isVisible()
+        ):
+            if self.isActiveWindow():
+                self._backdrop.show()
+                self.raise_()
+            else:
+                self._backdrop.hide()
+        super().changeEvent(event)
+
+    def closeEvent(self, event) -> None:
+        if self._backdrop is not None:
+            self._backdrop.close()
+            self._backdrop.deleteLater()
+            self._backdrop = None
+        super().closeEvent(event)
 
     def resizeEvent(self, event) -> None:
         # Keep the whole image fitted as the user resizes — with scrollbars off
@@ -219,7 +316,7 @@ class EditorWindow(QMainWindow):
         if self._ocr_running:
             return
         self._ocr_running = True
-        self.setWindowTitle(t("title.ocr_running"))
+        self._set_status(t("title.ocr_running"))
         image = self._canvas.background_image()
         threading.Thread(target=self._run_ocr, args=(image,), daemon=True, name="sq-ocr").start()
 
@@ -243,9 +340,22 @@ class EditorWindow(QMainWindow):
 
         self._ocr_running = False
         if error is not None:
-            self.setWindowTitle(t("title.ocr_failed").format(error=error))
+            self._set_status(t("title.ocr_failed").format(error=error))
         elif lines:
             copy_text("\n".join(lines))
-            self.setWindowTitle(t("title.ocr_copied").format(count=len(lines)))
+            self._set_status(t("title.ocr_copied").format(count=len(lines)))
         else:
-            self.setWindowTitle(t("title.ocr_empty"))
+            self._set_status(t("title.ocr_empty"))
+
+    def _set_status(self, text: str) -> None:
+        """Surface OCR progress/outcome: the title bar carries it normally; in
+        frameless spotlight mode (no title bar) a badge over the canvas does.
+        The title is set either way so tests and tooling can read it."""
+        self.setWindowTitle(text)
+        if self._status_badge is None:
+            return
+        self._status_badge.setText(text)
+        self._status_badge.adjustSize()
+        self._status_badge.move(6, 6)
+        self._status_badge.show()
+        self._status_badge.raise_()

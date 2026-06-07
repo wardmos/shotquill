@@ -195,3 +195,18 @@ def test_config_persists_across_instances(config):
     reopened = Config()
     assert reopened.language() == "zh"
     assert reopened.image_format() == "jpg"
+
+
+def test_editor_backdrop_defaults_on(config):
+    from shotquill.config import DEFAULT_EDITOR_BACKDROP
+
+    # The editor opens frameless over a dim backdrop (spotlight mode).
+    assert DEFAULT_EDITOR_BACKDROP is True
+    assert config.editor_backdrop() is True
+
+
+def test_editor_backdrop_round_trip(config):
+    config.set_editor_backdrop(False)
+    assert config.editor_backdrop() is False
+    config.set_editor_backdrop(True)
+    assert config.editor_backdrop() is True

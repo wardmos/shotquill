@@ -64,6 +64,11 @@ DEFAULT_HOVER_SWITCH_DELAY_MS = HOVER_SWITCH_NEVER
 # capturing immediately. Turning this off restores capture-on-release.
 DEFAULT_REGION_ADJUST = True
 
+# The annotation editor opens as a frameless "spotlight": no macOS title bar
+# (and thus no traffic-light buttons), with the desktop around it kept dimmed
+# like during capture. Turning this off restores a regular titled window.
+DEFAULT_EDITOR_BACKDROP = True
+
 
 def _to_bool(value: object, default: bool) -> bool:
     """Coerce a QSettings value (which may come back as a string) into a bool."""
@@ -193,3 +198,9 @@ class Config:
 
     def set_region_adjust(self, enabled: bool) -> None:
         self._settings.setValue("capture/region_adjust", bool(enabled))
+
+    def editor_backdrop(self) -> bool:
+        return _to_bool(self._settings.value("editor/backdrop"), DEFAULT_EDITOR_BACKDROP)
+
+    def set_editor_backdrop(self, enabled: bool) -> None:
+        self._settings.setValue("editor/backdrop", bool(enabled))

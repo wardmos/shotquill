@@ -142,6 +142,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Adjust region with arrow keys before capture",
         "zh": "区域截图松手后可用方向键微调",
     },
+    "settings.editor_backdrop": {
+        "en": "Edit in place over the dimmed screen (frameless editor)",
+        "zh": "原位编辑：编辑窗外保持变暗（无标题栏）",
+    },
     "settings.hover_switch_instant": {"en": "Immediately", "zh": "立即"},
     "settings.hover_switch_seconds": {"en": "{seconds} s", "zh": "{seconds} 秒"},
     "settings.hover_switch_never": {"en": "Only when clicked", "zh": "仅点击时选中"},
