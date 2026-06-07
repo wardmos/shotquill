@@ -266,16 +266,23 @@ class EditorWindow(QMainWindow):
         """
         self.layout().activate()  # settle toolbar/central layout before measuring
         viewport = self._canvas.viewport()
+        screen = QGuiApplication.screenAt(self._origin.center())
+        available = (screen or self.screen()).availableGeometry()
+        # The frame is the viewport plus chrome (toolbar, window borders). A
+        # near-screen-sized capture plus that chrome would not fit, leaving the
+        # toolbar off-screen — often exactly where the pointer placed it (a
+        # region drag ends bottom-right, so the toolbar lands at the clipped
+        # bottom edge). Cap the viewport so the whole frame fits; fitInView
+        # scales the shot down to match.
+        chrome = self.frameGeometry().size() - viewport.size()
         target = QSize(
-            min(self._origin.width(), _MAX_INITIAL_WIDTH),
-            min(self._origin.height(), _MAX_INITIAL_HEIGHT),
+            min(self._origin.width(), _MAX_INITIAL_WIDTH, available.width() - chrome.width()),
+            min(self._origin.height(), _MAX_INITIAL_HEIGHT, available.height() - chrome.height()),
         )
         self.resize(self.size() + (target - viewport.size()))
 
         delta = self._origin.topLeft() - viewport.mapToGlobal(QPoint(0, 0))
         frame = self.frameGeometry().translated(delta)
-        screen = QGuiApplication.screenAt(self._origin.center())
-        available = (screen or self.screen()).availableGeometry()
         max_left = max(available.left(), available.right() - frame.width() + 1)
         max_top = max(available.top(), available.bottom() - frame.height() + 1)
         frame.moveLeft(min(max(frame.left(), available.left()), max_left))

@@ -213,6 +213,33 @@ def test_editor_near_screen_edge_is_clamped_on_screen(qtbot, config):
     assert frame.top() >= screen.top()
 
 
+def test_near_screen_sized_capture_keeps_bottom_toolbar_on_screen(qtbot, config, monkeypatch):
+    # A capture covering (almost) the whole screen: the viewport alone fills
+    # the available area, so adding the toolbar/frame chrome must shrink the
+    # window — not push the toolbar off the bottom edge, which is exactly
+    # where the pointer put it after a drag to the bottom-right corner.
+    from PySide6.QtWidgets import QToolBar
+
+    from shotquill.ui import editor as editor_module
+
+    monkeypatch.setattr(editor_module, "_MAX_INITIAL_WIDTH", 100_000)
+    monkeypatch.setattr(editor_module, "_MAX_INITIAL_HEIGHT", 100_000)
+    available = QGuiApplication.primaryScreen().availableGeometry()
+    _fake_cursor(monkeypatch, available.right(), available.bottom())
+    window = EditorWindow(_image(600, 400), config, QRect(available))
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    frame = window.frameGeometry()
+    assert frame.bottom() <= available.bottom()
+    assert frame.right() <= available.right()
+    toolbar = window.findChild(QToolBar)
+    toolbar_bottom = toolbar.mapToGlobal(QPoint(0, toolbar.height() - 1)).y()
+    assert toolbar_bottom <= available.bottom()
+
+
 def test_toolbar_placement_follows_the_pointer():
     # The toolbar lands in the corner nearest the pointer: (area, right-align)
     # per quadrant of the capture rect; no origin keeps the classic top-left.
