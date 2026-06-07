@@ -118,7 +118,9 @@ def test_capture_fullscreen_opens_editor_over_the_screen(qapp, config, fakes, mo
     app = _build_app(qapp, fakes)
     opened = []
     monkeypatch.setattr(
-        app, "_open_editor", lambda image, origin=None: opened.append((image, origin))
+        app,
+        "_open_editor",
+        lambda image, origin=None, region=None: opened.append((image, origin)),
     )
     app._capture_fullscreen()
     assert len(opened) == 1
@@ -134,7 +136,9 @@ def test_capture_fullscreen_does_nothing_on_failure(qapp, config, fakes, monkeyp
     app = _build_app(qapp, fakes)
     opened = []
     monkeypatch.setattr(
-        app, "_open_editor", lambda image, origin=None: opened.append((image, origin))
+        app,
+        "_open_editor",
+        lambda image, origin=None, region=None: opened.append((image, origin)),
     )
     app._capture_fullscreen()
     assert opened == []
@@ -232,10 +236,69 @@ def test_deliver_capture_opens_editor_when_auto_save_fails(qapp, config, fakes, 
     monkeypatch.setattr(saver, "save_qimage", _failing_save)
     monkeypatch.setattr(app, "_notify", lambda message: None)
     opened = []
-    monkeypatch.setattr(app, "_open_editor", lambda image, origin=None: opened.append(image))
+    monkeypatch.setattr(
+        app, "_open_editor", lambda image, origin=None, region=None: opened.append(image)
+    )
 
     app._deliver_capture(QImage(4, 3, QImage.Format.Format_ARGB32))
     assert len(opened) == 1
+    app.shutdown()
+
+
+def test_region_capture_hands_the_editor_a_region_context(qapp, config, fakes, monkeypatch):
+    # A region selection must carry the full screenshot along so the editor
+    # can keep the crop arrow-key adjustable.
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    config.set_auto_save_after_capture(False)
+    config.set_auto_copy_after_capture(False)
+    app = _build_app(qapp, fakes)
+    opened = []
+    monkeypatch.setattr(
+        app,
+        "_open_editor",
+        lambda image, origin=None, region=None: opened.append((origin, region)),
+    )
+
+    app._capture_smart()
+    overlay = next(w for w in app._windows if isinstance(w, app_module.SmartOverlay))
+    crop = QImage(2, 2, QImage.Format.Format_ARGB32)
+    overlay.region_selected.emit(crop, QRect(1, 1, 2, 2))
+    overlay.close()
+
+    assert len(opened) == 1
+    origin, region = opened[0]
+    assert origin == QRect(1, 1, 2, 2)
+    assert region is not None
+    assert (region.screenshot.width(), region.screenshot.height()) == (4, 3)
+    assert region.geometry == qapp.primaryScreen().virtualGeometry()
+    app.shutdown()
+
+
+def test_open_editor_honours_region_adjust_setting(qapp, config, fakes):
+    # Turning the Settings toggle off must strip the region context, so the
+    # editor opens with a frozen crop (no arrow-key adjustment).
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill.ui.editor import EditorWindow, RegionContext
+
+    app = _build_app(qapp, fakes)
+    image = QImage(4, 3, QImage.Format.Format_ARGB32)
+    region = RegionContext(image, QRect(0, 0, 4, 3))
+
+    app._open_editor(image, QRect(0, 0, 4, 3), region)
+    adjustable = [w for w in app._windows if isinstance(w, EditorWindow)][-1]
+    assert adjustable._region is not None
+
+    config.set_region_adjust(False)
+    app._open_editor(image, QRect(0, 0, 4, 3), region)
+    frozen = [w for w in app._windows if isinstance(w, EditorWindow)][-1]
+    assert frozen._region is None
+
+    adjustable.close()
+    frozen.close()
     app.shutdown()
 
 

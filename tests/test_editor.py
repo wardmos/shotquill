@@ -14,7 +14,7 @@ from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence  # noqa: E402
 
 from shotquill.ocr import macos as ocr_macos  # noqa: E402
-from shotquill.ui.editor import EditorWindow  # noqa: E402
+from shotquill.ui.editor import EditorWindow, RegionContext  # noqa: E402
 
 
 def _image(width=60, height=40, color="white") -> QImage:
@@ -461,6 +461,160 @@ def test_ocr_runs_off_the_gui_thread_and_ignores_reentry(qtbot, config, monkeypa
     _wait_ocr_done(qtbot, window)
     assert recognizer.instances == 1
     assert window.windowTitle() == "ShotQuill — Copied 1 line(s)"
+
+
+# --- crop adjustment (merged adjust+annotate mode) ---------------------------
+
+
+def _region_editor(qtbot, config, native=(100, 50), logical=(100, 50), screenshot=None):
+    """An editor opened from a region capture: origin (10, 10, 30, 20) cropped
+    out of a full-desktop screenshot, with the RegionContext to re-crop from."""
+    screenshot = screenshot if screenshot is not None else _image(*native)
+    geometry = QRect(0, 0, *logical)
+    origin = QRect(10, 10, 30, 20)
+    window = EditorWindow(_image(), config, origin, RegionContext(screenshot, geometry))
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    return window
+
+
+def test_arrow_moves_crop_and_recrops_from_screenshot(qtbot, config):
+    # sx = sy = 1: one native pixel is one logical point. Mark the screenshot
+    # pixel the moved crop's top-left should land on.
+    screenshot = _image(100, 50)
+    screenshot.setPixelColor(11, 10, QColor("red"))
+    window = _region_editor(qtbot, config, screenshot=screenshot)
+
+    qtbot.keyClick(window, Qt.Key_Right)
+
+    assert window._origin == QRect(11, 10, 30, 20)
+    background = window._canvas.background_image()
+    assert (background.width(), background.height()) == (30, 20)
+    assert background.pixelColor(0, 0) == QColor("red")
+
+
+def test_arrows_reach_the_window_through_the_canvas(qtbot, config):
+    # The canvas (a QGraphicsView) must decline plain arrows instead of
+    # scrolling, so the window-level adjustment still works when it has focus.
+    window = _region_editor(qtbot, config)
+    qtbot.keyClick(window._canvas, Qt.Key_Down)
+    assert window._origin == QRect(10, 11, 30, 20)
+
+
+def test_shift_arrow_moves_ten_native_pixels(qtbot, config):
+    window = _region_editor(qtbot, config)
+    qtbot.keyClick(window, Qt.Key_Right, Qt.ShiftModifier)
+    assert window._origin == QRect(20, 10, 30, 20)
+
+
+def test_alt_arrow_resizes_right_and_bottom_edge(qtbot, config):
+    window = _region_editor(qtbot, config)
+    qtbot.keyClick(window, Qt.Key_Right, Qt.AltModifier)  # width +1
+    qtbot.keyClick(window, Qt.Key_Up, Qt.AltModifier)  # height -1
+    assert window._origin == QRect(10, 10, 31, 19)
+    background = window._canvas.background_image()
+    assert (background.width(), background.height()) == (31, 19)
+
+
+def test_arrow_step_is_native_not_logical_on_retina(qtbot, config):
+    # At a 2x scale one press moves the crop by one *screenshot* pixel — half
+    # a logical point — and the re-crop shifts by exactly that pixel.
+    screenshot = _image(200, 100)
+    screenshot.setPixelColor(21, 20, QColor("red"))  # native px of (10.5, 10)
+    window = _region_editor(qtbot, config, native=(200, 100), screenshot=screenshot)
+
+    qtbot.keyClick(window, Qt.Key_Right)
+
+    assert window._selection.x() == 10.5
+    assert window._selection.width() == 30  # both edges moved together
+    background = window._canvas.background_image()
+    assert background.pixelColor(0, 0) == QColor("red")
+    assert (background.width(), background.height()) == (60, 40)
+
+
+def test_move_clamps_to_desktop_edges(qtbot, config):
+    window = _region_editor(qtbot, config)
+    for _ in range(3):  # 30 px left of x=10
+        qtbot.keyClick(window, Qt.Key_Left, Qt.ShiftModifier)
+    assert window._origin == QRect(0, 10, 30, 20)
+    for _ in range(9):
+        qtbot.keyClick(window, Qt.Key_Right, Qt.ShiftModifier)
+    assert window._origin == QRect(70, 10, 30, 20)  # right edge at 100
+
+
+def test_resize_clamps_at_min_size_and_desktop_edge(qtbot, config):
+    window = _region_editor(qtbot, config)
+    for _ in range(5):
+        qtbot.keyClick(window, Qt.Key_Left, Qt.AltModifier | Qt.ShiftModifier)
+    assert window._selection.width() == 2  # _MIN_CROP
+    for _ in range(10):
+        qtbot.keyClick(window, Qt.Key_Right, Qt.AltModifier | Qt.ShiftModifier)
+    assert window._selection.right() == 100  # desktop's right edge
+
+
+def test_first_annotation_freezes_the_crop(qtbot, config):
+    from PySide6.QtGui import QUndoCommand
+
+    window = _region_editor(qtbot, config)
+    window._canvas.undo_stack().push(QUndoCommand())  # an annotation landed
+    qtbot.keyClick(window, Qt.Key_Right)
+    assert window._origin == QRect(10, 10, 30, 20)  # unmoved
+
+
+def test_arrows_do_nothing_without_region_context(qtbot, config):
+    origin = QRect(10, 10, 30, 20)
+    window = EditorWindow(_image(), config, origin)  # window/fullscreen shot
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.keyClick(window, Qt.Key_Right)
+    assert window._origin == origin
+
+
+def test_adjust_hint_shown_until_first_annotation(qtbot, config):
+    from PySide6.QtGui import QUndoCommand
+
+    from shotquill import i18n
+
+    window = _region_editor(qtbot, config)
+    assert window.windowTitle() == i18n.t("editor.adjust_hint")
+    window._canvas.undo_stack().push(QUndoCommand())
+    assert window.windowTitle() == i18n.t("title.annotate")
+
+
+def test_annotation_does_not_clobber_other_statuses(qtbot, config, monkeypatch):
+    # OCR finishing between open and the first annotation replaces the hint;
+    # the annotation must then leave the OCR status alone.
+    from PySide6.QtGui import QUndoCommand
+
+    _patch_recognizer(monkeypatch, lines=["hi"])
+    window = _region_editor(qtbot, config)
+    window._ocr()
+    _wait_ocr_done(qtbot, window)
+    status = window.windowTitle()
+    window._canvas.undo_stack().push(QUndoCommand())
+    assert window.windowTitle() == status
+
+
+def test_adjusted_crop_keeps_canvas_over_the_selection(qtbot, config):
+    # After a nudge the editor must re-place itself so the (re-cropped) shot
+    # still sits exactly over the on-screen selection.
+    screenshot = _image(400, 300)
+    geometry = QRect(0, 0, 400, 300)
+    origin = QRect(120, 80, 200, 100)
+    window = EditorWindow(
+        screenshot.copy(origin), config, origin, RegionContext(screenshot, geometry)
+    )
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    qtbot.keyClick(window, Qt.Key_Right)
+
+    viewport = window._canvas.viewport()
+    assert window._origin == QRect(121, 80, 200, 100)
+    assert viewport.size() == window._origin.size()
+    assert viewport.mapToGlobal(QPoint(0, 0)) == window._origin.topLeft()
 
 
 def test_editor_toolbar_style_follows_config(qtbot, config):

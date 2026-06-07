@@ -72,6 +72,7 @@ class RegionContext(NamedTuple):
     screenshot: QImage
     geometry: QRect
 
+
 # Pure-modifier presses never match a finish key; ignore them outright.
 _MODIFIER_KEYS = (Qt.Key_unknown, Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta)
 
