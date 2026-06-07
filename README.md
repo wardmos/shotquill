@@ -210,7 +210,10 @@ pytest                           # tests
 > Screen capture, global hotkeys, and the full-screen overlays rely on macOS
 > system frameworks, so they must be **run and tested on a Mac**. Pure logic and
 > Qt widgets can be developed and tested headlessly on Linux with
-> `QT_QPA_PLATFORM=offscreen` (this is what CI does).
+> `QT_QPA_PLATFORM=offscreen` (this is what CI does). Window-activation
+> scenarios (`tests/test_activation_macos.py`) only run under a real macOS
+> window server — the macOS CI leg, or a Mac without `QT_QPA_PLATFORM` set —
+> because the offscreen platform performs no activation arbitration at all.
 
 ### macOS permissions
 

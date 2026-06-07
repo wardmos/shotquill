@@ -2,7 +2,7 @@
 # Copyright (C) 2026 wardmos
 """Shared pytest fixtures and headless test setup.
 
-Two jobs:
+Three jobs:
 
 1. *pynput fallback* — ``pynput`` needs an X server (or macOS) to import. CI has
    one (Xvfb on Linux, native on macOS), but a bare dev machine may not. When the
@@ -10,6 +10,9 @@ Two jobs:
    still be collected and run; on CI the real library is used.
 2. *isolated config* — a ``config`` fixture that points QSettings at a temp file so
    tests never touch (or depend on) the developer's real preferences.
+3. *platform fakes* — a ``fakes`` fixture that swaps the macOS managers (screen
+   capture, global hotkeys, launch-at-login) on ``shotquill.app`` for in-memory
+   fakes, shared by the app-controller tests and the macOS activation tests.
 """
 
 from __future__ import annotations
@@ -18,6 +21,8 @@ import sys
 import types
 
 import pytest
+
+from shotquill.capture.base import CaptureResult
 
 try:  # pragma: no cover - exercised implicitly by import success/failure
     import pynput  # noqa: F401
@@ -62,6 +67,84 @@ except Exception:  # pragma: no cover - only hit on a headless dev machine
     _pynput.keyboard = _keyboard
     sys.modules["pynput"] = _pynput
     sys.modules["pynput.keyboard"] = _keyboard
+
+
+class _FakeCapturer:
+    def __init__(self):
+        self.fail = False
+        self.include_cursor = False
+
+    def capture_fullscreen(self):
+        if self.fail:
+            raise RuntimeError("no permission")
+        return CaptureResult(width=4, height=3, scale=1.0, pixels=bytes([255] * 4 * 4 * 3))
+
+    def capture_region(self, region):  # pragma: no cover - unused here
+        return self.capture_fullscreen()
+
+    def capture_window(self, window_id):
+        return self.capture_fullscreen()
+
+    def list_windows(self):
+        return []
+
+
+class _FakeHotkeys:
+    def __init__(self):
+        self.bindings = {}
+        self.started = 0
+        self.stopped = 0
+        self.cleared = 0
+        self.raise_permission_error = False
+
+    def register(self, combo, callback):
+        self.bindings[combo] = callback
+
+    def unregister(self, combo):
+        self.bindings.pop(combo, None)
+
+    def clear(self):
+        self.cleared += 1
+        self.bindings.clear()
+
+    def start(self):
+        if self.raise_permission_error:
+            raise PermissionError("Input Monitoring required")
+        self.started += 1
+
+    def stop(self):
+        self.stopped += 1
+
+
+class _FakeAutostart:
+    def __init__(self):
+        self.last = None
+        self.raise_oserror = False
+
+    def set_enabled(self, enabled):
+        if self.raise_oserror:
+            raise OSError("disk full")
+        self.last = enabled
+
+
+@pytest.fixture
+def fakes(monkeypatch):
+    """Swap shotquill.app's macOS platform managers for in-memory fakes."""
+    pytest.importorskip("PySide6")
+    from shotquill import app as app_module
+
+    capturer = _FakeCapturer()
+    hotkeys = _FakeHotkeys()
+    autostart = _FakeAutostart()
+
+    def _make_capturer(include_cursor=False):
+        capturer.include_cursor = include_cursor
+        return capturer
+
+    monkeypatch.setattr(app_module, "MacScreenCapturer", _make_capturer)
+    monkeypatch.setattr(app_module, "MacHotkeyManager", lambda: hotkeys)
+    monkeypatch.setattr(app_module, "MacAutostartManager", lambda: autostart)
+    return capturer, hotkeys, autostart
 
 
 @pytest.fixture

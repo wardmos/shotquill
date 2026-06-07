@@ -3,9 +3,10 @@
 """Headless tests for the top-level application controller.
 
 The platform managers (screen capture, global hotkeys, launch-at-login) are
-replaced with fakes so the orchestration logic — hotkey registration, the capture
-success/failure paths, autostart syncing, window bookkeeping — can be exercised
-offscreen without touching real system frameworks.
+replaced with fakes (the shared ``fakes`` fixture in conftest) so the
+orchestration logic — hotkey registration, the capture success/failure paths,
+autostart syncing, window bookkeeping — can be exercised offscreen without
+touching real system frameworks.
 """
 
 import pytest
@@ -15,81 +16,6 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
-from shotquill.capture.base import CaptureResult  # noqa: E402
-
-
-class _FakeCapturer:
-    def __init__(self):
-        self.fail = False
-        self.include_cursor = False
-
-    def capture_fullscreen(self):
-        if self.fail:
-            raise RuntimeError("no permission")
-        return CaptureResult(width=4, height=3, scale=1.0, pixels=bytes([255] * 4 * 4 * 3))
-
-    def capture_region(self, region):  # pragma: no cover - unused here
-        return self.capture_fullscreen()
-
-    def capture_window(self, window_id):
-        return self.capture_fullscreen()
-
-    def list_windows(self):
-        return []
-
-
-class _FakeHotkeys:
-    def __init__(self):
-        self.bindings = {}
-        self.started = 0
-        self.stopped = 0
-        self.cleared = 0
-        self.raise_permission_error = False
-
-    def register(self, combo, callback):
-        self.bindings[combo] = callback
-
-    def unregister(self, combo):
-        self.bindings.pop(combo, None)
-
-    def clear(self):
-        self.cleared += 1
-        self.bindings.clear()
-
-    def start(self):
-        if self.raise_permission_error:
-            raise PermissionError("Input Monitoring required")
-        self.started += 1
-
-    def stop(self):
-        self.stopped += 1
-
-
-class _FakeAutostart:
-    def __init__(self):
-        self.last = None
-        self.raise_oserror = False
-
-    def set_enabled(self, enabled):
-        if self.raise_oserror:
-            raise OSError("disk full")
-        self.last = enabled
-
-
-@pytest.fixture
-def fakes(monkeypatch):
-    capturer = _FakeCapturer()
-    hotkeys = _FakeHotkeys()
-    autostart = _FakeAutostart()
-
-    def _make_capturer(include_cursor=False):
-        capturer.include_cursor = include_cursor
-        return capturer
-
-    monkeypatch.setattr(app_module, "MacScreenCapturer", _make_capturer)
-    monkeypatch.setattr(app_module, "MacHotkeyManager", lambda: hotkeys)
-    monkeypatch.setattr(app_module, "MacAutostartManager", lambda: autostart)
-    return capturer, hotkeys, autostart
 
 
 def _build_app(qapp, fakes):
