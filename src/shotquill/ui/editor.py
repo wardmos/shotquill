@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QGuiApplication,
     QImage,
     QKeySequence,
@@ -23,7 +24,7 @@ from PySide6.QtGui import (
     QPixmap,
     QShortcut,
 )
-from PySide6.QtWidgets import QLabel, QMainWindow, QWidget
+from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QWidget
 
 from shotquill.i18n import key_display_name, t
 from shotquill.ui.canvas import AnnotationCanvas
@@ -74,6 +75,23 @@ class _EditorBackdrop(QWidget):
 
     def paintEvent(self, event) -> None:
         QPainter(self).fillRect(self.rect(), _BACKDROP_DIM)
+
+
+def _toolbar_placement(cursor: QPoint | None, origin: QRect | None) -> tuple[Qt.ToolBarArea, bool]:
+    """Pick the toolbar's corner from where the pointer is: (area, right-align).
+
+    The editor opens the instant a capture ends, so the pointer is still where
+    the shot was confirmed — a region drag usually ends near the selection's
+    bottom-right corner. Putting the toolbar in that corner saves the trip
+    across the shot: bottom area when the pointer is in the capture's lower
+    half, right-aligned when it is in the right half. Without an origin to
+    compare against the toolbar stays at the top-left (the classic layout).
+    """
+    if cursor is None or origin is None or origin.isEmpty():
+        return Qt.TopToolBarArea, False
+    center = origin.center()
+    area = Qt.BottomToolBarArea if cursor.y() > center.y() else Qt.TopToolBarArea
+    return area, cursor.x() > center.x()
 
 
 def _finish_sequence(config: Config, action: str) -> QKeySequence:
@@ -158,7 +176,15 @@ class EditorWindow(QMainWindow):
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
         toolbar = create_toolbar(self._canvas, self._copy, self._save, self._ocr, self._pin)
-        self.addToolBar(toolbar)
+        # The toolbar lands in the corner nearest the pointer (e.g. the
+        # bottom-right after a region drag towards the bottom of the screen),
+        # so finishing a shot never means crossing the whole capture.
+        area, align_right = _toolbar_placement(QCursor.pos(), origin)
+        if align_right:
+            spacer = QWidget()
+            spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            toolbar.insertWidget(toolbar.actions()[0], spacer)
+        self.addToolBar(area, toolbar)
         self._copy_action = toolbar.copy_action
         self._save_action = toolbar.save_action
         # Resolves the (configurable, possibly disabled) finish keys and sets

@@ -213,6 +213,75 @@ def test_editor_near_screen_edge_is_clamped_on_screen(qtbot, config):
     assert frame.top() >= screen.top()
 
 
+def test_toolbar_placement_follows_the_pointer():
+    # The toolbar lands in the corner nearest the pointer: (area, right-align)
+    # per quadrant of the capture rect; no origin keeps the classic top-left.
+    from shotquill.ui.editor import _toolbar_placement
+
+    origin = QRect(100, 100, 200, 100)  # center (200, 150)
+    assert _toolbar_placement(QPoint(120, 110), origin) == (Qt.TopToolBarArea, False)
+    assert _toolbar_placement(QPoint(280, 110), origin) == (Qt.TopToolBarArea, True)
+    assert _toolbar_placement(QPoint(120, 190), origin) == (Qt.BottomToolBarArea, False)
+    assert _toolbar_placement(QPoint(280, 190), origin) == (Qt.BottomToolBarArea, True)
+    assert _toolbar_placement(QPoint(280, 190), None) == (Qt.TopToolBarArea, False)
+    assert _toolbar_placement(None, origin) == (Qt.TopToolBarArea, False)
+
+
+def _fake_cursor(monkeypatch, x, y):
+    """Pin the pointer position the editor reads at construction time."""
+    from shotquill.ui import editor as editor_module
+
+    class _Cursor:
+        @staticmethod
+        def pos():
+            return QPoint(x, y)
+
+    monkeypatch.setattr(editor_module, "QCursor", _Cursor)
+
+
+def test_toolbar_moves_to_bottom_right_when_pointer_ends_there(qtbot, config, monkeypatch):
+    from PySide6.QtWidgets import QToolBar, QWidgetAction
+
+    origin = QRect(100, 100, 200, 100)
+    _fake_cursor(monkeypatch, 280, 190)  # released near the bottom-right corner
+    window = EditorWindow(_image(), config, origin)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    toolbar = window.findChild(QToolBar)
+    assert window.toolBarArea(toolbar) == Qt.BottomToolBarArea
+    # Right alignment comes from an expanding spacer ahead of the actions.
+    assert isinstance(toolbar.actions()[0], QWidgetAction)
+
+
+def test_toolbar_stays_top_left_when_pointer_ends_there(qtbot, config, monkeypatch):
+    from PySide6.QtWidgets import QToolBar, QWidgetAction
+
+    origin = QRect(100, 100, 200, 100)
+    _fake_cursor(monkeypatch, 120, 110)
+    window = EditorWindow(_image(), config, origin)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    toolbar = window.findChild(QToolBar)
+    assert window.toolBarArea(toolbar) == Qt.TopToolBarArea
+    assert not isinstance(toolbar.actions()[0], QWidgetAction)
+
+
+def test_editor_places_canvas_over_origin_with_bottom_toolbar(qtbot, config, monkeypatch):
+    # The canvas-over-capture alignment must hold with the toolbar at the
+    # bottom too — placement measures the viewport, not the toolbar.
+    origin = QRect(120, 80, 300, 200)
+    _fake_cursor(monkeypatch, origin.right(), origin.bottom())
+    window = EditorWindow(_image(600, 400), config, origin)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    viewport = window._canvas.viewport()
+    assert viewport.size() == origin.size()
+    assert viewport.mapToGlobal(QPoint(0, 0)) == origin.topLeft()
+
+
 def test_editor_opens_frameless_with_dim_backdrop_by_default(qtbot, config):
     # Spotlight mode (default): no title bar / traffic lights, and a dim layer
     # behind the editor keeps the rest of the desktop dark while editing.
