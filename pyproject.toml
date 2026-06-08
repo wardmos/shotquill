@@ -35,7 +35,8 @@ dev = [
 ]
 
 [project.scripts]
-shotquill = "shotquill.app:run"
+shotquill = "shotquill.cli:main"
+squill = "shotquill.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
