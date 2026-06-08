@@ -43,6 +43,10 @@ cask "shotquill" do
   homepage "https://github.com/wardmos/shotquill"
 
   app "ShotQuill.app"
+  # The bundled binary doubles as the CLI (bare invocation opens the GUI),
+  # so link it onto PATH under both documented command names.
+  binary "#{appdir}/ShotQuill.app/Contents/MacOS/ShotQuill", target: "shotquill"
+  binary "#{appdir}/ShotQuill.app/Contents/MacOS/ShotQuill", target: "squill"
 
   # Ad-hoc-signed build: drop the quarantine flag so it opens without a warning.
   postflight do
