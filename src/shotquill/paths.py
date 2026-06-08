@@ -40,6 +40,32 @@ def capture_tmp_dir() -> Path:
     return directory
 
 
+def config_dir() -> Path:
+    """User configuration directory for the headless surface (created).
+
+    macOS uses ``~/Library/Application Support``; elsewhere we follow XDG,
+    honoring ``$XDG_CONFIG_HOME``. Separate from the audit log (state) and the
+    capture temp dir (cache) so each lands where its platform expects.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", "") or Path.home() / ".config")
+    directory = base / "shotquill"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def blocklist_path() -> Path:
+    """The app blocklist file (apps that must never be captured).
+
+    A plain JSON file the GUI, CLI, and MCP server all read, so a rule added in
+    Settings takes effect for programmatic captures too. Hand-editable on
+    purpose — users can ``cat`` and grep what they are protected against.
+    """
+    return config_dir() / "blocklist.json"
+
+
 def audit_log_path() -> Path:
     """Where the JSONL audit log lives (parent directory is created).
 
