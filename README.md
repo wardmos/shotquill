@@ -29,6 +29,7 @@ cross-platform architecture (Windows / Linux planned).
 [Usage](#usage) ·
 [CLI](#command-line-scripts--agents) ·
 [MCP server](#mcp-server) ·
+[App blocklist](#app-blocklist) ·
 [Configuration](#configuration) ·
 [Troubleshooting](#troubleshooting) ·
 [Privacy](#privacy) ·
@@ -187,9 +188,10 @@ The parts agents rely on:
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
   `squill ocr -` still read a file or stdin.
 - **Exit codes are the contract**: `0` ok · `2` usage · `3` permission denied ·
-  `4` capability unavailable on this platform/session · `5` no window matched.
-  Every `--help` prints them, so the contract is discoverable without this
-  README; `python -m shotquill` accepts the same subcommands.
+  `4` capability unavailable on this platform/session · `5` no window matched ·
+  `6` blocked by the app blocklist. Every `--help` prints them, so the contract
+  is discoverable without this README; `python -m shotquill` accepts the same
+  subcommands.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.
@@ -245,6 +247,47 @@ Know what you are opting into:
   the MCP client app, and every screen-touching tool call lands in the audit
   log with `via: "mcp"`. Your MCP client's per-tool-call approval settings
   add a confirmation layer on top if you want one.
+
+### App blocklist
+
+Name apps that must never be captured — a password manager, your keychain —
+and ShotQuill refuses to capture their windows and **redacts them out of
+full-screen and region captures** (an opaque block painted over the pixels,
+not an overlay, so nothing sensitive survives in the image). This covers the
+GUI, the CLI, and the MCP server alike.
+
+The list is a plain JSON file you can hand-edit, read by every surface so one
+rule protects them all:
+
+- macOS: `~/Library/Application Support/shotquill/blocklist.json`
+- elsewhere: `$XDG_CONFIG_HOME/shotquill/blocklist.json`
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "bundle_id": "com.1password.1password" },
+    { "name": "keychain" }
+  ]
+}
+```
+
+A window is blocked when any rule matches it: `bundle_id` matches the owning
+app's identifier exactly (case-insensitive — the robust default, since bundle
+ids are stable and unspoofable), or `name` matches its app name as a
+case-insensitive substring (handy for a quick edit). `squill doctor` prints
+the active rules; a blocked capture exits `6` (the MCP `capture` tool returns
+error `type: "blocked"`); every refusal and redaction is audit-logged.
+
+**Know the boundary — this is privacy hygiene, not a security control.**
+Anything running as you can capture the screen by other means, so the
+blocklist defends against an over-eager or prompt-injected agent reaching for
+a password manager *through ShotQuill*, not against a determined adversary
+with code execution. Two honest limits: a full-screen capture can only be
+redacted where windows can be enumerated (so not yet under Linux/Wayland — the
+gap is logged as `redact_unavailable` rather than silently passed through),
+and an unreadable blocklist file fails *closed* (captures are refused until
+you fix it).
 
 ---
 
@@ -310,6 +353,9 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
   nothing is uploaded, and it works with no network connection.
 - **Redaction is real.** The mosaic tool rewrites the underlying pixels before
   export, so blurred-out content isn't recoverable from the saved image.
+- **Sensitive apps can be blocklisted.** Name a password manager (or any app)
+  and ShotQuill refuses to capture its windows and paints it out of full-screen
+  shots — for the GUI, CLI, and agents alike. See [App blocklist](#app-blocklist).
 - **No telemetry.** ShotQuill makes no network requests of its own.
 - **Programmatic captures are accountable.** Scripts and AI agents using the
   CLI or the MCP server go through the same OS consent as any app — macOS
