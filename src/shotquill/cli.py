@@ -43,6 +43,22 @@ def main(argv: list[str] | None = None) -> int:
     except PermissionError as exc:
         print(f"squill: permission denied: {exc}", file=sys.stderr)
         return headless.EXIT_PERMISSION
+    except BrokenPipeError:
+        # Downstream closed early (`squill capture -o - | head -c 100`); the
+        # pipe-friendly contract means dying quietly, not with a traceback.
+        # Repoint stdout at devnull so interpreter shutdown can flush safely.
+        import os
+
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):  # stdout without a real fd (tests, embeds)
+            pass
+        return 1
+    except Exception as exc:  # noqa: BLE001 - the CLI boundary
+        # Agents parse stderr and branch on exit codes; a traceback is noise
+        # and an interpreter exit code is outside the documented contract.
+        print(f"squill: error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -91,6 +107,11 @@ def _usage_error(message: str) -> int:
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
+    if args.app is not None and not args.app.strip():
+        # An empty --app is falsy and would silently fall through to a
+        # full-screen grab — the one thing worse than failing is capturing
+        # something the caller did not ask for.
+        return _usage_error("--app needs a non-empty app name")
     if args.title and not args.app:
         return _usage_error("--title only narrows --app matches; pass --app too")
     if args.output == "-" and sys.stdout.isatty():
@@ -149,6 +170,8 @@ def _cmd_capture(args: argparse.Namespace) -> int:
 def _save_image(image, path: Path, format_hint: str) -> None:
     suffix = path.suffix.lower().lstrip(".")
     fmt = suffix if suffix in ("png", "jpg", "jpeg") else format_hint
+    if suffix and suffix not in ("png", "jpg", "jpeg"):
+        print(f"squill: unknown extension .{suffix}; writing {fmt} data", file=sys.stderr)
     if fmt in ("jpg", "jpeg"):
         from PySide6.QtGui import QImage
 

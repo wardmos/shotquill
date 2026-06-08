@@ -206,6 +206,42 @@ def test_capture_unsupported_exits_4(monkeypatch, capsys):
     assert "no display session" in capsys.readouterr().err
 
 
+def test_capture_empty_app_is_usage_error_not_fullscreen(fake_capturer, capsys):
+    assert cli.main(["capture", "--app", ""]) == 2
+    assert fake_capturer.calls == []  # crucially: no silent full-screen grab
+    assert "non-empty" in capsys.readouterr().err
+
+
+def test_unexpected_backend_error_is_clean_exit_1(fake_capturer, capsys, monkeypatch):
+    def _boom():
+        raise RuntimeError("ScreenCaptureKit gave up")
+
+    monkeypatch.setattr(fake_capturer, "capture_fullscreen", _boom)
+    assert cli.main(["capture"]) == 1
+    err = capsys.readouterr().err
+    assert "ScreenCaptureKit gave up" in err
+    assert "Traceback" not in err
+
+
+def test_broken_pipe_is_quiet_exit_1(fake_capturer, capsys, monkeypatch):
+    def _downstream_closed():
+        raise BrokenPipeError
+
+    monkeypatch.setattr(fake_capturer, "capture_fullscreen", _downstream_closed)
+    assert cli.main(["capture"]) == 1
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_unknown_extension_warns_on_stderr(fake_capturer, capsys, tmp_path):
+    dest = tmp_path / "shot.webp"
+    assert cli.main(["capture", "-o", str(dest)]) == 0
+    captured = capsys.readouterr()
+    assert "unknown extension .webp" in captured.err
+    assert captured.out.strip() == str(dest.resolve())  # stdout contract intact
+    with open(dest, "rb") as fh:
+        assert fh.read(4) == PNG_MAGIC
+
+
 # --- audit ------------------------------------------------------------------
 
 
