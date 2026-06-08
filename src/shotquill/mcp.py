@@ -32,7 +32,11 @@ from pathlib import Path
 from shotquill import __version__, audit, headless
 from shotquill.capture.base import Rect
 
-_PROTOCOL_FALLBACK = "2025-06-18"
+# Newest first: initialize echoes the client's version when we actually
+# support it, otherwise offers our newest (per the MCP negotiation rules) —
+# blindly echoing would claim conformance with protocols this server has
+# never seen.
+_SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 _INSTRUCTIONS = (
     "Screenshot & OCR tools for this machine. `capture` returns the image "
@@ -98,10 +102,12 @@ def _handle(message) -> dict | None:
         return _error(msg_id, -32600, "invalid request") if msg_id is not None else None
     if method == "initialize":
         params = message.get("params") or {}
+        requested = params.get("protocolVersion")
+        version = requested if requested in _SUPPORTED_PROTOCOLS else _SUPPORTED_PROTOCOLS[0]
         return _result(
             msg_id,
             {
-                "protocolVersion": params.get("protocolVersion") or _PROTOCOL_FALLBACK,
+                "protocolVersion": version,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "shotquill", "version": __version__},
                 "instructions": _INSTRUCTIONS,
@@ -127,12 +133,21 @@ def _tools_call(msg_id, params: dict) -> dict:
         return _error(msg_id, -32602, f"unknown tool: {name}")
     arguments = params.get("arguments") or {}
     try:
-        content = tool["handler"](arguments)
-        return _result(msg_id, {"content": content, "isError": False})
+        content, structured = tool["handler"](arguments)
+        result = {"content": content, "isError": False}
+        if structured is not None:
+            # structuredContent mirrors the JSON already in the text blocks,
+            # typed by the descriptor's outputSchema — agents read fields
+            # instead of re-parsing JSON out of prose.
+            result["structuredContent"] = structured
+        return _result(msg_id, result)
     except Exception as exc:  # noqa: BLE001 - tool failures must stay in-band
         # Agents read tool output, not server stderr: report the failure as a
         # structured isError result they can branch on (mirrors CLI exit codes).
         payload = {"error": str(exc), "type": _error_type(exc)}
+        hint = _ERROR_HINTS.get(payload["type"])
+        if hint:
+            payload["hint"] = hint
         return _result(
             msg_id,
             {
@@ -152,6 +167,15 @@ def _error_type(exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return "invalid_arguments"
     return "error"
+
+
+# The recovery step per error type — agents act on a next move far more
+# reliably than on a bare failure message.
+_ERROR_HINTS = {
+    "unsupported": "call the doctor tool to see what this host supports",
+    "no_match": "call list_windows to see what is actually on screen",
+    "permission": "call the doctor tool for the missing grant and how to fix it",
+}
 
 
 # --- tool handlers -----------------------------------------------------------
@@ -202,7 +226,7 @@ def _capture_image(args: dict):
     return result_to_qimage(result), target, matched
 
 
-def _tool_capture(args: dict) -> list[dict]:
+def _tool_capture(args: dict):
     fmt = args.get("format") or "png"
     if fmt not in ("png", "jpg", "jpeg"):
         raise ValueError(f"format must be png or jpg — got {fmt!r}")
@@ -210,13 +234,7 @@ def _tool_capture(args: dict) -> list[dict]:
 
     max_width = args.get("max_width")
     if max_width is not None:
-        max_width = int(max_width)
-        if max_width <= 0:
-            raise ValueError("max_width must be positive")
-        if image.width() > max_width:
-            from PySide6.QtCore import Qt
-
-            image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
+        image = headless.downscale_to_width(image, int(max_width))
 
     data = headless.encode_qimage(image, fmt)
     meta = {"target": target, "width": image.width(), "height": image.height()}
@@ -237,19 +255,23 @@ def _tool_capture(args: dict) -> list[dict]:
     return [
         {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": mime},
         {"type": "text", "text": json.dumps(meta, ensure_ascii=False)},
-    ]
+    ], meta
 
 
-def _tool_list_windows(args: dict) -> list[dict]:
+def _tool_list_windows(args: dict):
     windows = headless.get_capturer().list_windows()
     audit.record("windows", via="mcp", target=f"{len(windows)} windows")
-    payload = headless.windows_payload(windows)
-    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]
+    payload = {"windows": headless.windows_payload(windows)}
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
-def _tool_ocr(args: dict) -> list[dict]:
+def _tool_ocr(args: dict):
     recognizer = headless.get_recognizer()  # fail fast before any capture
     path = args.get("path")
+    if path and any(args.get(key) is not None for key in ("window_id", "app", "title", "region")):
+        # Silently OCRing the file while ignoring the capture target would
+        # answer a different question than the agent asked.
+        raise ValueError("path and capture targets (window_id/app/title/region) are exclusive")
     if path:
         from PySide6.QtGui import QImage
 
@@ -264,12 +286,13 @@ def _tool_ocr(args: dict) -> list[dict]:
         image, source, _matched = _capture_image(args)
     lines = recognizer.recognize(image)
     audit.record("ocr", via="mcp", target=source)
-    return [{"type": "text", "text": "\n".join(lines)}]
+    structured = {"lines": lines, "source": source}
+    return [{"type": "text", "text": "\n".join(lines)}], structured
 
 
-def _tool_doctor(args: dict) -> list[dict]:
-    checks = headless.doctor_checks()
-    return [{"type": "text", "text": json.dumps(checks, ensure_ascii=False)}]
+def _tool_doctor(args: dict):
+    payload = {"checks": headless.doctor_checks()}
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
 # --- tool descriptors --------------------------------------------------------
@@ -305,6 +328,31 @@ _TARGET_PROPERTIES = {
     },
 }
 
+_WINDOW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "integer"},
+        "owner": {"type": "string"},
+        "title": {"type": "string"},
+        "bounds": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
+            },
+        },
+    },
+}
+
+
+def _read_only(title: str) -> dict:
+    """Annotations for the tools that never write anything an agent host
+    would want to gate on — lets hosts auto-approve them."""
+    return {"title": title, "readOnlyHint": True, "openWorldHint": False}
+
+
 _TOOLS = {
     "capture": {
         "handler": _tool_capture,
@@ -316,6 +364,8 @@ _TOOLS = {
                 "the image plus a JSON metadata text block. Use max_width "
                 "(e.g. 1024) to downscale large screens and save context."
             ),
+            # Not readOnlyHint: save_path can write (and overwrite) a file.
+            "annotations": {"title": "Take a screenshot", "openWorldHint": False},
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -332,6 +382,21 @@ _TOOLS = {
                 },
                 "additionalProperties": False,
             },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "What was actually captured."},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "matched_windows": {
+                        "type": "integer",
+                        "description": "Present when an app/title match was ambiguous.",
+                    },
+                    "note": {"type": "string"},
+                    "saved_path": {"type": "string"},
+                },
+                "required": ["target", "width", "height"],
+            },
         },
     },
     "list_windows": {
@@ -343,7 +408,13 @@ _TOOLS = {
                 "title, and bounds. Ids feed capture/ocr window_id. May be "
                 "unavailable on some platforms (e.g. Wayland) — see doctor."
             ),
+            "annotations": _read_only("List on-screen windows"),
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "outputSchema": {
+                "type": "object",
+                "properties": {"windows": {"type": "array", "items": _WINDOW_SCHEMA}},
+                "required": ["windows"],
+            },
         },
     },
     "ocr": {
@@ -356,13 +427,30 @@ _TOOLS = {
                 "screen) to capture-and-recognize in memory — only text is "
                 "returned, costing no image tokens."
             ),
+            "annotations": _read_only("Read text off the screen or an image"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Image file to recognize."},
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Image file to recognize. Exclusive with the capture targets."
+                        ),
+                    },
                     **_TARGET_PROPERTIES,
                 },
                 "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "lines": {"type": "array", "items": {"type": "string"}},
+                    "source": {
+                        "type": "string",
+                        "description": "The file or capture target the text came from.",
+                    },
+                },
+                "required": ["lines", "source"],
             },
         },
     },
@@ -375,7 +463,26 @@ _TOOLS = {
                 "list_windows, ocr, screen-recording permission) with reasons "
                 "for anything unavailable."
             ),
+            "annotations": _read_only("Capability & permission report"),
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "checks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "capability": {"type": "string"},
+                                "available": {"type": "boolean"},
+                                "detail": {"type": ["string", "null"]},
+                            },
+                            "required": ["capability", "available"],
+                        },
+                    }
+                },
+                "required": ["checks"],
+            },
         },
     },
 }

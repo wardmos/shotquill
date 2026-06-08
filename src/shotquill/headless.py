@@ -160,6 +160,21 @@ def parse_region(text: str) -> Rect:
     return Rect(x=x, y=y, width=w, height=h)
 
 
+def downscale_to_width(image: QImage, max_width: int) -> QImage:
+    """Cap the width (keeping aspect), shared by ``--max-width`` and MCP.
+
+    A smaller image is returned untouched — the option means "at most",
+    so callers can pass a constant without checking the screen size first.
+    """
+    if max_width <= 0:
+        raise ValueError("max_width must be positive")
+    if image.width() <= max_width:
+        return image
+    from PySide6.QtCore import Qt
+
+    return image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
+
+
 def encode_qimage(image: QImage, image_format: str = "png") -> bytes:
     """Serialize a QImage to PNG/JPEG bytes (for ``-o -`` and MCP payloads)."""
     from PySide6.QtCore import QBuffer, QByteArray, QIODevice

@@ -102,6 +102,15 @@ def test_unknown_command_is_usage_error():
     assert excinfo.value.code == 2
 
 
+@pytest.mark.parametrize("argv", [["--help"], ["capture", "--help"], ["ocr", "--help"]])
+def test_help_documents_exit_codes(capsys, argv):
+    # Agents discover the exit-code contract from --help, not the README.
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(argv)
+    assert excinfo.value.code == 0
+    assert "exit codes:" in capsys.readouterr().out
+
+
 # --- capture: targets -------------------------------------------------------
 
 
@@ -183,6 +192,35 @@ def test_capture_stdout_refused_on_tty(fake_capturer, capsys, monkeypatch):
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     assert cli.main(["capture", "-o", "-"]) == 2
     assert "terminal" in capsys.readouterr().err
+
+
+def test_capture_json_metadata(fake_capturer, capsys, isolated_audit):
+    assert cli.main(["capture", "--json", "--app", "safari"]) == 0
+    captured = capsys.readouterr()
+    meta = json.loads(captured.out)
+    assert meta["target"] == "Safari — GitHub"
+    assert (meta["width"], meta["height"]) == (2, 2)
+    assert meta["matched_windows"] == 2  # ambiguity rides in-band …
+    assert "match" not in captured.err  # … not as stderr prose
+    with open(meta["path"], "rb") as fh:
+        assert fh.read(4) == PNG_MAGIC
+
+
+def test_capture_json_refused_with_stdout_stream(fake_capturer, capsys):
+    assert cli.main(["capture", "--json", "-o", "-"]) == 2
+    assert "--json" in capsys.readouterr().err
+
+
+def test_capture_max_width_downscales(fake_capturer, capsys, monkeypatch):
+    monkeypatch.setattr(fake_capturer, "capture_fullscreen", lambda: _result(100, 40))
+    assert cli.main(["capture", "--json", "--max-width", "50"]) == 0
+    meta = json.loads(capsys.readouterr().out)
+    assert (meta["width"], meta["height"]) == (50, 20)
+
+
+def test_capture_max_width_must_be_positive(fake_capturer, capsys):
+    assert cli.main(["capture", "--max-width", "0"]) == 2
+    assert fake_capturer.calls == []
 
 
 # --- capture: failures ------------------------------------------------------
@@ -343,6 +381,28 @@ def test_ocr_unsupported_exits_4(monkeypatch, capsys):
 
     monkeypatch.setattr(headless, "get_recognizer", _nope)
     assert cli.main(["ocr", "whatever.png"]) == headless.EXIT_UNSUPPORTED
+
+
+def test_ocr_captures_when_no_path(fake_recognizer, fake_capturer, capsys, isolated_audit):
+    # One step instead of `capture -o - | squill ocr -`, like the MCP tool.
+    assert cli.main(["ocr", "--app", "notes"]) == 0
+    assert capsys.readouterr().out == "hello\nworld\n"
+    assert fake_capturer.calls == [("window", 33)]
+    (entry,) = _audit_entries(isolated_audit)
+    assert entry["action"] == "ocr"
+    assert entry["target"] == "Notes — Scratch"
+
+
+def test_ocr_bare_invocation_recognizes_fullscreen(fake_recognizer, fake_capturer, capsys):
+    assert cli.main(["ocr"]) == 0
+    assert capsys.readouterr().out == "hello\nworld\n"
+    assert fake_capturer.calls == [("fullscreen",)]
+
+
+def test_ocr_path_and_target_is_usage_error(fake_recognizer, fake_capturer, capsys):
+    assert cli.main(["ocr", "shot.png", "--app", "notes"]) == 2
+    assert fake_capturer.calls == []  # neither interpretation was guessed at
+    assert "not both" in capsys.readouterr().err
 
 
 # --- doctor -----------------------------------------------------------------

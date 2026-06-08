@@ -169,8 +169,9 @@ menu-bar app; with a subcommand it stays headless:
 squill capture                            # full screen → temp file, path on stdout
 squill capture --app safari -o shot.png   # front-most matching window
 squill capture --region 0,0,800,600 -o -  # stream PNG bytes to a pipe
+squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill windows --json                     # list windows, front-most first
-squill capture -o - | squill ocr -        # capture → on-device OCR, one pipe
+squill ocr --app safari                   # screen → on-device OCR, one step
 squill doctor                             # capability & permission report
 ```
 
@@ -178,9 +179,17 @@ The parts agents rely on:
 
 - **One path on stdout.** `capture` writes one file and prints exactly one
   absolute path; warnings go to stderr. It never touches the clipboard, and
-  defaults to a private temp dir — pass `-o` to keep a shot.
+  defaults to a private temp dir — pass `-o` to keep a shot. `--json` swaps
+  the bare path for one JSON object (path, target, size, ambiguity count),
+  and `--max-width` downscales before the image reaches a vision model.
+- **OCR reads the screen directly.** `squill ocr --app safari` (or
+  `--window-id`, `--region`, or nothing for the full screen) captures and
+  recognizes in memory — no file, no pipe. `squill ocr shot.png` and
+  `squill ocr -` still read a file or stdin.
 - **Exit codes are the contract**: `0` ok · `2` usage · `3` permission denied ·
   `4` capability unavailable on this platform/session · `5` no window matched.
+  Every `--help` prints them, so the contract is discoverable without this
+  README; `python -m shotquill` accepts the same subcommands.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.
@@ -214,7 +223,12 @@ Four tools: **capture** (full screen / window by id or app+title / region;
 returns the image inline — pass `max_width` to downscale and save context;
 `save_path` optionally persists), **list_windows**, **ocr** (a file, or
 capture-and-recognize fully in memory so reading on-screen text costs no
-image tokens), and **doctor**.
+image tokens), and **doctor**. Built for agent ergonomics: every tool
+declares an `outputSchema` and returns typed `structuredContent` (no
+re-parsing JSON out of text), the read-only tools are annotated
+`readOnlyHint` so hosts can auto-approve them, and every in-band error
+carries a `type` plus a `hint` naming the recovery step (`no_match` →
+"call list_windows", `permission` → "call doctor", …).
 
 Know what you are opting into:
 

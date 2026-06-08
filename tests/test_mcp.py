@@ -115,10 +115,24 @@ def test_initialize_handshake():
         }
     )
     result = response["result"]
-    assert result["protocolVersion"] == "2025-03-26"  # echo a compatible client
+    assert result["protocolVersion"] == "2025-03-26"  # echo a supported version
     assert result["serverInfo"]["name"] == "shotquill"
     assert result["capabilities"]["tools"] == {}
     assert result["instructions"]
+
+
+def test_initialize_unknown_version_offers_newest_supported():
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {"protocolVersion": "9999-12-31", "capabilities": {}},
+        }
+    )
+    # Echoing an unknown version would claim conformance we cannot deliver;
+    # the negotiation rules say to offer our newest instead.
+    assert response["result"]["protocolVersion"] == mcp._SUPPORTED_PROTOCOLS[0]
 
 
 def test_initialized_notification_gets_no_response():
@@ -138,6 +152,20 @@ def test_tools_list_descriptors():
     assert "window_id" in capture_schema["properties"]
     assert capture_schema["additionalProperties"] is False
     assert "path" in tools["ocr"]["inputSchema"]["properties"]
+
+
+def test_tools_list_annotations_and_output_schemas():
+    (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+    # Screen-reading tools are flagged read-only so hosts can auto-approve
+    # them; capture is not (save_path writes a file).
+    for name in ("list_windows", "ocr", "doctor"):
+        assert tools[name]["annotations"]["readOnlyHint"] is True
+    assert "readOnlyHint" not in tools["capture"]["annotations"]
+    for tool in tools.values():
+        assert tool["annotations"]["title"]
+        assert tool["annotations"]["openWorldHint"] is False
+        assert tool["outputSchema"]["type"] == "object"
 
 
 def test_unknown_method_is_error_but_unknown_notification_is_ignored():
@@ -173,6 +201,7 @@ def test_capture_returns_image_and_metadata(fake_capturer, isolated_audit):
     meta = json.loads(text_item["text"])
     assert meta["target"] == "fullscreen"
     assert (meta["width"], meta["height"]) == (2, 2)
+    assert result["structuredContent"] == meta  # typed mirror of the text block
     (entry,) = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
     assert entry["via"] == "mcp"
     assert entry["dest"] == "inline"
@@ -224,7 +253,9 @@ def test_capture_unsupported_platform_is_in_band_error(monkeypatch):
 
 def test_capture_no_window_match_is_no_match(fake_capturer):
     result = call("capture", {"app": "xcode"})["result"]
-    assert json.loads(result["content"][0]["text"])["type"] == "no_match"
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "no_match"
+    assert "list_windows" in payload["hint"]  # errors name the recovery step
 
 
 # --- list_windows / ocr / doctor ----------------------------------------------
@@ -233,12 +264,13 @@ def test_capture_no_window_match_is_no_match(fake_capturer):
 def test_list_windows_payload(fake_capturer):
     result = call("list_windows")["result"]
     payload = json.loads(result["content"][0]["text"])
-    assert payload[0] == {
+    assert payload["windows"][0] == {
         "id": 11,
         "owner": "Safari",
         "title": "GitHub",
         "bounds": {"x": 0, "y": 25, "width": 800, "height": 600},
     }
+    assert result["structuredContent"] == payload
 
 
 def test_ocr_from_file(fake_recognizer, fake_capturer, tmp_path):
@@ -249,15 +281,24 @@ def test_ocr_from_file(fake_recognizer, fake_capturer, tmp_path):
     image_file.write_bytes(headless.encode_qimage(result_to_qimage(FakeCapturer()._result())))
     result = call("ocr", {"path": str(image_file)})["result"]
     assert result["content"] == [{"type": "text", "text": "hello\nworld"}]
+    assert result["structuredContent"]["lines"] == ["hello", "world"]
 
 
 def test_ocr_capture_and_recognize_in_memory(fake_recognizer, fake_capturer, isolated_audit):
     result = call("ocr", {"app": "notes"})["result"]
     assert result["content"] == [{"type": "text", "text": "hello\nworld"}]
+    assert result["structuredContent"]["source"] == "Notes — Scratch"
     assert fake_capturer.calls == [("window", 33)]
     (entry,) = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
     assert entry["action"] == "ocr"
     assert entry["target"] == "Notes — Scratch"
+
+
+def test_ocr_path_and_capture_target_is_invalid_arguments(fake_recognizer, fake_capturer):
+    result = call("ocr", {"path": "/tmp/x.png", "app": "notes"})["result"]
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
+    assert fake_capturer.calls == []  # neither interpretation was guessed at
 
 
 def test_ocr_fails_fast_when_recognizer_unavailable(fake_capturer, monkeypatch):
@@ -273,6 +314,7 @@ def test_ocr_fails_fast_when_recognizer_unavailable(fake_capturer, monkeypatch):
 
 def test_doctor_matrix(fake_capturer):
     result = call("doctor")["result"]
-    checks = json.loads(result["content"][0]["text"])
-    capabilities = {item["capability"] for item in checks}
+    payload = json.loads(result["content"][0]["text"])
+    capabilities = {item["capability"] for item in payload["checks"]}
     assert {"platform", "capture", "list_windows", "ocr"} <= capabilities
+    assert result["structuredContent"] == payload

@@ -6,10 +6,15 @@ Contract (agents rely on it):
 
 - ``squill`` with no arguments launches the menu-bar GUI (back-compat).
 - ``squill capture`` writes one file and prints exactly one absolute path on
-  stdout; everything else (warnings, progress) goes to stderr. ``-o -``
-  streams the encoded image to stdout instead (refused on a TTY).
+  stdout; everything else (warnings, progress) goes to stderr. ``--json``
+  swaps the bare path for one JSON object (path, target, size, ambiguity)
+  so nothing needs scraping off stderr. ``-o -`` streams the encoded image
+  to stdout instead (refused on a TTY).
+- ``squill ocr`` takes a file path, ``-`` for stdin, or the same target
+  options as ``capture`` to recognize straight off the screen in one step.
 - Exit codes: 0 ok, 1 other error, 2 usage, 3 permission denied,
   4 capability unavailable on this platform/session, 5 no window matched.
+  They are printed in every ``--help`` so agents can discover them.
 """
 
 from __future__ import annotations
@@ -22,6 +27,13 @@ from pathlib import Path
 from shotquill import __version__, audit, headless, paths
 
 _EXIT_USAGE = 2
+
+# Shown in every --help: agents discover the exit-code contract the same way
+# they discover the flags, instead of needing the README.
+_EXIT_CODE_EPILOG = (
+    "exit codes: 0 ok, 1 error, 2 usage, 3 permission denied, "
+    "4 capability unavailable on this platform/session, 5 no window matched"
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,10 +50,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except headless.HeadlessError as exc:
-        print(f"squill: {exc}", file=sys.stderr)
+        hint = " (run `squill doctor`)" if exc.exit_code == headless.EXIT_PERMISSION else ""
+        print(f"squill: {exc}{hint}", file=sys.stderr)
         return exc.exit_code
     except PermissionError as exc:
-        print(f"squill: permission denied: {exc}", file=sys.stderr)
+        print(f"squill: permission denied: {exc} (run `squill doctor`)", file=sys.stderr)
         return headless.EXIT_PERMISSION
     except BrokenPipeError:
         # Downstream closed early (`squill capture -o - | head -c 100`); the
@@ -65,16 +78,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="squill",
         description="Screenshot & OCR for scripts and agents (run bare for the GUI).",
+        epilog=_EXIT_CODE_EPILOG,
     )
     parser.add_argument("--version", action="version", version=f"shotquill {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    capture = sub.add_parser("capture", help="capture the screen, a window, or a region")
-    target = capture.add_mutually_exclusive_group()
-    target.add_argument("--window-id", type=int, help="exact window id (see `squill windows`)")
-    target.add_argument("--app", help="pick the front-most window of a matching app (substring)")
-    target.add_argument("--region", help="logical-coordinate rectangle as x,y,w,h")
-    capture.add_argument("--title", help="narrow --app matches by title substring")
+    capture = sub.add_parser(
+        "capture",
+        help="capture the screen, a window, or a region",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    _add_target_options(capture)
     capture.add_argument(
         "-o",
         "--output",
@@ -82,19 +96,50 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     capture.add_argument("--format", choices=("png", "jpg"), default="png")
     capture.add_argument(
+        "--max-width",
+        type=int,
+        metavar="PX",
+        help="downscale to at most this many pixels wide (keeps aspect ratio)",
+    )
+    capture.add_argument(
+        "--json",
+        action="store_true",
+        help="print JSON metadata (path, target, size, matches) instead of the bare path",
+    )
+    capture.add_argument(
         "--include-cursor", action="store_true", help="composite the pointer (best effort)"
     )
     capture.set_defaults(func=_cmd_capture)
 
-    windows = sub.add_parser("windows", help="list on-screen windows, front-most first")
+    windows = sub.add_parser(
+        "windows",
+        help="list on-screen windows, front-most first",
+        epilog=_EXIT_CODE_EPILOG,
+    )
     windows.add_argument("--json", action="store_true", help="machine-readable output")
     windows.set_defaults(func=_cmd_windows)
 
-    ocr = sub.add_parser("ocr", help="extract text from an image (on-device)")
-    ocr.add_argument("path", help="image file, or '-' to read image bytes from stdin")
+    ocr = sub.add_parser(
+        "ocr",
+        help="extract text from an image file, stdin, or straight off the screen (on-device)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    ocr.add_argument(
+        "path",
+        nargs="?",
+        help=(
+            "image file, or '-' for image bytes on stdin; omit to capture-and-"
+            "recognize in one step (target options below pick what, like `capture`)"
+        ),
+    )
+    _add_target_options(ocr)
     ocr.set_defaults(func=_cmd_ocr)
 
-    doctor = sub.add_parser("doctor", help="report platform capabilities and permissions")
+    doctor = sub.add_parser(
+        "doctor",
+        help="report platform capabilities and permissions",
+        epilog=_EXIT_CODE_EPILOG,
+    )
     doctor.add_argument("--json", action="store_true", help="machine-readable output")
     doctor.set_defaults(func=_cmd_doctor)
 
@@ -110,34 +155,50 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_target_options(command: argparse.ArgumentParser) -> None:
+    """The shared what-to-capture options (`capture` and screen-`ocr`)."""
+    target = command.add_mutually_exclusive_group()
+    target.add_argument("--window-id", type=int, help="exact window id (see `squill windows`)")
+    target.add_argument("--app", help="pick the front-most window of a matching app (substring)")
+    target.add_argument("--region", help="logical-coordinate rectangle as x,y,w,h")
+    command.add_argument("--title", help="narrow --app matches by title substring")
+
+
 def _usage_error(message: str) -> int:
     print(f"squill: {message}", file=sys.stderr)
     return _EXIT_USAGE
 
 
-def _cmd_capture(args: argparse.Namespace) -> int:
+class _UsageError(Exception):
+    """Raised by shared validation helpers; ``main`` paths turn it into exit 2."""
+
+
+def _validate_target(args: argparse.Namespace):
+    """Check the shared target options and return the parsed region (or None)."""
     if args.app is not None and not args.app.strip():
         # An empty --app is falsy and would silently fall through to a
         # full-screen grab — the one thing worse than failing is capturing
         # something the caller did not ask for.
-        return _usage_error("--app needs a non-empty app name")
+        raise _UsageError("--app needs a non-empty app name")
     if args.title and not args.app:
-        return _usage_error("--title only narrows --app matches; pass --app too")
-    if args.output == "-" and sys.stdout.isatty():
-        return _usage_error("refusing to write image bytes to a terminal; pipe or redirect")
+        raise _UsageError("--title only narrows --app matches; pass --app too")
+    if not args.region:
+        return None
+    try:
+        return headless.parse_region(args.region)
+    except ValueError as exc:
+        raise _UsageError(str(exc)) from None
 
-    region = None
-    if args.region:
-        try:
-            region = headless.parse_region(args.region)
-        except ValueError as exc:
-            return _usage_error(str(exc))
 
-    capturer = headless.get_capturer(include_cursor=args.include_cursor)
+def _capture_image(args: argparse.Namespace, region, include_cursor: bool = False):
+    """Run one capture and return ``(QImage, target, matched)``; warn on stderr
+    when an app/title match was ambiguous, mirroring the MCP metadata."""
+    capturer = headless.get_capturer(include_cursor=include_cursor)
     result, target, matched = headless.perform_capture(
         capturer, window_id=args.window_id, app=args.app, title=args.title, region=region
     )
-    if matched > 1:
+    if matched > 1 and not getattr(args, "json", False):
+        # In --json mode the ambiguity rides along in the payload instead.
         print(
             f"squill: {matched} windows match; captured the front-most"
             " (use --window-id for an exact pick)",
@@ -146,7 +207,25 @@ def _cmd_capture(args: argparse.Namespace) -> int:
 
     from shotquill.imaging import result_to_qimage
 
-    image = result_to_qimage(result)
+    return result_to_qimage(result), target, matched
+
+
+def _cmd_capture(args: argparse.Namespace) -> int:
+    if args.output == "-" and sys.stdout.isatty():
+        return _usage_error("refusing to write image bytes to a terminal; pipe or redirect")
+    if args.output == "-" and args.json:
+        return _usage_error("--json owns stdout; it cannot be combined with `-o -`")
+    if args.max_width is not None and args.max_width <= 0:
+        return _usage_error("--max-width must be positive")
+
+    try:
+        region = _validate_target(args)
+        image, target, matched = _capture_image(args, region, include_cursor=args.include_cursor)
+    except _UsageError as exc:
+        return _usage_error(str(exc))
+
+    if args.max_width is not None:
+        image = headless.downscale_to_width(image, args.max_width)
 
     if args.output == "-":
         sys.stdout.buffer.write(headless.encode_qimage(image, args.format))
@@ -162,7 +241,19 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             path = build_output_path(str(paths.capture_tmp_dir()), args.format)
         _save_image(image, path, args.format)
         dest = str(path.resolve())
-        print(dest)
+        if args.json:
+            meta = {
+                "path": dest,
+                "target": target,
+                "width": image.width(),
+                "height": image.height(),
+            }
+            if matched > 1:
+                meta["matched_windows"] = matched
+                meta["note"] = "captured the front-most match; use --window-id for an exact pick"
+            print(json.dumps(meta, ensure_ascii=False))
+        else:
+            print(dest)
 
     audit.record("capture", via="cli", target=target, dest=dest)
     return 0
@@ -197,24 +288,38 @@ def _cmd_windows(args: argparse.Namespace) -> int:
 
 
 def _cmd_ocr(args: argparse.Namespace) -> int:
-    recognizer = headless.get_recognizer()
-    if args.path == "-":
-        data = sys.stdin.buffer.read()
-        source = "stdin"
-    else:
-        try:
-            data = Path(args.path).expanduser().read_bytes()
-        except OSError as exc:
-            print(f"squill: cannot read {args.path}: {exc}", file=sys.stderr)
+    recognizer = headless.get_recognizer()  # fail fast before any capture
+    has_target = any(value is not None for value in (args.window_id, args.app, args.region))
+    if args.path is not None and has_target:
+        return _usage_error("pass an image path or a capture target, not both")
+
+    if args.path is not None:
+        if args.path == "-":
+            data = sys.stdin.buffer.read()
+            source = "stdin"
+        else:
+            try:
+                data = Path(args.path).expanduser().read_bytes()
+            except OSError as exc:
+                print(f"squill: cannot read {args.path}: {exc}", file=sys.stderr)
+                return 1
+            source = str(Path(args.path).expanduser().resolve())
+
+        from PySide6.QtGui import QImage
+
+        image = QImage.fromData(data)
+        if image.isNull():
+            print(f"squill: {source} is not a decodable image", file=sys.stderr)
             return 1
-        source = str(Path(args.path).expanduser().resolve())
+    else:
+        # Capture-and-recognize in memory (no file, no clipboard): one step
+        # instead of `capture -o - | ocr -`, same as the MCP ocr tool.
+        try:
+            region = _validate_target(args)
+            image, source, _matched = _capture_image(args, region)
+        except _UsageError as exc:
+            return _usage_error(str(exc))
 
-    from PySide6.QtGui import QImage
-
-    image = QImage.fromData(data)
-    if image.isNull():
-        print(f"squill: {source} is not a decodable image", file=sys.stderr)
-        return 1
     for line in recognizer.recognize(image):
         print(line)
     audit.record("ocr", via="cli", target=source)
