@@ -103,6 +103,14 @@ def create_toolbar(
     width.setRange(1, 40)
     width.setValue(canvas.width())
     width.setPrefix(t("toolbar.width"))
+    # The editor's keyboard surface lives on the canvas/window: arrows adjust
+    # a region capture's crop, Space/Enter finish the shot. A focusable spin
+    # box would keep those keys after a click — arrows would silently step the
+    # stroke width instead of the crop — so it stays mouse-only (the up/down
+    # buttons and the scroll wheel still adjust it). The inner line edit holds
+    # its own focus policy and is the spin box's focus proxy, so clear both.
+    width.setFocusPolicy(Qt.NoFocus)
+    width.lineEdit().setFocusPolicy(Qt.NoFocus)
     width.valueChanged.connect(canvas.set_width)
     toolbar.addWidget(width)
 

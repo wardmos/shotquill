@@ -39,7 +39,7 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -76,8 +76,10 @@ _PREVIEW_DELAY_MS = 120
 # Keyboard cursor nudging: arrows or WASD move the *real* pointer one logical
 # point per press (Shift steps by 10) so a drag can start, follow, and end on
 # an exact pixel — the loupe magnifies, but the hand still has to hit the
-# spot. Moving the OS cursor (rather than private state) feeds the normal
-# mouse-move path, so the loupe, hover highlight, and a held drag all follow.
+# spot. The OS cursor is warped *and* the move is applied to the overlay's
+# own pointer state, so the loupe, hover highlight, and a held drag follow
+# even when the warp is swallowed (macOS without the Accessibility
+# permission) — see _nudge_cursor.
 _CURSOR_NUDGE_COARSE = 10
 _CURSOR_DELTAS = {
     Qt.Key_Left: (-1, 0),
@@ -89,6 +91,10 @@ _CURSOR_DELTAS = {
     Qt.Key_W: (0, -1),
     Qt.Key_S: (0, 1),
 }
+# Only Shift (coarse step) and the keypad flag may accompany a nudge key:
+# app shortcuts like ⌘A / ⌘W land on the same keys and must not move the
+# pointer while the overlay is up.
+_NUDGE_MODIFIERS = Qt.ShiftModifier | Qt.KeypadModifier
 
 
 class SmartOverlay(QWidget):
@@ -177,7 +183,10 @@ class SmartOverlay(QWidget):
         if event.type() == QEvent.ActivationChange:
             if self.isActiveWindow():
                 self._activated = True
-            elif self._activated:
+            elif self._activated and not self._closed:
+                # _closed gates the accepted/cancelled paths: opening the editor
+                # right after an accept deactivates the overlay before close()
+                # lands, and that deactivation must not fire a second outcome.
                 self._cancel()
         super().changeEvent(event)
 
@@ -345,7 +354,11 @@ class SmartOverlay(QWidget):
         return QRect(int(x), int(y), int(w), int(h))
 
     def mouseMoveEvent(self, event) -> None:
-        pos = event.position()
+        self._pointer_moved(event.position())
+
+    def _pointer_moved(self, pos: QPointF) -> None:
+        # Shared by real mouse moves and keyboard nudges (which apply the move
+        # locally as well as warping the OS cursor — see _nudge_cursor).
         self._cursor = pos
         if self._origin is not None:
             self._current = pos
@@ -448,9 +461,7 @@ class SmartOverlay(QWidget):
             # A quick move-and-click means "the thing under the cursor", even
             # when the debounced highlight hasn't caught up yet (and this is
             # the only way the highlight moves under HOVER_SWITCH_NEVER).
-            if self._pending_hover != self._hover:
-                self._hover_timer.stop()
-                self._commit_hover()
+            self._commit_pending_hover()
             self._origin = event.position()
             self._current = event.position()
             self._dragging = False
@@ -473,24 +484,49 @@ class SmartOverlay(QWidget):
             if self._dragging:
                 self._accept_region()
             else:
+                # Like a click: confirm what's under the pointer, even when the
+                # debounced highlight hasn't caught up with it yet.
+                self._commit_pending_hover()
                 self._accept_target(self._hover)
-        elif event.key() in _CURSOR_DELTAS:
+        elif event.key() in _CURSOR_DELTAS and not event.modifiers() & ~_NUDGE_MODIFIERS:
             self._nudge_cursor(event)
+
+    def _commit_pending_hover(self) -> None:
+        if self._pending_hover != self._hover:
+            self._hover_timer.stop()
+            self._commit_hover()
 
     def _nudge_cursor(self, event) -> None:
         # Move the real pointer one logical point (Shift: ten) — before a drag
-        # to line up its start, or mid-drag to land its edge exactly. The OS
-        # echoes the move back as a normal mouseMoveEvent, which updates the
-        # loupe/hover/drag state through the usual path.
+        # to line up its start, or mid-drag to land its edge exactly. The step
+        # is based on the overlay's own pointer state, not QCursor.pos(), and
+        # the move is applied locally as well as warped: on macOS setPos posts
+        # a synthetic event that needs the Accessibility permission, so it can
+        # be swallowed or arrive late — the selection, loupe, and hover must
+        # follow the keys regardless, and repeated presses must accumulate.
+        # When the echo does arrive it lands on the same coordinates, so
+        # applying the move twice is harmless.
         dx, dy = _CURSOR_DELTAS[event.key()]
         step = _CURSOR_NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
-        QCursor.setPos(QCursor.pos() + QPoint(dx * step, dy * step))
+        base = self._cursor
+        if base is None:  # no pointer event seen yet (keys-first user)
+            base = QPointF(self.mapFromGlobal(QCursor.pos()))
+        target = QPointF(
+            min(max(base.x() + dx * step, 0.0), self.width() - 1.0),
+            min(max(base.y() + dy * step, 0.0), self.height() - 1.0),
+        )
+        QCursor.setPos(self.mapToGlobal(target.toPoint()))
+        self._pointer_moved(target)
 
     def _accept_region(self) -> None:
         sel = self._selection()
         if sel.width() < _MIN_SIZE or sel.height() < _MIN_SIZE:
             self._cancel()
             return
+        # Settle the outcome before emitting: the receiver opens (and
+        # activates) the editor synchronously, and the deactivation that
+        # follows must not be mistaken for an abandon (see changeEvent).
+        self._closed = True
         # Crop from the float drag points (not the int-snapped UI rect) and
         # convert by edges, so fractional scale factors never clip the
         # right/bottom pixel row; clamp to the screenshot so QImage.copy
@@ -506,6 +542,7 @@ class SmartOverlay(QWidget):
         self.close()
 
     def _accept_target(self, hover: int | None) -> None:
+        self._closed = True  # one outcome only — see _accept_region
         if hover is not None:
             window = self._windows[hover]
             bounds = QRect(
@@ -520,5 +557,6 @@ class SmartOverlay(QWidget):
         self.close()
 
     def _cancel(self) -> None:
+        self._closed = True  # one outcome only — see _accept_region
         self.cancelled.emit()
         self.close()

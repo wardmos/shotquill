@@ -230,6 +230,35 @@ def test_press_settles_pending_hover_so_quick_clicks_hit_the_window(qtbot):
     assert received == [42]
 
 
+def test_enter_settles_pending_hover_like_a_click(qtbot):
+    # Enter must confirm what the pointer (and the thin pending outline) is
+    # on, even when the debounced highlight hasn't caught up yet — the same
+    # rule a press follows.
+    overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=3000)
+    received = []
+    overlay.window_selected.connect(lambda window_id, rect: received.append(window_id))
+
+    _move(overlay, 70, 25)
+    assert overlay._hover is None
+    _key(overlay, Qt.Key_Return)
+
+    assert received == [42]
+
+
+def test_accepting_suppresses_the_deactivation_cancel(qtbot):
+    # Opening the editor right after an accept deactivates the overlay before
+    # its close lands; that deactivation must not fire a second outcome.
+    overlay = _overlay(qtbot)
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    overlay._activated = True  # as if the overlay had been the active window
+
+    _drag_region(overlay, 10, 10, 40, 30)
+    overlay.changeEvent(QEvent(QEvent.ActivationChange))  # editor stole focus
+
+    assert cancelled == []
+
+
 def test_right_click_cancels(qtbot):
     overlay = _overlay(qtbot)
     cancelled = []
@@ -493,13 +522,15 @@ def test_arrow_keys_nudge_the_pointer_one_point(qtbot, monkeypatch):
     overlay = _overlay(qtbot, windows=_windows())
     _hover(overlay, 70, 25)
 
+    # Steps are based on the overlay's own pointer state (the last move it
+    # saw), not QCursor.pos(): the warp's echo may be swallowed (macOS without
+    # the Accessibility permission) and must not break key repeats.
     _key(overlay, Qt.Key_Right)
-    assert (cursor.position.x(), cursor.position.y()) == (51, 25)
+    assert (cursor.position.x(), cursor.position.y()) == (71, 25)
     _key(overlay, Qt.Key_Up)
-    assert (cursor.position.x(), cursor.position.y()) == (51, 24)
+    assert (cursor.position.x(), cursor.position.y()) == (71, 24)
 
-    # Selection state is untouched — the loupe/hover follow via the mouse-move
-    # the OS echoes back, not via private nudging.
+    # No drag started, and the hover still tracks the (nudged) pointer.
     assert overlay._origin is None
     assert overlay._hover == 0
 
@@ -526,8 +557,9 @@ def test_shift_nudges_the_pointer_ten_points(qtbot, monkeypatch):
 
 def test_nudge_works_mid_drag(qtbot, monkeypatch):
     # Keys keep working while the button is held, so a drag's trailing edge
-    # can be landed exactly; the echoed mouse-move (not the key handler)
-    # updates _current, so the drag state itself stays untouched here.
+    # can be landed exactly. The key handler applies the move locally (the
+    # warp's echo would land on the same coordinates), so the drag edge
+    # follows even when the OS swallows the synthetic move.
     cursor = _fake_cursor(monkeypatch, 40, 30)
     overlay = _overlay(qtbot)
     _press(overlay, 10, 10)
@@ -535,6 +567,30 @@ def test_nudge_works_mid_drag(qtbot, monkeypatch):
     _key(overlay, Qt.Key_Right)
     assert (cursor.position.x(), cursor.position.y()) == (41, 30)
     assert overlay._dragging is True
+    assert (overlay._current.x(), overlay._current.y()) == (41, 30)
+
+
+def test_nudge_drives_the_overlay_without_an_os_echo(qtbot, monkeypatch):
+    # The fake cursor never echoes a mouse-move back (like macOS without the
+    # Accessibility permission): the overlay's pointer state must still follow
+    # the keys, and repeated presses must accumulate rather than re-step from
+    # the unmoved real pointer.
+    _fake_cursor(monkeypatch, 50, 25)
+    overlay = _overlay(qtbot)
+    _key(overlay, Qt.Key_Right)  # keys-first: seeds from QCursor.pos()
+    _key(overlay, Qt.Key_Right)
+    _key(overlay, Qt.Key_Down)
+    assert (overlay._cursor.x(), overlay._cursor.y()) == (52, 26)
+
+
+def test_nudge_ignores_app_shortcut_modifiers(qtbot, monkeypatch):
+    # ⌘A / ⌘W (and other modified presses) are app shortcuts, not nudges.
+    cursor = _fake_cursor(monkeypatch, 50, 25)
+    overlay = _overlay(qtbot)
+    _key(overlay, Qt.Key_A, Qt.ControlModifier)
+    _key(overlay, Qt.Key_W, Qt.AltModifier)
+    assert (cursor.position.x(), cursor.position.y()) == (50, 25)
+    assert overlay._cursor is None
 
 
 def test_no_preview_fetch_after_close(qtbot):
