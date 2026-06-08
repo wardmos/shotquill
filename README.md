@@ -177,6 +177,48 @@ The parts agents rely on:
   store (unified log / journald), which user-space processes cannot rewrite.
   Each entry records the process chain that drove the capture.
 
+### MCP server
+
+`squill mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io)
+over stdio, so MCP clients (Claude Code, Claude Desktop, …) can give their
+agents eyes on your screen. Register it:
+
+```bash
+claude mcp add shotquill -- squill mcp
+```
+
+or in `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "shotquill": { "command": "squill", "args": ["mcp"] }
+  }
+}
+```
+
+Four tools: **capture** (full screen / window by id or app+title / region;
+returns the image inline — pass `max_width` to downscale and save context;
+`save_path` optionally persists), **list_windows**, **ocr** (a file, or
+capture-and-recognize fully in memory so reading on-screen text costs no
+image tokens), and **doctor**.
+
+Know what you are opting into:
+
+- **Captured pixels go to the agent's model.** That is the point of the
+  feature — the image is returned to the MCP client, which sends it to
+  whatever model the agent uses. ShotQuill itself still makes no network
+  requests; if that trade-off isn't right for the moment, don't start the
+  server.
+- **The session is bounded.** stdio only — no socket, no port; only the MCP
+  client that spawned the server can talk to it, and it dies when the client
+  exits (or after `--timeout SECONDS`, if you pass one). Nothing runs unless
+  you registered it.
+- **Same accountability as the CLI**: macOS attributes Screen Recording to
+  the MCP client app, and every screen-touching tool call lands in the audit
+  log with `via: "mcp"`. Your MCP client's per-tool-call approval settings
+  add a confirmation layer on top if you want one.
+
 ---
 
 ## Configuration
@@ -207,10 +249,13 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
   export, so blurred-out content isn't recoverable from the saved image.
 - **No telemetry.** ShotQuill makes no network requests of its own.
 - **Programmatic captures are accountable.** Scripts and AI agents using the
-  CLI go through the same OS consent as any app — macOS attributes Screen
-  Recording to the invoking app, so the permission dialog names the real
-  controller — and every CLI capture leaves an audit entry (metadata only,
-  never pixels) in a local JSONL file plus the tamper-resistant OS log store.
+  CLI or the MCP server go through the same OS consent as any app — macOS
+  attributes Screen Recording to the invoking app, so the permission dialog
+  names the real controller — and every programmatic capture leaves an audit
+  entry (metadata only, never pixels) in a local JSONL file plus the
+  tamper-resistant OS log store. The MCP server is strictly opt-in and, by
+  design, returns captures to the agent's model — see the MCP section for
+  what that means.
 
 ---
 
@@ -273,7 +318,7 @@ button that jumps straight to the right privacy pane.
 - [x] On-device OCR
 - [x] Hands-free auto save + clipboard
 - [x] CLI for scripts & AI agents (`squill capture` / `windows` / `ocr` / `doctor`)
-- [ ] MCP server, so agents can capture and read the screen over Model Context Protocol
+- [x] MCP server, so agents can capture and read the screen over Model Context Protocol
 - [ ] Windows & Linux backends (X11 full-screen/region capture already works
       via the CLI; Wayland, window capture, and the GUI do not yet)
 - [ ] Scrolling / long-page capture
