@@ -1,0 +1,278 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 wardmos
+"""MCP server tests: protocol framing, tool dispatch, and in-band errors.
+
+The whole server is driven through ``serve()`` with StringIO pipes — exactly
+the bytes an MCP client would exchange — so these tests cover the real
+transport path, not just the handlers.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+
+import pytest
+
+from shotquill import audit, headless, mcp, paths
+from shotquill.capture.base import CaptureResult, Rect, WindowInfo
+
+PNG_MAGIC = b"\x89PNG"
+
+
+class FakeCapturer:
+    def __init__(self, width: int = 2, height: int = 2) -> None:
+        self.include_cursor = False
+        self.size = (width, height)
+        self.calls: list[tuple] = []
+        self.windows = [
+            WindowInfo(window_id=11, owner="Safari", title="GitHub", bounds=Rect(0, 25, 800, 600)),
+            WindowInfo(window_id=22, owner="Safari", title="Docs", bounds=Rect(40, 25, 800, 600)),
+            WindowInfo(window_id=33, owner="Notes", title="Scratch", bounds=Rect(5, 5, 300, 200)),
+        ]
+
+    def _result(self) -> CaptureResult:
+        width, height = self.size
+        return CaptureResult(
+            width=width, height=height, scale=1.0, pixels=bytes([200] * width * height * 4)
+        )
+
+    def capture_fullscreen(self) -> CaptureResult:
+        self.calls.append(("fullscreen",))
+        return self._result()
+
+    def capture_region(self, region: Rect) -> CaptureResult:
+        self.calls.append(("region", region))
+        return self._result()
+
+    def capture_window(self, window_id: int) -> CaptureResult:
+        self.calls.append(("window", window_id))
+        return self._result()
+
+    def list_windows(self) -> list[WindowInfo]:
+        return self.windows
+
+
+@pytest.fixture(autouse=True)
+def isolated_audit(monkeypatch, tmp_path):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    monkeypatch.setattr(audit, "_to_system_log", lambda line: None)
+    monkeypatch.setattr(audit, "_caller_chain", lambda: ["pytest"])
+    return log
+
+
+@pytest.fixture
+def fake_capturer(monkeypatch):
+    pytest.importorskip("PySide6")
+    capturer = FakeCapturer()
+    monkeypatch.setattr(headless, "get_capturer", lambda include_cursor=False: capturer)
+    return capturer
+
+
+@pytest.fixture
+def fake_recognizer(monkeypatch):
+    class _Recognizer:
+        def recognize(self, image):
+            return ["hello", "world"]
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _Recognizer())
+
+
+def run(*messages) -> list[dict]:
+    """Feed JSON-RPC messages through serve() and return the responses."""
+    raw = "\n".join(m if isinstance(m, str) else json.dumps(m) for m in messages) + "\n"
+    fout = io.StringIO()
+    assert mcp.serve(stdin=io.StringIO(raw), stdout=fout) == 0
+    return [json.loads(line) for line in fout.getvalue().splitlines()]
+
+
+def call(name: str, arguments: dict | None = None) -> dict:
+    """One tools/call round-trip; returns the result object."""
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        }
+    )
+    assert response["id"] == 1
+    return response
+
+
+# --- protocol ----------------------------------------------------------------
+
+
+def test_initialize_handshake():
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {}},
+        }
+    )
+    result = response["result"]
+    assert result["protocolVersion"] == "2025-03-26"  # echo a compatible client
+    assert result["serverInfo"]["name"] == "shotquill"
+    assert result["capabilities"]["tools"] == {}
+    assert result["instructions"]
+
+
+def test_initialized_notification_gets_no_response():
+    assert run({"jsonrpc": "2.0", "method": "notifications/initialized"}) == []
+
+
+def test_ping():
+    (response,) = run({"jsonrpc": "2.0", "id": 7, "method": "ping"})
+    assert response == {"jsonrpc": "2.0", "id": 7, "result": {}}
+
+
+def test_tools_list_descriptors():
+    (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+    assert set(tools) == {"capture", "list_windows", "ocr", "doctor"}
+    capture_schema = tools["capture"]["inputSchema"]
+    assert "window_id" in capture_schema["properties"]
+    assert capture_schema["additionalProperties"] is False
+    assert "path" in tools["ocr"]["inputSchema"]["properties"]
+
+
+def test_unknown_method_is_error_but_unknown_notification_is_ignored():
+    responses = run(
+        {"jsonrpc": "2.0", "id": 1, "method": "resources/list"},
+        {"jsonrpc": "2.0", "method": "notifications/whatever"},
+    )
+    (response,) = responses
+    assert response["error"]["code"] == -32601
+
+
+def test_parse_error():
+    (response,) = run("this is not json {")
+    assert response["error"]["code"] == -32700
+    assert response["id"] is None
+
+
+def test_unknown_tool_is_protocol_error():
+    response = call("frobnicate")
+    assert response["error"]["code"] == -32602
+
+
+# --- capture tool ------------------------------------------------------------
+
+
+def test_capture_returns_image_and_metadata(fake_capturer, isolated_audit):
+    result = call("capture")["result"]
+    assert result["isError"] is False
+    image_item, text_item = result["content"]
+    assert image_item["type"] == "image"
+    assert image_item["mimeType"] == "image/png"
+    assert base64.b64decode(image_item["data"]).startswith(PNG_MAGIC)
+    meta = json.loads(text_item["text"])
+    assert meta["target"] == "fullscreen"
+    assert (meta["width"], meta["height"]) == (2, 2)
+    (entry,) = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
+    assert entry["via"] == "mcp"
+    assert entry["dest"] == "inline"
+
+
+def test_capture_app_reports_ambiguity(fake_capturer):
+    result = call("capture", {"app": "safari"})["result"]
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["target"] == "Safari — GitHub"
+    assert meta["matched_windows"] == 2
+    assert fake_capturer.calls == [("window", 11)]
+
+
+def test_capture_save_path_also_writes_file(fake_capturer, tmp_path):
+    dest = tmp_path / "out" / "shot.png"
+    result = call("capture", {"save_path": str(dest)})["result"]
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["saved_path"] == str(dest.resolve())
+    with open(dest, "rb") as fh:
+        assert fh.read(4) == PNG_MAGIC
+
+
+def test_capture_max_width_downscales(fake_capturer):
+    fake_capturer.size = (100, 40)
+    result = call("capture", {"max_width": 50})["result"]
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["width"] == 50
+    assert meta["height"] == 20
+
+
+def test_capture_conflicting_targets_is_invalid_arguments(fake_capturer):
+    result = call("capture", {"window_id": 11, "app": "safari"})["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "invalid_arguments"
+
+
+def test_capture_unsupported_platform_is_in_band_error(monkeypatch):
+    def _nope(include_cursor=False):
+        raise headless.CapabilityUnsupported("capture", "no display session")
+
+    monkeypatch.setattr(headless, "get_capturer", _nope)
+    result = call("capture")["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "unsupported"
+    assert "no display session" in payload["error"]
+
+
+def test_capture_no_window_match_is_no_match(fake_capturer):
+    result = call("capture", {"app": "xcode"})["result"]
+    assert json.loads(result["content"][0]["text"])["type"] == "no_match"
+
+
+# --- list_windows / ocr / doctor ----------------------------------------------
+
+
+def test_list_windows_payload(fake_capturer):
+    result = call("list_windows")["result"]
+    payload = json.loads(result["content"][0]["text"])
+    assert payload[0] == {
+        "id": 11,
+        "owner": "Safari",
+        "title": "GitHub",
+        "bounds": {"x": 0, "y": 25, "width": 800, "height": 600},
+    }
+
+
+def test_ocr_from_file(fake_recognizer, fake_capturer, tmp_path):
+    pytest.importorskip("PySide6")
+    from shotquill.imaging import result_to_qimage
+
+    image_file = tmp_path / "shot.png"
+    image_file.write_bytes(headless.encode_qimage(result_to_qimage(FakeCapturer()._result())))
+    result = call("ocr", {"path": str(image_file)})["result"]
+    assert result["content"] == [{"type": "text", "text": "hello\nworld"}]
+
+
+def test_ocr_capture_and_recognize_in_memory(fake_recognizer, fake_capturer, isolated_audit):
+    result = call("ocr", {"app": "notes"})["result"]
+    assert result["content"] == [{"type": "text", "text": "hello\nworld"}]
+    assert fake_capturer.calls == [("window", 33)]
+    (entry,) = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
+    assert entry["action"] == "ocr"
+    assert entry["target"] == "Notes — Scratch"
+
+
+def test_ocr_fails_fast_when_recognizer_unavailable(fake_capturer, monkeypatch):
+    def _nope():
+        raise headless.CapabilityUnsupported("ocr", "requires macOS Vision")
+
+    monkeypatch.setattr(headless, "get_recognizer", _nope)
+    result = call("ocr")["result"]
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "unsupported"
+    assert fake_capturer.calls == []  # no speculative screenshot before the check
+
+
+def test_doctor_matrix(fake_capturer):
+    result = call("doctor")["result"]
+    checks = json.loads(result["content"][0]["text"])
+    capabilities = {item["capability"] for item in checks}
+    assert {"platform", "capture", "list_windows", "ocr"} <= capabilities

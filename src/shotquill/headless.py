@@ -17,7 +17,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from shotquill.capture.base import Rect, ScreenCapturer, WindowInfo
+from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
@@ -101,6 +101,51 @@ def select_window(
     return matches[0], len(matches)
 
 
+def perform_capture(
+    capturer: ScreenCapturer,
+    *,
+    window_id: int | None = None,
+    app: str | None = None,
+    title: str | None = None,
+    region: Rect | None = None,
+) -> tuple[CaptureResult, str, int]:
+    """Dispatch one capture and describe what was actually hit.
+
+    Returns ``(result, target, matched)`` where ``target`` names the real
+    capture subject (the audit log records truth, not the request) and
+    ``matched`` is the ambiguity count for app/title selection (always 1
+    otherwise) so front-ends can warn their own way.
+    """
+    if window_id is not None:
+        return capturer.capture_window(window_id), f"window {window_id}", 1
+    if app:
+        window, matched = select_window(capturer.list_windows(), app, title)
+        result = capturer.capture_window(window.window_id)
+        return result, f"{window.owner} — {window.title}", matched
+    if region is not None:
+        target = f"region {region.x},{region.y},{region.width},{region.height}"
+        return capturer.capture_region(region), target, 1
+    return capturer.capture_fullscreen(), "fullscreen", 1
+
+
+def windows_payload(windows: list[WindowInfo]) -> list[dict]:
+    """The machine-readable window list shared by ``--json`` and MCP."""
+    return [
+        {
+            "id": w.window_id,
+            "owner": w.owner,
+            "title": w.title,
+            "bounds": {
+                "x": w.bounds.x,
+                "y": w.bounds.y,
+                "width": w.bounds.width,
+                "height": w.bounds.height,
+            },
+        }
+        for w in windows
+    ]
+
+
 def parse_region(text: str) -> Rect:
     """Parse the ``x,y,w,h`` syntax (four integers, logical coordinates)."""
     parts = text.split(",")
@@ -130,3 +175,68 @@ def encode_qimage(image: QImage, image_format: str = "png") -> bytes:
     if not image.save(buffer, fmt.upper()):
         raise OSError(f"failed to encode image as {fmt}")
     return bytes(data)
+
+
+def doctor_checks() -> list[dict]:
+    """The capability matrix behind ``squill doctor`` and the MCP tool."""
+    import platform
+
+    from shotquill import paths
+
+    platform_detail = f"{sys.platform} / Python {platform.python_version()}"
+    if sys.platform.startswith("linux"):
+        # X11 vs Wayland vs a bare tty decides which capabilities can work,
+        # so surface it where troubleshooting starts.
+        import os
+
+        platform_detail += f" / session {os.environ.get('XDG_SESSION_TYPE') or 'unknown'}"
+
+    checks: list[dict] = [
+        {"capability": "platform", "available": True, "detail": platform_detail},
+        {"capability": "audit_log", "available": True, "detail": str(paths.audit_log_path())},
+    ]
+
+    try:
+        capturer = get_capturer()
+        backend = type(capturer).__name__
+        checks.append({"capability": "capture", "available": True, "detail": backend})
+        try:
+            capturer.list_windows()
+            checks.append({"capability": "list_windows", "available": True, "detail": backend})
+        except CapabilityUnsupported as exc:
+            checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
+    except CapabilityUnsupported as exc:
+        checks.append({"capability": "capture", "available": False, "detail": exc.reason})
+        checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
+
+    if sys.platform == "darwin":
+        checks.append(_check_screen_recording())
+
+    try:
+        get_recognizer()
+        checks.append({"capability": "ocr", "available": True, "detail": "Apple Vision"})
+    except CapabilityUnsupported as exc:
+        checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
+
+    return checks
+
+
+def _check_screen_recording() -> dict:  # pragma: no cover - macOS only
+    """TCC preflight: a denied grant fails silently at capture time, so the
+    doctor surfaces it with a deep link instead of letting agents see black
+    frames."""
+    try:
+        from Quartz import CGPreflightScreenCaptureAccess
+
+        granted = bool(CGPreflightScreenCaptureAccess())
+    except Exception as exc:
+        return {"capability": "screen_recording", "available": False, "detail": f"probe: {exc}"}
+    detail = (
+        None
+        if granted
+        else (
+            "grant Screen Recording to the invoking app (e.g. your terminal): "
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        )
+    )
+    return {"capability": "screen_recording", "available": granted, "detail": detail}

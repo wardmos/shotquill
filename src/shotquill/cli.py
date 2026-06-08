@@ -98,6 +98,15 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="machine-readable output")
     doctor.set_defaults(func=_cmd_doctor)
 
+    mcp = sub.add_parser("mcp", help="serve the MCP stdio protocol (for AI agent hosts)")
+    mcp.add_argument(
+        "--timeout",
+        type=int,
+        metavar="SECONDS",
+        help="exit after this many seconds (bound the session; default: until EOF)",
+    )
+    mcp.set_defaults(func=_cmd_mcp)
+
     return parser
 
 
@@ -117,31 +126,23 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     if args.output == "-" and sys.stdout.isatty():
         return _usage_error("refusing to write image bytes to a terminal; pipe or redirect")
 
-    capturer = headless.get_capturer(include_cursor=args.include_cursor)
-
-    if args.window_id is not None:
-        result = capturer.capture_window(args.window_id)
-        target = f"window {args.window_id}"
-    elif args.app:
-        window, matched = headless.select_window(capturer.list_windows(), args.app, args.title)
-        if matched > 1:
-            print(
-                f"squill: {matched} windows match; captured the front-most"
-                " (use --window-id for an exact pick)",
-                file=sys.stderr,
-            )
-        result = capturer.capture_window(window.window_id)
-        target = f"{window.owner} — {window.title}"
-    elif args.region:
+    region = None
+    if args.region:
         try:
             region = headless.parse_region(args.region)
         except ValueError as exc:
             return _usage_error(str(exc))
-        result = capturer.capture_region(region)
-        target = f"region {args.region}"
-    else:
-        result = capturer.capture_fullscreen()
-        target = "fullscreen"
+
+    capturer = headless.get_capturer(include_cursor=args.include_cursor)
+    result, target, matched = headless.perform_capture(
+        capturer, window_id=args.window_id, app=args.app, title=args.title, region=region
+    )
+    if matched > 1:
+        print(
+            f"squill: {matched} windows match; captured the front-most"
+            " (use --window-id for an exact pick)",
+            file=sys.stderr,
+        )
 
     from shotquill.imaging import result_to_qimage
 
@@ -185,25 +186,7 @@ def _cmd_windows(args: argparse.Namespace) -> int:
     capturer = headless.get_capturer()
     windows = capturer.list_windows()
     if args.json:
-        print(
-            json.dumps(
-                [
-                    {
-                        "id": w.window_id,
-                        "owner": w.owner,
-                        "title": w.title,
-                        "bounds": {
-                            "x": w.bounds.x,
-                            "y": w.bounds.y,
-                            "width": w.bounds.width,
-                            "height": w.bounds.height,
-                        },
-                    }
-                    for w in windows
-                ],
-                ensure_ascii=False,
-            )
-        )
+        print(json.dumps(headless.windows_payload(windows), ensure_ascii=False))
     else:
         print(f"{'ID':>8}  {'OWNER':<24}{'BOUNDS':<22}TITLE")
         for w in windows:
@@ -239,7 +222,7 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    checks = _doctor_checks()
+    checks = headless.doctor_checks()
     if args.json:
         print(json.dumps(checks, ensure_ascii=False))
     else:
@@ -250,63 +233,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
-def _doctor_checks() -> list[dict]:
-    import platform
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    from shotquill.mcp import serve
 
-    platform_detail = f"{sys.platform} / Python {platform.python_version()}"
-    if sys.platform.startswith("linux"):
-        # X11 vs Wayland vs a bare tty decides which capabilities can work,
-        # so surface it where troubleshooting starts.
-        import os
-
-        platform_detail += f" / session {os.environ.get('XDG_SESSION_TYPE') or 'unknown'}"
-
-    checks: list[dict] = [
-        {"capability": "platform", "available": True, "detail": platform_detail},
-        {"capability": "audit_log", "available": True, "detail": str(paths.audit_log_path())},
-    ]
-
-    try:
-        capturer = headless.get_capturer()
-        backend = type(capturer).__name__
-        checks.append({"capability": "capture", "available": True, "detail": backend})
-        try:
-            capturer.list_windows()
-            checks.append({"capability": "list_windows", "available": True, "detail": backend})
-        except headless.CapabilityUnsupported as exc:
-            checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
-    except headless.CapabilityUnsupported as exc:
-        checks.append({"capability": "capture", "available": False, "detail": exc.reason})
-        checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
-
-    if sys.platform == "darwin":
-        checks.append(_check_screen_recording())
-
-    try:
-        headless.get_recognizer()
-        checks.append({"capability": "ocr", "available": True, "detail": "Apple Vision"})
-    except headless.CapabilityUnsupported as exc:
-        checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
-
-    return checks
-
-
-def _check_screen_recording() -> dict:  # pragma: no cover - macOS only
-    """TCC preflight: a denied grant fails silently at capture time, so the
-    doctor surfaces it with a deep link instead of letting agents see black
-    frames."""
-    try:
-        from Quartz import CGPreflightScreenCaptureAccess
-
-        granted = bool(CGPreflightScreenCaptureAccess())
-    except Exception as exc:
-        return {"capability": "screen_recording", "available": False, "detail": f"probe: {exc}"}
-    detail = (
-        None
-        if granted
-        else (
-            "grant Screen Recording to the invoking app (e.g. your terminal): "
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        )
-    )
-    return {"capability": "screen_recording", "available": granted, "detail": detail}
+    return serve(session_timeout=args.timeout)
