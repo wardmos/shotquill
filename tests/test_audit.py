@@ -32,6 +32,85 @@ def test_record_entry_shape(tmp_path, monkeypatch):
     assert system_lines == [line]
 
 
+def test_record_appends_instead_of_truncating(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    monkeypatch.setattr(audit, "_to_system_log", lambda line: None)
+
+    audit.record("capture", via="cli")
+    audit.record("ocr", via="mcp")
+
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["action"] for line in lines] == ["capture", "ocr"]
+    assert [json.loads(line)["via"] for line in lines] == ["cli", "mcp"]
+
+
+def test_record_defaults_and_optional_fields(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    monkeypatch.setattr(audit, "_to_system_log", lambda line: None)
+
+    audit.record("windows")
+
+    entry = json.loads(log.read_text(encoding="utf-8"))
+    # via defaults to the CLI; absent target/dest are recorded as null, not
+    # omitted, so the JSONL schema stays stable for log consumers.
+    assert entry["via"] == "cli"
+    assert entry["target"] is None
+    assert entry["dest"] is None
+
+
+def test_record_preserves_unicode_verbatim(tmp_path, monkeypatch):
+    # Window titles are user data and often Chinese; ensure_ascii=False keeps
+    # the log greppable for them without \uXXXX escapes.
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    monkeypatch.setattr(audit, "_to_system_log", lambda line: None)
+
+    audit.record("capture", target="微信 — 聊天窗口")
+
+    raw = log.read_text(encoding="utf-8")
+    assert "微信 — 聊天窗口" in raw
+    assert json.loads(raw)["target"] == "微信 — 聊天窗口"
+
+
+def test_caller_chain_respects_chain_limit(monkeypatch):
+    # An infinitely deep (synthetic) process tree must not loop forever.
+    monkeypatch.setattr(audit, "_process_name", lambda pid: f"proc-{pid}")
+    monkeypatch.setattr(audit, "_parent_of", lambda pid: pid + 1)
+    monkeypatch.setattr(audit.os, "getppid", lambda: 1000)
+
+    chain = audit._caller_chain()
+
+    assert len(chain) == audit._CHAIN_LIMIT
+    assert chain[0] == "proc-1000"
+
+
+def test_caller_chain_stops_at_init(monkeypatch):
+    # Reaching pid 1 (or 0, post-reparent) ends the walk without naming init.
+    monkeypatch.setattr(audit.os, "getppid", lambda: 1)
+    assert audit._caller_chain() == []
+
+
+def test_caller_chain_stops_when_name_unresolvable(monkeypatch):
+    # A vanished ancestor (raced exit) truncates the chain instead of raising.
+    monkeypatch.setattr(audit.os, "getppid", lambda: 4242)
+    monkeypatch.setattr(audit, "_process_name", lambda pid: None)
+    assert audit._caller_chain() == []
+
+
+def test_parent_of_nonexistent_pid_returns_zero():
+    # 2**22 exceeds the default pid_max; both /proc and `ps` will miss, and the
+    # fallback contract is 0 ("stop walking"), never an exception.
+    assert audit._parent_of(2**22 + 1) == 0
+
+
+def test_process_name_resolves_own_process():
+    name = audit._process_name(audit.os.getpid())
+    assert name is not None
+    assert "python" in name.lower() or "pytest" in name.lower()
+
+
 def test_caller_chain_walks_real_processes():
     chain = audit._caller_chain()
     # At minimum the immediate parent (pytest's interpreter or a shell).

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
+import string
+
 import pytest
 
 from shotquill import i18n
@@ -22,6 +24,29 @@ def test_every_string_has_all_languages():
         for lang in i18n.LANGUAGES:
             assert lang in entry, f"{key} missing {lang}"
             assert entry[lang], f"{key}.{lang} is empty"
+
+
+def test_placeholder_fields_match_across_languages():
+    # A translation that drops or renames a {placeholder} would raise KeyError
+    # at .format() time in production — catch the drift here instead.
+    def fields(template: str) -> set:
+        return {field for _, field, _, _ in string.Formatter().parse(template) if field}
+
+    for key, entry in i18n._STRINGS.items():
+        reference = fields(entry[i18n.DEFAULT_LANGUAGE])
+        for lang in i18n.LANGUAGES:
+            assert fields(entry[lang]) == reference, f"{key}.{lang} placeholder mismatch"
+
+
+def test_language_names_cover_every_language():
+    # The Settings language picker is built from LANGUAGE_NAMES; a missing
+    # entry would make a supported language unselectable.
+    assert set(i18n.LANGUAGE_NAMES) == set(i18n.LANGUAGES)
+    assert all(i18n.LANGUAGE_NAMES[lang] for lang in i18n.LANGUAGES)
+
+
+def test_default_language_is_a_supported_language():
+    assert i18n.DEFAULT_LANGUAGE in i18n.LANGUAGES
 
 
 def test_translate_switches_language():

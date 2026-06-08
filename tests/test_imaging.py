@@ -42,6 +42,17 @@ def test_result_to_qimage_preserves_pixel_values():
     assert (pixel.red(), pixel.green(), pixel.blue()) == (10, 20, 30)
 
 
+def test_result_to_qimage_pixel_positions_not_transposed():
+    # A 3×1 strip with three distinct colors: any width/height or row-stride
+    # mix-up would land the colors in the wrong place.
+    pixels = bytes((255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255))
+    result = CaptureResult(width=3, height=1, scale=1.0, pixels=pixels, premultiplied=False)
+    image = result_to_qimage(result)
+    assert image.pixelColor(0, 0).red() == 255
+    assert image.pixelColor(1, 0).green() == 255
+    assert image.pixelColor(2, 0).blue() == 255
+
+
 def test_result_to_qimage_is_detached_from_source_bytes():
     # The returned image must own its memory (a .copy()), so mutating/freeing the
     # source bytes can't corrupt it. We assert the buffer is independent.
