@@ -23,6 +23,19 @@ cross-platform architecture (Windows / Linux planned).
 
 > **Status:** early development — usable day-to-day, but expect rough edges.
 
+**Jump to:**
+[Highlights](#highlights) ·
+[Install](#install) ·
+[Usage](#usage) ·
+[CLI](#command-line-scripts--agents) ·
+[MCP server](#mcp-server) ·
+[Configuration](#configuration) ·
+[Troubleshooting](#troubleshooting) ·
+[Privacy](#privacy) ·
+[Development](#development) ·
+[Uninstall](#uninstall) ·
+[Roadmap](#roadmap)
+
 ---
 
 ## Highlights
@@ -237,6 +250,42 @@ Open **Settings…** from the menu-bar icon:
 
 ---
 
+## Troubleshooting
+
+**Captures come out black or empty.** macOS is withholding screen content:
+grant **Screen Recording** in System Settings → Privacy & Security, then
+restart ShotQuill (macOS only applies the grant to freshly launched
+processes). For the CLI/MCP, remember the permission is attributed to the
+*invoking* app — your terminal or agent host — not to ShotQuill itself;
+`squill doctor` reports exactly which grant is missing.
+
+**Hotkeys don't fire while another app is focused.** Grant **Input
+Monitoring** (same privacy pane) and restart. ShotQuill's Settings dialog
+shows the live status of both permissions, with a jump-to-pane button.
+
+**A hotkey is silently dead.** Another app may own the same combo — macOS
+gives no error; the events simply never arrive. Remap it in Settings.
+
+**"ShotQuill can't be opened" on first launch.** That's Gatekeeper on the
+ad-hoc-signed direct download — see [Install](#install) for the
+right-click → Open / `xattr` fix. The Homebrew cask is not affected.
+
+**Which agent captured what?** Read the audit log:
+
+```bash
+tail -f ~/Library/Logs/shotquill/audit.log                     # macOS (also in Console.app)
+tail -f "${XDG_STATE_HOME:-$HOME/.local/state}/shotquill/audit.log"  # Linux
+```
+
+Each JSONL entry records the action, target, destination, and the process
+chain that drove it (`via: "cli"` or `"mcp"`); the same line is mirrored to
+the unified log / journald, which user-space processes can't rewrite.
+
+**Still stuck?** Run `squill doctor` and attach its output to a
+[GitHub issue](https://github.com/wardmos/shotquill/issues).
+
+---
+
 ## Privacy
 
 ShotQuill is built to be trustworthy, and it's open source so you can verify it:
@@ -298,6 +347,29 @@ pytest                           # tests
 > window server — the macOS CI leg, or a Mac without `QT_QPA_PLATFORM` set —
 > because the offscreen platform performs no activation arbitration at all.
 
+### Project layout
+
+```
+src/shotquill/
+├── app.py                # menu-bar app: tray icon, hotkey → capture → output wiring
+├── cli.py                # `squill` argument parsing & exit-code contract
+├── headless.py           # shared no-GUI capture/OCR core used by cli.py and mcp.py
+├── mcp.py                # `squill mcp` — zero-dependency MCP stdio server
+├── audit.py / paths.py   # audit trail for programmatic captures; platform dirs
+├── config.py / i18n.py   # QSettings-backed prefs; EN/中文 string table
+├── imaging.py            # raw capture pixels → QImage
+├── capture/              # base.py interface; macos.py (ScreenCaptureKit), qtgrab.py fallback
+├── hotkeys/              # global hotkeys: combo parsing + macOS keycode listener
+├── ocr/                  # base.py interface; macos.py (Apple Vision)
+├── output/               # saver.py (files), clipboard.py
+├── autostart/            # launch-at-login (LaunchAgent on macOS)
+└── ui/                   # editor, canvas, tools, smart capture overlay, settings, pin
+```
+
+Each `tests/test_*.py` mirrors a module above; platform-independent logic is
+tested headlessly, and `capture/hotkeys/ocr/autostart` backends hide behind
+`base.py` interfaces so a new OS is a new backend, not a UI rewrite.
+
 ### macOS permissions
 
 On first run, grant these in **System Settings → Privacy & Security**:
@@ -308,6 +380,25 @@ On first run, grant these in **System Settings → Privacy & Security**:
 
 ShotQuill's Settings dialog shows the live status of both permissions, with a
 button that jumps straight to the right privacy pane.
+
+---
+
+## Uninstall
+
+```bash
+brew uninstall --cask shotquill        # Homebrew install
+# or just drag /Applications/ShotQuill.app to the Trash (direct download)
+```
+
+ShotQuill keeps no hidden state beyond these per-user files — remove them for
+a clean slate:
+
+| What                        | Where                                              |
+| --------------------------- | -------------------------------------------------- |
+| Settings                    | `~/Library/Preferences/com.wardmos.ShotQuill.plist` |
+| Launch-at-login agent       | `~/Library/LaunchAgents/com.wardmos.shotquill.plist` (only if enabled in Settings) |
+| Audit log                   | `~/Library/Logs/shotquill/`                        |
+| Your screenshots            | `~/Pictures/ShotQuill/` (or your configured folder) — yours to keep |
 
 ---
 
