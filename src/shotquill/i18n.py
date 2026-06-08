@@ -31,8 +31,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "全局快捷键需要输入监控权限。请在系统设置中启用后重启 ShotQuill。",
     },
     "smart.hint": {
-        "en": "Click a window · drag for a region · click here for full screen · Esc cancels",
-        "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · Esc 取消",
+        "en": "Click a window · drag for a region · click here for full screen"
+        " · arrows/WASD nudge the cursor · Esc cancels",
+        "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · 方向键/WASD 微移光标 · Esc 取消",
     },
     "editor.adjust_hint": {
         "en": "Arrows move crop · ⌥ resizes · ⇧ ×10 · until first annotation",

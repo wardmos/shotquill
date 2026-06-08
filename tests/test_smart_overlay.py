@@ -457,14 +457,84 @@ def test_enter_mid_drag_captures_the_region(qtbot):
     assert received == [QRect(10, 10, 30, 20)]
 
 
-def test_arrow_keys_do_nothing_in_the_overlay(qtbot):
-    # Keyboard adjustment lives in the editor now; stray arrows here must not
-    # disturb the hover state or start a selection.
+# --- keyboard cursor nudging -------------------------------------------------
+
+
+class _FakeCursor:
+    """Stands in for QCursor: setPos cannot drive the real pointer offscreen."""
+
+    position = None
+
+    @classmethod
+    def pos(cls):
+        from PySide6.QtCore import QPoint
+
+        return QPoint(cls.position)
+
+    @classmethod
+    def setPos(cls, pos):
+        from PySide6.QtCore import QPoint
+
+        cls.position = QPoint(pos)
+
+
+def _fake_cursor(monkeypatch, x, y):
+    from PySide6.QtCore import QPoint
+
+    from shotquill.ui import smart_overlay as overlay_module
+
+    _FakeCursor.position = QPoint(x, y)
+    monkeypatch.setattr(overlay_module, "QCursor", _FakeCursor)
+    return _FakeCursor
+
+
+def test_arrow_keys_nudge_the_pointer_one_point(qtbot, monkeypatch):
+    cursor = _fake_cursor(monkeypatch, 50, 25)
     overlay = _overlay(qtbot, windows=_windows())
     _hover(overlay, 70, 25)
+
     _key(overlay, Qt.Key_Right)
+    assert (cursor.position.x(), cursor.position.y()) == (51, 25)
+    _key(overlay, Qt.Key_Up)
+    assert (cursor.position.x(), cursor.position.y()) == (51, 24)
+
+    # Selection state is untouched — the loupe/hover follow via the mouse-move
+    # the OS echoes back, not via private nudging.
     assert overlay._origin is None
     assert overlay._hover == 0
+
+
+def test_wasd_nudges_the_pointer_like_arrows(qtbot, monkeypatch):
+    cursor = _fake_cursor(monkeypatch, 50, 25)
+    overlay = _overlay(qtbot)
+    for key, expected in (
+        (Qt.Key_A, (49, 25)),
+        (Qt.Key_D, (50, 25)),
+        (Qt.Key_W, (50, 24)),
+        (Qt.Key_S, (50, 25)),
+    ):
+        _key(overlay, key)
+        assert (cursor.position.x(), cursor.position.y()) == expected
+
+
+def test_shift_nudges_the_pointer_ten_points(qtbot, monkeypatch):
+    cursor = _fake_cursor(monkeypatch, 50, 25)
+    overlay = _overlay(qtbot)
+    _key(overlay, Qt.Key_Left, Qt.ShiftModifier)
+    assert (cursor.position.x(), cursor.position.y()) == (40, 25)
+
+
+def test_nudge_works_mid_drag(qtbot, monkeypatch):
+    # Keys keep working while the button is held, so a drag's trailing edge
+    # can be landed exactly; the echoed mouse-move (not the key handler)
+    # updates _current, so the drag state itself stays untouched here.
+    cursor = _fake_cursor(monkeypatch, 40, 30)
+    overlay = _overlay(qtbot)
+    _press(overlay, 10, 10)
+    _move(overlay, 40, 30, buttons=Qt.LeftButton)
+    _key(overlay, Qt.Key_Right)
+    assert (cursor.position.x(), cursor.position.y()) == (41, 30)
+    assert overlay._dragging is True
 
 
 def test_no_preview_fetch_after_close(qtbot):

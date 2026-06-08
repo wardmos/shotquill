@@ -9,6 +9,11 @@ capture mode from what the pointer does — no separate region/window hotkeys:
 * Hovering empty space lights the whole desktop; a click captures full screen.
 * Pressing and dragging draws a rectangle and selects that region.
 
+While the overlay is up, the arrow keys (or WASD) move the real pointer one
+point per press (Shift: ten) — the loupe magnifies, but the hand still has to
+hit the exact pixel, so the keyboard takes over the last few points before
+and during a drag.
+
 Releasing a region drag captures immediately and hands off to the editor,
 which opens in place over the selection; hand-drawn edges are rarely
 pixel-accurate, so the *editor* keeps the selection adjustable with the
@@ -34,8 +39,8 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
@@ -68,6 +73,22 @@ _LOUPE_LABEL_H = 20  # readout strip under the magnified pixels
 # How long the pointer must rest on a window before its un-occluded preview is
 # fetched — sweeping across windows must not fire a capture per window passed.
 _PREVIEW_DELAY_MS = 120
+# Keyboard cursor nudging: arrows or WASD move the *real* pointer one logical
+# point per press (Shift steps by 10) so a drag can start, follow, and end on
+# an exact pixel — the loupe magnifies, but the hand still has to hit the
+# spot. Moving the OS cursor (rather than private state) feeds the normal
+# mouse-move path, so the loupe, hover highlight, and a held drag all follow.
+_CURSOR_NUDGE_COARSE = 10
+_CURSOR_DELTAS = {
+    Qt.Key_Left: (-1, 0),
+    Qt.Key_Right: (1, 0),
+    Qt.Key_Up: (0, -1),
+    Qt.Key_Down: (0, 1),
+    Qt.Key_A: (-1, 0),
+    Qt.Key_D: (1, 0),
+    Qt.Key_W: (0, -1),
+    Qt.Key_S: (0, 1),
+}
 
 
 class SmartOverlay(QWidget):
@@ -453,6 +474,17 @@ class SmartOverlay(QWidget):
                 self._accept_region()
             else:
                 self._accept_target(self._hover)
+        elif event.key() in _CURSOR_DELTAS:
+            self._nudge_cursor(event)
+
+    def _nudge_cursor(self, event) -> None:
+        # Move the real pointer one logical point (Shift: ten) — before a drag
+        # to line up its start, or mid-drag to land its edge exactly. The OS
+        # echoes the move back as a normal mouseMoveEvent, which updates the
+        # loupe/hover/drag state through the usual path.
+        dx, dy = _CURSOR_DELTAS[event.key()]
+        step = _CURSOR_NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
+        QCursor.setPos(QCursor.pos() + QPoint(dx * step, dy * step))
 
     def _accept_region(self) -> None:
         sel = self._selection()
