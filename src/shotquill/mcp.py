@@ -342,6 +342,7 @@ _WINDOW_SCHEMA = {
         "id": {"type": "integer"},
         "owner": {"type": "string"},
         "title": {"type": "string"},
+        "bundle_id": {"type": ["string", "null"]},
         "bounds": {
             "type": "object",
             "properties": {

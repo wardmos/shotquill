@@ -77,6 +77,9 @@ class MacScreenCapturer(ScreenCapturer):
         )
         raw = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID) or []
         own_pid = os.getpid()
+        # Several windows usually share one app (and thus one pid); resolve each
+        # pid's bundle id at most once.
+        bundle_by_pid: dict[int, str | None] = {}
         windows: list[WindowInfo] = []
         for info in raw:
             # Layer 0 == normal application windows; skip the menu bar, Dock,
@@ -93,6 +96,9 @@ class MacScreenCapturer(ScreenCapturer):
             w, h = int(bounds["Width"]), int(bounds["Height"])
             if w < 1 or h < 1:
                 continue
+            pid = int(info.get("kCGWindowOwnerPID", 0))
+            if pid not in bundle_by_pid:
+                bundle_by_pid[pid] = self._bundle_id_for_pid(pid)
             windows.append(
                 WindowInfo(
                     window_id=int(info.get("kCGWindowNumber", 0)),
@@ -101,10 +107,31 @@ class MacScreenCapturer(ScreenCapturer):
                     # permission; fall back to an empty title otherwise.
                     title=str(info.get("kCGWindowName", "") or ""),
                     bounds=Rect(x, y, w, h),
+                    bundle_id=bundle_by_pid[pid],
                 )
             )
         # CGWindowListCopyWindowInfo returns windows front-to-back already.
         return windows
+
+    @staticmethod
+    def _bundle_id_for_pid(pid: int) -> str | None:  # pragma: no cover - macOS only
+        """Resolve a running app's bundle identifier from its pid.
+
+        The window list only carries the owner's display name and pid; the
+        stable bundle id (what the blocklist matches on) comes from
+        ``NSRunningApplication``. Returns ``None`` for pids with no running
+        app record or no bundle id (some helper processes have none).
+        """
+        try:
+            from AppKit import NSRunningApplication
+
+            app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        except Exception:
+            return None
+        if app is None:
+            return None
+        bundle = app.bundleIdentifier()
+        return str(bundle) if bundle else None
 
     def capture_window(self, window_id: int) -> CaptureResult:
         import Quartz

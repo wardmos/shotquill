@@ -302,9 +302,21 @@ def test_list_windows_payload(fake_capturer):
         "id": 11,
         "owner": "Safari",
         "title": "GitHub",
+        "bundle_id": None,
         "bounds": {"x": 0, "y": 25, "width": 800, "height": 600},
     }
     assert result["structuredContent"] == payload
+
+
+def test_windows_payload_carries_bundle_id():
+    from shotquill.capture.base import Rect, WindowInfo
+
+    windows = [
+        WindowInfo(
+            11, "1Password", "Vault", Rect(0, 0, 400, 300), bundle_id="com.1password.1password"
+        ),
+    ]
+    assert headless.windows_payload(windows)[0]["bundle_id"] == "com.1password.1password"
 
 
 def test_ocr_from_file(fake_recognizer, fake_capturer, tmp_path):

@@ -44,12 +44,19 @@ class WindowInfo:
 
     ``bounds`` is in logical (point) screen coordinates with a top-left origin,
     matching Qt's virtual-desktop geometry.
+
+    ``bundle_id`` is the owning app's stable identifier (e.g.
+    ``com.1password.1password`` on macOS), resolved from the window's process
+    where the platform exposes it and ``None`` otherwise. It is the robust key
+    the app blocklist matches on — display names are localizable and a window's
+    title is attacker-controlled, but the bundle id is not.
     """
 
     window_id: int
     owner: str
     title: str
     bounds: Rect
+    bundle_id: str | None = None
 
 
 class ScreenCapturer(ABC):

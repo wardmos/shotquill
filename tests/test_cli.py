@@ -319,6 +319,7 @@ def test_windows_json(fake_capturer, capsys):
         "id": 11,
         "owner": "Safari",
         "title": "GitHub",
+        "bundle_id": None,
         "bounds": {"x": 0, "y": 25, "width": 800, "height": 600},
     }
 

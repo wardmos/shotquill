@@ -135,6 +135,7 @@ def windows_payload(windows: list[WindowInfo]) -> list[dict]:
             "id": w.window_id,
             "owner": w.owner,
             "title": w.title,
+            "bundle_id": w.bundle_id,
             "bounds": {
                 "x": w.bounds.x,
                 "y": w.bounds.y,
