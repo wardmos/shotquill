@@ -312,6 +312,23 @@ def test_windows_table(fake_capturer, capsys):
     assert "Safari" in out and "GitHub" in out
 
 
+def test_capture_blocked_app_exits_6(fake_capturer, tmp_path, capsys):
+    from shotquill import blocklist as bl
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="notes"),)), tmp_path / "blocklist.json")
+    assert cli.main(["capture", "--app", "notes"]) == headless.EXIT_BLOCKED
+    assert "blocklist" in capsys.readouterr().err.lower()
+    assert fake_capturer.calls == []  # refused before any capture
+
+
+def test_doctor_lists_blocklist(fake_capturer, tmp_path, capsys):
+    from shotquill import blocklist as bl
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="notes"),)), tmp_path / "blocklist.json")
+    assert cli.main(["doctor"]) == 0
+    assert "app_blocklist" in capsys.readouterr().out
+
+
 def test_windows_json(fake_capturer, capsys):
     assert cli.main(["windows", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)

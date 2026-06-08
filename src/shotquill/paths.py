@@ -41,19 +41,20 @@ def capture_tmp_dir() -> Path:
 
 
 def config_dir() -> Path:
-    """User configuration directory for the headless surface (created).
+    """User configuration directory for the headless surface (computed, not created).
 
     macOS uses ``~/Library/Application Support``; elsewhere we follow XDG,
     honoring ``$XDG_CONFIG_HOME``. Separate from the audit log (state) and the
-    capture temp dir (cache) so each lands where its platform expects.
+    capture temp dir (cache) so each lands where its platform expects. It is
+    not created here — the config is read far more often than written (every
+    capture consults the blocklist), so creating the directory is the writer's
+    job (see ``blocklist.save``), not a side effect of every read.
     """
     if sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", "") or Path.home() / ".config")
-    directory = base / "shotquill"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+    return base / "shotquill"
 
 
 def blocklist_path() -> Path:

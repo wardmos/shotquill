@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 EXIT_PERMISSION = 3
 EXIT_UNSUPPORTED = 4
 EXIT_NO_MATCH = 5
+EXIT_BLOCKED = 6
 
 
 class HeadlessError(Exception):
@@ -54,6 +55,14 @@ class CapabilityUnsupported(HeadlessError):
 
 class WindowNotFound(HeadlessError):
     exit_code = EXIT_NO_MATCH
+
+
+class CaptureBlocked(HeadlessError):
+    """The capture targets an app on the blocklist (or the blocklist is
+    unreadable, which fails closed). Refusing is the point — this is the
+    privacy feature working, not an error to retry."""
+
+    exit_code = EXIT_BLOCKED
 
 
 def get_capturer(include_cursor: bool = False) -> ScreenCapturer:
@@ -101,6 +110,36 @@ def select_window(
     return matches[0], len(matches)
 
 
+def active_blocklist():
+    """Load the user's blocklist, failing closed when it cannot be read.
+
+    A missing file is the empty list (the common case, no friction). A
+    present-but-corrupt file means the user opted into protection that is now
+    broken, so we refuse to capture rather than silently grab something they
+    meant to block.
+    """
+    from shotquill import blocklist as bl
+
+    try:
+        return bl.load()
+    except bl.BlocklistError as exc:
+        raise CaptureBlocked(f"blocklist is unreadable, refusing to capture: {exc}") from exc
+
+
+def _refuse_if_blocked(window: WindowInfo, blocklist, *, via: str) -> None:
+    """Raise :class:`CaptureBlocked` (and audit it) if a rule blocks ``window``."""
+    rule = blocklist.match(window)
+    if rule is None:
+        return
+    target = f"{window.owner} — {window.title}" if window.title else window.owner
+    from shotquill import audit
+
+    audit.record("capture_blocked", via=via, target=target)
+    raise CaptureBlocked(
+        f"{window.owner} is on the app blocklist (rule {rule.describe()}); refusing to capture it"
+    )
+
+
 def perform_capture(
     capturer: ScreenCapturer,
     *,
@@ -108,6 +147,8 @@ def perform_capture(
     app: str | None = None,
     title: str | None = None,
     region: Rect | None = None,
+    blocklist=None,
+    via: str = "cli",
 ) -> tuple[CaptureResult, str, int]:
     """Dispatch one capture and describe what was actually hit.
 
@@ -115,17 +156,45 @@ def perform_capture(
     capture subject (the audit log records truth, not the request) and
     ``matched`` is the ambiguity count for app/title selection (always 1
     otherwise) so front-ends can warn their own way.
+
+    A window or app capture that lands on the blocklist raises
+    :class:`CaptureBlocked`. An empty blocklist (the default) takes the exact
+    same path as before — no extra window enumeration, no new failure modes.
+    Full-screen and region captures are not refused here; the sensitive window
+    is one part of the frame and is redacted instead.
     """
+    if blocklist is None:
+        blocklist = active_blocklist()
+
     if window_id is not None:
+        if blocklist:
+            _refuse_blocked_window_id(capturer, window_id, blocklist, via=via)
         return capturer.capture_window(window_id), f"window {window_id}", 1
     if app:
         window, matched = select_window(capturer.list_windows(), app, title)
+        if blocklist:
+            _refuse_if_blocked(window, blocklist, via=via)
         result = capturer.capture_window(window.window_id)
         return result, f"{window.owner} — {window.title}", matched
     if region is not None:
         target = f"region {region.x},{region.y},{region.width},{region.height}"
         return capturer.capture_region(region), target, 1
     return capturer.capture_fullscreen(), "fullscreen", 1
+
+
+def _refuse_blocked_window_id(
+    capturer: ScreenCapturer, window_id: int, blocklist, *, via: str
+) -> None:
+    """Refuse a by-id capture of a blocked window. Needs the window's identity,
+    so it looks the id up in the window list; if enumeration is unavailable the
+    capture proceeds (nothing to match against)."""
+    try:
+        windows = capturer.list_windows()
+    except CapabilityUnsupported:
+        return
+    match = next((w for w in windows if w.window_id == window_id), None)
+    if match is not None:
+        _refuse_if_blocked(match, blocklist, via=via)
 
 
 def windows_payload(windows: list[WindowInfo]) -> list[dict]:
@@ -210,6 +279,7 @@ def doctor_checks() -> list[dict]:
     checks: list[dict] = [
         {"capability": "platform", "available": True, "detail": platform_detail},
         {"capability": "audit_log", "available": True, "detail": str(paths.audit_log_path())},
+        _check_blocklist(),
     ]
 
     try:
@@ -235,6 +305,25 @@ def doctor_checks() -> list[dict]:
         checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
 
     return checks
+
+
+def _check_blocklist() -> dict:
+    """Report the app blocklist so users can confirm what is protected — and
+    catch a corrupt file, which fails closed and would otherwise only surface
+    as refused captures."""
+    from shotquill import blocklist as bl
+    from shotquill import paths
+
+    path = paths.blocklist_path()
+    try:
+        loaded = bl.load(path)
+    except bl.BlocklistError as exc:
+        return {"capability": "app_blocklist", "available": False, "detail": f"{path}: {exc}"}
+    if not loaded:
+        detail = f"no rules ({path})"
+    else:
+        detail = f"{len(loaded.rules)} rule(s): " + ", ".join(r.describe() for r in loaded.rules)
+    return {"capability": "app_blocklist", "available": True, "detail": detail}
 
 
 def _check_screen_recording() -> dict:  # pragma: no cover - macOS only

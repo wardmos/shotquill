@@ -292,6 +292,17 @@ def test_capture_no_window_match_is_no_match(fake_capturer):
     assert "list_windows" in payload["hint"]  # errors name the recovery step
 
 
+def test_capture_blocked_app_is_in_band_blocked(fake_capturer, tmp_path):
+    from shotquill import blocklist as bl
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="notes"),)), tmp_path / "blocklist.json")
+    result = call("capture", {"app": "notes"})["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "blocked"
+    assert "do not retry" in payload["hint"]
+
+
 # --- list_windows / ocr / doctor ----------------------------------------------
 
 

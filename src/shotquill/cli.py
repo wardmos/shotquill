@@ -13,8 +13,9 @@ Contract (agents rely on it):
 - ``squill ocr`` takes a file path, ``-`` for stdin, or the same target
   options as ``capture`` to recognize straight off the screen in one step.
 - Exit codes: 0 ok, 1 other error, 2 usage, 3 permission denied,
-  4 capability unavailable on this platform/session, 5 no window matched.
-  They are printed in every ``--help`` so agents can discover them.
+  4 capability unavailable on this platform/session, 5 no window matched,
+  6 blocked by the app blocklist. They are printed in every ``--help`` so
+  agents can discover them.
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ _EXIT_USAGE = 2
 # they discover the flags, instead of needing the README.
 _EXIT_CODE_EPILOG = (
     "exit codes: 0 ok, 1 error, 2 usage, 3 permission denied, "
-    "4 capability unavailable on this platform/session, 5 no window matched"
+    "4 capability unavailable on this platform/session, 5 no window matched, "
+    "6 blocked by the app blocklist"
 )
 
 

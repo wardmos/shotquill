@@ -172,6 +172,8 @@ def _error_type(exc: Exception) -> str:
         return "no_match"
     if isinstance(exc, (headless.CapturePermissionError, PermissionError)):
         return "permission"
+    if isinstance(exc, headless.CaptureBlocked):
+        return "blocked"
     if isinstance(exc, ValueError):
         return "invalid_arguments"
     return "error"
@@ -183,6 +185,7 @@ _ERROR_HINTS = {
     "unsupported": "call the doctor tool to see what this host supports",
     "no_match": "call list_windows to see what is actually on screen",
     "permission": "call the doctor tool for the missing grant and how to fix it",
+    "blocked": "the target app is on the user's blocklist and will not be captured; do not retry",
 }
 
 
@@ -228,6 +231,7 @@ def _capture_image(args: dict):
         app=args.get("app"),
         title=args.get("title"),
         region=region,
+        via="mcp",
     )
     from shotquill.imaging import result_to_qimage
 

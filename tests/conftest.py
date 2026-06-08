@@ -127,6 +127,16 @@ class _FakeAutostart:
         self.last = enabled
 
 
+@pytest.fixture(autouse=True)
+def _isolate_blocklist(monkeypatch, tmp_path):
+    """No test reads or writes the developer's real app blocklist. Default it
+    to a nonexistent temp path — i.e. the empty blocklist — so capture tests
+    keep their old behaviour; blocklist tests write to this path to opt in."""
+    from shotquill import paths
+
+    monkeypatch.setattr(paths, "blocklist_path", lambda: tmp_path / "blocklist.json")
+
+
 @pytest.fixture
 def fakes(monkeypatch):
     """Swap shotquill.app's macOS platform managers for in-memory fakes."""
