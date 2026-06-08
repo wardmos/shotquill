@@ -100,8 +100,14 @@ def _handle(message) -> dict | None:
     method = message.get("method")
     if not isinstance(method, str):
         return _error(msg_id, -32600, "invalid request") if msg_id is not None else None
+    # A malformed params must answer with a JSON-RPC error (never one for a
+    # notification, which gets no response of any kind), not kill the session:
+    # one bad message from the client ending the whole server would break
+    # every later call too.
+    params = message.get("params") or {}
+    if not isinstance(params, dict):
+        return _error(msg_id, -32602, "params must be an object") if msg_id is not None else None
     if method == "initialize":
-        params = message.get("params") or {}
         requested = params.get("protocolVersion")
         version = requested if requested in _SUPPORTED_PROTOCOLS else _SUPPORTED_PROTOCOLS[0]
         return _result(
@@ -118,7 +124,7 @@ def _handle(message) -> dict | None:
     if method == "tools/list":
         return _result(msg_id, {"tools": [tool["descriptor"] for tool in _TOOLS.values()]})
     if method == "tools/call":
-        return _tools_call(msg_id, message.get("params") or {})
+        return _tools_call(msg_id, params)
     if method.startswith("notifications/"):
         return None
     if msg_id is None:
@@ -132,6 +138,8 @@ def _tools_call(msg_id, params: dict) -> dict:
     if tool is None:
         return _error(msg_id, -32602, f"unknown tool: {name}")
     arguments = params.get("arguments") or {}
+    if not isinstance(arguments, dict):
+        return _error(msg_id, -32602, "arguments must be an object")
     try:
         content, structured = tool["handler"](arguments)
         result = {"content": content, "isError": False}

@@ -405,6 +405,29 @@ def test_ocr_path_and_target_is_usage_error(fake_recognizer, fake_capturer, caps
     assert "not both" in capsys.readouterr().err
 
 
+def test_ocr_path_and_title_is_usage_error(fake_recognizer, fake_capturer, capsys):
+    # --title is a capture target too: silently OCRing the file while ignoring
+    # it would answer a different question than the caller asked.
+    assert cli.main(["ocr", "shot.png", "--title", "docs"]) == 2
+    assert fake_capturer.calls == []
+    assert "not both" in capsys.readouterr().err
+
+
+def test_ocr_title_without_app_is_usage_error(fake_recognizer, fake_capturer, capsys):
+    assert cli.main(["ocr", "--title", "docs"]) == 2
+    assert "--app" in capsys.readouterr().err
+
+
+def test_ocr_usage_error_wins_over_unavailable_recognizer(monkeypatch, capsys):
+    # Exit codes are the contract agents branch on: a bad invocation is exit 2
+    # even on a host where OCR itself would be unavailable (exit 4).
+    def _nope():
+        raise headless.CapabilityUnsupported("ocr", "requires macOS Vision")
+
+    monkeypatch.setattr(headless, "get_recognizer", _nope)
+    assert cli.main(["ocr", "shot.png", "--app", "notes"]) == 2
+
+
 # --- doctor -----------------------------------------------------------------
 
 
@@ -422,6 +445,17 @@ def test_doctor_json(capsys, qapp):
     capabilities = {item["capability"] for item in data}
     assert {"platform", "capture", "list_windows", "ocr"} <= capabilities
     assert all("available" in item for item in data)
+
+
+# --- mcp --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("timeout", ["0", "-5"])
+def test_mcp_rejects_non_positive_timeout(timeout, capsys):
+    # 0 would silently mean "no timeout" and a negative value would blow up
+    # in signal.alarm — refuse both as the usage errors they are.
+    assert cli.main(["mcp", "--timeout", timeout]) == 2
+    assert "--timeout" in capsys.readouterr().err
 
 
 # --- headless helpers -------------------------------------------------------

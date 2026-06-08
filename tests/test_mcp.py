@@ -188,6 +188,40 @@ def test_unknown_tool_is_protocol_error():
     assert response["error"]["code"] == -32602
 
 
+def test_non_object_params_is_invalid_params_and_keeps_serving():
+    # One malformed message must answer with a JSON-RPC error, not kill the
+    # session — the ping after it proves the server is still serving.
+    responses = run(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": [1, 2, 3]},
+        {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": "nope"},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+    )
+    assert responses[0]["error"]["code"] == -32602
+    assert responses[1]["error"]["code"] == -32602
+    assert responses[2] == {"jsonrpc": "2.0", "id": 3, "result": {}}
+
+
+def test_non_object_params_notification_gets_no_response():
+    # A notification never gets a response, not even an error one.
+    responses = run(
+        {"jsonrpc": "2.0", "method": "notifications/whatever", "params": [1]},
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+    )
+    assert responses == [{"jsonrpc": "2.0", "id": 1, "result": {}}]
+
+
+def test_non_object_arguments_is_invalid_params():
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "doctor", "arguments": "nope"},
+        }
+    )
+    assert response["error"]["code"] == -32602
+
+
 # --- capture tool ------------------------------------------------------------
 
 

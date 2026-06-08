@@ -8,6 +8,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from shotquill import paths
 
 
@@ -27,6 +29,44 @@ def test_capture_tmp_dir_is_idempotent(tmp_path, monkeypatch):
     first = paths.capture_tmp_dir()
     # A second call must not raise on the existing directory.
     assert paths.capture_tmp_dir() == first
+
+
+def test_capture_tmp_dir_retightens_drifted_permissions(tmp_path, monkeypatch):
+    # mkdir's mode= only applies at creation; a directory that already exists
+    # with looser permissions must be tightened back to owner-only.
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    existing = tmp_path / "shotquill"
+    existing.mkdir()
+    existing.chmod(0o755)
+
+    directory = paths.capture_tmp_dir()
+
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership check")
+def test_capture_tmp_dir_refuses_foreign_owned_dir(tmp_path, monkeypatch):
+    # The well-known name in the shared temp root can be squatted by another
+    # user; captures are sensitive, so refuse rather than write into it.
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    (tmp_path / "shotquill").mkdir()
+    other_uid = os.getuid() + 1
+    monkeypatch.setattr(os, "getuid", lambda: other_uid)
+
+    with pytest.raises(OSError, match="another user"):
+        paths.capture_tmp_dir()
+
+
+def test_capture_tmp_dir_refuses_symlink(tmp_path, monkeypatch):
+    # A symlink squatted at the well-known name would redirect captures to an
+    # attacker-chosen location; lstat sees the link itself, so it is refused.
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "shotquill").symlink_to(elsewhere)
+
+    with pytest.raises(OSError, match="not a directory"):
+        paths.capture_tmp_dir()
 
 
 def test_audit_log_path_honors_xdg_state_home(tmp_path, monkeypatch):

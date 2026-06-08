@@ -42,8 +42,6 @@ _STRINGS: dict[str, dict[str, str]] = {
     "about.body": {"en": "Screenshot & annotation tool.", "zh": "截图与标注工具。"},
     # Editor window titles
     "title.annotate": {"en": "ShotQuill — Annotate", "zh": "ShotQuill — 标注"},
-    "title.copied": {"en": "ShotQuill — Copied to clipboard", "zh": "ShotQuill — 已复制到剪贴板"},
-    "title.saved": {"en": "ShotQuill — Saved {name}", "zh": "ShotQuill — 已保存 {name}"},
     "title.ocr_running": {
         "en": "ShotQuill — Recognizing text…",
         "zh": "ShotQuill — 正在识别文字…",

@@ -288,10 +288,20 @@ def _cmd_windows(args: argparse.Namespace) -> int:
 
 
 def _cmd_ocr(args: argparse.Namespace) -> int:
-    recognizer = headless.get_recognizer()  # fail fast before any capture
-    has_target = any(value is not None for value in (args.window_id, args.app, args.region))
+    # Usage checks first, so a bad invocation is exit 2 even on a host where
+    # OCR itself is unavailable (exit codes are the contract agents branch on).
+    # --title counts as a capture target here: silently OCRing the file while
+    # ignoring it would answer a different question than the caller asked.
+    has_target = any(
+        value is not None for value in (args.window_id, args.app, args.title, args.region)
+    )
     if args.path is not None and has_target:
         return _usage_error("pass an image path or a capture target, not both")
+    try:
+        region = _validate_target(args)
+    except _UsageError as exc:
+        return _usage_error(str(exc))
+    recognizer = headless.get_recognizer()  # fail fast before any capture
 
     if args.path is not None:
         if args.path == "-":
@@ -314,11 +324,7 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
     else:
         # Capture-and-recognize in memory (no file, no clipboard): one step
         # instead of `capture -o - | ocr -`, same as the MCP ocr tool.
-        try:
-            region = _validate_target(args)
-            image, source, _matched = _capture_image(args, region)
-        except _UsageError as exc:
-            return _usage_error(str(exc))
+        image, source, _matched = _capture_image(args, region)
 
     for line in recognizer.recognize(image):
         print(line)
@@ -339,6 +345,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
+    if args.timeout is not None and args.timeout <= 0:
+        # 0 would silently mean "no timeout" (falsy) and a negative value
+        # would blow up in signal.alarm — neither is a session bound.
+        return _usage_error("--timeout must be a positive number of seconds")
     from shotquill.mcp import serve
 
     return serve(session_timeout=args.timeout)

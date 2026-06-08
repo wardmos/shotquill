@@ -9,6 +9,7 @@ to change one module, and tests can monkeypatch a single seam.
 from __future__ import annotations
 
 import os
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -24,6 +25,18 @@ def capture_tmp_dir() -> Path:
     """
     directory = Path(tempfile.gettempdir()) / "shotquill"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # ``mode=`` only applies at creation, and ``exist_ok`` accepts whatever is
+    # already there — including a directory (or symlink) squatted at this
+    # well-known name by another user of the shared temp root, which would
+    # quietly receive every capture. Refuse anything we don't own outright,
+    # and re-tighten permissions that have drifted open.
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError(f"{directory} is not a directory; refusing to write captures there")
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise OSError(f"{directory} is owned by another user; refusing to write captures there")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        directory.chmod(0o700)
     return directory
 
 

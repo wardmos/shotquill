@@ -66,7 +66,7 @@ def test_invalid_language_falls_back_to_default():
 
 def test_placeholder_templates_are_formattable():
     i18n.set_language("zh")
-    assert i18n.t("title.saved").format(name="a.png") == "ShotQuill — 已保存 a.png"
+    assert i18n.t("title.ocr_copied").format(count=3) == "ShotQuill — 已复制 3 行文字"
 
 
 def test_key_display_name_localizes_known_keys():
