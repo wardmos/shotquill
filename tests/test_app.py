@@ -442,3 +442,35 @@ def test_failed_smart_grab_restores_shelved_settings(qapp, config, fakes, monkey
     app._capture_smart()  # grab fails -> no overlay ever opens
     assert dialog.isVisible()
     app.shutdown()
+
+
+def test_open_save_folder_reveals_configured_dir(qapp, config, fakes, monkeypatch, tmp_path):
+    # The menu item creates the save dir if needed (so it works before the
+    # first capture) and hands it to Finder via `open`.
+    target = tmp_path / "shots"  # does not exist yet
+    config.set_save_dir(str(target))
+    app = _build_app(qapp, fakes)
+
+    calls = []
+    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **k: calls.append(a[0]))
+    app._open_save_folder()
+
+    assert target.is_dir()  # created on demand
+    assert calls == [["open", str(target)]]
+    app.shutdown()
+
+
+def test_open_save_folder_notifies_on_failure(qapp, config, fakes, monkeypatch, tmp_path):
+    config.set_save_dir(str(tmp_path / "shots"))
+    app = _build_app(qapp, fakes)
+
+    def _boom(*args, **kwargs):
+        raise OSError("no such volume")
+
+    monkeypatch.setattr(app_module.subprocess, "run", _boom)
+    notes = []
+    monkeypatch.setattr(app, "_notify", lambda msg: notes.append(msg))
+    app._open_save_folder()
+
+    assert notes and "no such volume" in notes[0]
+    app.shutdown()

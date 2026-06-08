@@ -11,7 +11,9 @@ format, and UI language are editable in Settings.
 
 from __future__ import annotations
 
+import subprocess
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
@@ -129,6 +131,8 @@ class ShotquillApp(QObject):
         smart.triggered.connect(self._capture_smart)
         fullscreen = QAction(f"{t('menu.fullscreen')}\t{fullscreen_key}", menu)
         fullscreen.triggered.connect(self._capture_fullscreen)
+        open_folder = QAction(t("menu.open_folder"), menu)
+        open_folder.triggered.connect(self._open_save_folder)
         settings = QAction(t("menu.settings"), menu)
         settings.triggered.connect(self._open_settings)
         about = QAction(t("menu.about"), menu)
@@ -139,6 +143,7 @@ class ShotquillApp(QObject):
         menu.addAction(smart)
         menu.addAction(fullscreen)
         menu.addSeparator()
+        menu.addAction(open_folder)
         menu.addAction(settings)
         menu.addAction(about)
         menu.addSeparator()
@@ -350,6 +355,20 @@ class ShotquillApp(QObject):
             self._autostart.set_enabled(self._config.autostart())
         except OSError:
             pass  # non-fatal: launch-at-login is a convenience, not core function
+
+    def _open_save_folder(self) -> None:
+        """Reveal the configured save directory in Finder.
+
+        The folder is created on demand the same way the saver does it, so the
+        menu item works even before the first capture has written anything —
+        otherwise ``open`` would fail on a path that doesn't exist yet.
+        """
+        directory = Path(self._config.save_dir()).expanduser()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["open", str(directory)], check=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self._notify(t("notify.open_folder_failed").format(error=exc))
 
     def _open_settings(self) -> None:
         # Modeless on purpose. exec() would make the dialog application-modal,

@@ -19,12 +19,17 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Tray menu
     "menu.smart": {"en": "Capture", "zh": "截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
+    "menu.open_folder": {"en": "Open Save Folder", "zh": "打开保存文件夹"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
+    "notify.open_folder_failed": {
+        "en": "Couldn't open the save folder: {error}",
+        "zh": "无法打开保存文件夹：{error}",
+    },
     "notify.hotkeys_need_input_monitoring": {
         "en": "Global hotkeys need Input Monitoring permission. "
         "Enable it in System Settings, then restart ShotQuill.",
