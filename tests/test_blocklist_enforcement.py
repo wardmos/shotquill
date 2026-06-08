@@ -24,7 +24,8 @@ class FakeCapturer:
         self.captured = []
 
     def _result(self):
-        return CaptureResult(width=2, height=2, scale=1.0, pixels=bytes([0] * 16))
+        # Non-black fill so redaction (which paints opaque black) is observable.
+        return CaptureResult(width=2, height=2, scale=1.0, pixels=bytes([200] * 16))
 
     def capture_fullscreen(self):
         self.captured.append("fullscreen")
@@ -131,3 +132,42 @@ def test_doctor_reports_blocklist(monkeypatch, tmp_path):
     entry = next(c for c in headless.doctor_checks() if c["capability"] == "app_blocklist")
     assert entry["available"] is True
     assert "com.1password.1password" in entry["detail"]
+
+
+# --- full-screen / region redaction -----------------------------------------
+
+
+def _all_black(result):
+    return all(b == (0 if i % 4 < 3 else 255) for i, b in enumerate(result.pixels))
+
+
+def test_fullscreen_redacts_blocked_window(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    cap = FakeCapturer(windows=[ONEPW])  # 1Password fills the (tiny) frame
+    result, target, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST, via="cli")
+    assert target == "fullscreen"
+    assert _all_black(result)  # the sensitive pixels are gone, not overlaid
+    assert "capture_redacted" in log.read_text(encoding="utf-8")
+
+
+def test_region_redacts_blocked_window():
+    cap = FakeCapturer(windows=[ONEPW])
+    result, target, _ = headless.perform_capture(cap, region=Rect(0, 0, 2, 2), blocklist=ONEPW_LIST)
+    assert target.startswith("region")
+    assert _all_black(result)
+
+
+def test_fullscreen_unchanged_when_no_blocked_window_present():
+    cap = FakeCapturer(windows=[SAFARI])
+    result, _, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST)
+    assert not _all_black(result)  # Safari is not blocked; nothing painted
+
+
+def test_fullscreen_redaction_gap_is_logged_when_enumeration_unavailable(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    cap = FakeCapturer(list_raises=headless.CapabilityUnsupported("list_windows", "wayland"))
+    result, _, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST)
+    assert not _all_black(result)  # cannot enumerate → frame left as-is
+    assert "redact_unavailable" in log.read_text(encoding="utf-8")

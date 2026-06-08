@@ -178,8 +178,54 @@ def perform_capture(
         return result, f"{window.owner} — {window.title}", matched
     if region is not None:
         target = f"region {region.x},{region.y},{region.width},{region.height}"
-        return capturer.capture_region(region), target, 1
-    return capturer.capture_fullscreen(), "fullscreen", 1
+        result = capturer.capture_region(region)
+        if blocklist:
+            result = _redact_blocked(
+                result, capturer, blocklist, origin=(region.x, region.y), target=target, via=via
+            )
+        return result, target, 1
+    result = capturer.capture_fullscreen()
+    if blocklist:
+        # The composite's top-left is the desktop origin; (0, 0) for a single
+        # display or a primary at the origin. Multi-monitor layouts that place a
+        # display left of / above the primary need the real origin plumbed
+        # through — flagged for the macOS wiring pass.
+        result = _redact_blocked(
+            result, capturer, blocklist, origin=(0, 0), target="fullscreen", via=via
+        )
+    return result, "fullscreen", 1
+
+
+def _redact_blocked(
+    result: CaptureResult,
+    capturer: ScreenCapturer,
+    blocklist,
+    *,
+    origin: tuple[int, int],
+    target: str,
+    via: str,
+) -> CaptureResult:
+    """Paint solid blocks over any blocklisted window inside ``result``.
+
+    Enumeration is required to find the sensitive windows; where it is
+    unavailable (e.g. Wayland) the frame cannot be protected, so we leave it
+    untouched but log the gap rather than implying coverage we did not deliver.
+    """
+    from shotquill import audit, redact
+
+    try:
+        windows = capturer.list_windows()
+    except CapabilityUnsupported:
+        audit.record("redact_unavailable", via=via, target=target)
+        return result
+    blocked = blocklist.blocked(windows)
+    if not blocked:
+        return result
+    redacted, count = redact.redact_bounds(result, origin, [w.bounds for w in blocked])
+    if count:
+        labels = ", ".join(w.bundle_id or w.owner for w in blocked)
+        audit.record("capture_redacted", via=via, target=f"{target} [redacted: {labels}]")
+    return redacted
 
 
 def _refuse_blocked_window_id(
