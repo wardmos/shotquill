@@ -230,12 +230,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 def _doctor_checks() -> list[dict]:
     import platform
 
+    platform_detail = f"{sys.platform} / Python {platform.python_version()}"
+    if sys.platform.startswith("linux"):
+        # X11 vs Wayland vs a bare tty decides which capabilities can work,
+        # so surface it where troubleshooting starts.
+        import os
+
+        platform_detail += f" / session {os.environ.get('XDG_SESSION_TYPE') or 'unknown'}"
+
     checks: list[dict] = [
-        {
-            "capability": "platform",
-            "available": True,
-            "detail": f"{sys.platform} / Python {platform.python_version()}",
-        },
+        {"capability": "platform", "available": True, "detail": platform_detail},
         {"capability": "audit_log", "available": True, "detail": str(paths.audit_log_path())},
     ]
 

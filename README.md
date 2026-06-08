@@ -146,6 +146,39 @@ with a timestamp — e.g. `ShotQuill 2026-06-04 14.30.00.png`. Choose **PNG** or
 
 ---
 
+## Command line (scripts & agents)
+
+ShotQuill ships a CLI — `shotquill`, or the short alias `squill` — so shell
+scripts and AI agents can capture without the GUI. Run bare it launches the
+menu-bar app; with a subcommand it stays headless:
+
+```bash
+squill capture                            # full screen → temp file, path on stdout
+squill capture --app safari -o shot.png   # front-most matching window
+squill capture --region 0,0,800,600 -o -  # stream PNG bytes to a pipe
+squill windows --json                     # list windows, front-most first
+squill capture -o - | squill ocr -        # capture → on-device OCR, one pipe
+squill doctor                             # capability & permission report
+```
+
+The parts agents rely on:
+
+- **One path on stdout.** `capture` writes one file and prints exactly one
+  absolute path; warnings go to stderr. It never touches the clipboard, and
+  defaults to a private temp dir — pass `-o` to keep a shot.
+- **Exit codes are the contract**: `0` ok · `2` usage · `3` permission denied ·
+  `4` capability unavailable on this platform/session · `5` no window matched.
+- **Permissions follow the invoking app.** macOS attributes Screen Recording to
+  whatever launched the CLI (your terminal, an agent host) — the consent dialog
+  names the real controller, and `squill doctor` reports what is missing.
+- **Every programmatic capture is audit-logged** — metadata only, never
+  pixels — to a JSONL file (`~/Library/Logs/shotquill/audit.log` on macOS,
+  `$XDG_STATE_HOME/shotquill/audit.log` elsewhere) and mirrored into the OS log
+  store (unified log / journald), which user-space processes cannot rewrite.
+  Each entry records the process chain that drove the capture.
+
+---
+
 ## Configuration
 
 Open **Settings…** from the menu-bar icon:
@@ -173,6 +206,11 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 - **Redaction is real.** The mosaic tool rewrites the underlying pixels before
   export, so blurred-out content isn't recoverable from the saved image.
 - **No telemetry.** ShotQuill makes no network requests of its own.
+- **Programmatic captures are accountable.** Scripts and AI agents using the
+  CLI go through the same OS consent as any app — macOS attributes Screen
+  Recording to the invoking app, so the permission dialog names the real
+  controller — and every CLI capture leaves an audit entry (metadata only,
+  never pixels) in a local JSONL file plus the tamper-resistant OS log store.
 
 ---
 
@@ -234,7 +272,10 @@ button that jumps straight to the right privacy pane.
 - [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
 - [x] On-device OCR
 - [x] Hands-free auto save + clipboard
-- [ ] Windows & Linux backends (the architecture is ready; backends are not)
+- [x] CLI for scripts & AI agents (`squill capture` / `windows` / `ocr` / `doctor`)
+- [ ] MCP server, so agents can capture and read the screen over Model Context Protocol
+- [ ] Windows & Linux backends (X11 full-screen/region capture already works
+      via the CLI; Wayland, window capture, and the GUI do not yet)
 - [ ] Scrolling / long-page capture
 
 ---
