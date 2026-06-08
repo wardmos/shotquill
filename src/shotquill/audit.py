@@ -32,6 +32,12 @@ from shotquill import paths
 # through a shell or two to the agent host; short enough to stay cheap.
 _CHAIN_LIMIT = 5
 
+# Rotate the JSONL file once it grows past this (~20k entries): one ``.1``
+# backup, overwritten on the next rotation. Disk hygiene only — tamper
+# resistance comes from the OS log mirror, so losing rotated-out history to
+# an attacker-with-our-uid was never a property this file could provide.
+_MAX_LOG_BYTES = 5 * 1024 * 1024
+
 
 def record(
     action: str,
@@ -52,11 +58,26 @@ def record(
     }
     line = json.dumps(entry, ensure_ascii=False)
     try:
-        with paths.audit_log_path().open("a", encoding="utf-8") as fh:
+        log_path = paths.audit_log_path()
+        _rotate_if_needed(log_path)
+        with log_path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError:  # pragma: no cover - depends on host filesystem state
         pass
     _to_system_log(line)
+
+
+def _rotate_if_needed(log_path: Path) -> None:
+    """Move an oversized log aside (``audit.log`` → ``audit.log.1``)."""
+    try:
+        if log_path.stat().st_size < _MAX_LOG_BYTES:
+            return
+    except OSError:  # no log yet (or unreadable): nothing to rotate
+        return
+    try:
+        log_path.replace(log_path.with_name(log_path.name + ".1"))
+    except OSError:  # pragma: no cover - rotation failure must not block entries
+        pass
 
 
 def _to_system_log(line: str) -> None:
