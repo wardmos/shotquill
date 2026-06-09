@@ -90,12 +90,20 @@ def test_remove_with_no_selection_is_noop(dialog):
     assert len(_rules_on_disk()) == 1
 
 
-def test_running_button_hidden_without_running_apps(dialog):
+def test_running_button_hidden_without_running_apps(dialog, monkeypatch):
     make, mod = dialog
-    # Linux returns [] from running_apps, so the picker hides itself.
-    assert mod.running_apps() == []
+    # No running apps to pick (always true off macOS; forced here so the test
+    # is deterministic on a macOS runner that does have some) → picker hides.
+    monkeypatch.setattr(mod, "running_apps", lambda: [])
     dlg = make()
     assert dlg._running_button.isVisibleTo(dlg) is False
+
+
+def test_running_button_shown_with_running_apps(dialog, monkeypatch):
+    make, mod = dialog
+    monkeypatch.setattr(mod, "running_apps", lambda: [("Safari", "com.apple.safari")])
+    dlg = make()
+    assert dlg._running_button.isVisibleTo(dlg) is True
 
 
 def test_add_running_app(dialog, monkeypatch):
