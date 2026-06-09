@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence  # noqa: E402
 
-from shotquill.ocr import macos as ocr_macos  # noqa: E402
+from shotquill.ui import editor as editor_module  # noqa: E402
 from shotquill.ui.editor import EditorWindow, RegionContext  # noqa: E402
 
 
@@ -220,8 +220,6 @@ def test_near_screen_sized_capture_keeps_bottom_toolbar_on_screen(qtbot, config,
     # where the pointer put it after a drag to the bottom-right corner.
     from PySide6.QtWidgets import QToolBar
 
-    from shotquill.ui import editor as editor_module
-
     monkeypatch.setattr(editor_module, "_MAX_INITIAL_WIDTH", 100_000)
     monkeypatch.setattr(editor_module, "_MAX_INITIAL_HEIGHT", 100_000)
     available = QGuiApplication.primaryScreen().availableGeometry()
@@ -256,7 +254,6 @@ def test_toolbar_placement_follows_the_pointer():
 
 def _fake_cursor(monkeypatch, x, y):
     """Pin the pointer position the editor reads at construction time."""
-    from shotquill.ui import editor as editor_module
 
     class _Cursor:
         @staticmethod
@@ -377,6 +374,19 @@ def test_ocr_status_shown_as_badge_in_frameless_mode(qtbot, config, monkeypatch)
     assert window._status_badge.text() == window.windowTitle() == "ShotQuill — Copied 1 line(s)"
 
 
+def test_no_ocr_action_when_platform_has_no_recognizer(qtbot, config, monkeypatch):
+    # On Linux get_recognizer() returns None; the editor must omit the OCR
+    # button and _ocr() must no-op rather than touch a missing recognizer.
+    from PySide6.QtWidgets import QToolBar
+
+    monkeypatch.setattr(editor_module, "get_recognizer", lambda: None)
+    window = _editor(qtbot, config)
+    toolbar = window.findChild(QToolBar)
+    assert "Copy Text" not in {a.text() for a in toolbar.actions()}
+    window._ocr()  # must not raise even though there is no recognizer
+    assert window._recognizer is None
+
+
 def test_editor_without_origin_still_opens(qtbot, config):
     window = EditorWindow(_image(), config)
     qtbot.addWidget(window)
@@ -404,7 +414,9 @@ def _patch_recognizer(monkeypatch, *, lines=None, error=None, started=None, rele
                 raise error
             return list(lines or [])
 
-    monkeypatch.setattr(ocr_macos, "VisionTextRecognizer", _FakeRecognizer)
+    # Patch the platform factory the editor calls at construction, so the fake
+    # is installed regardless of host OS (macOS Vision is unavailable off-Mac).
+    monkeypatch.setattr(editor_module, "get_recognizer", lambda: _FakeRecognizer())
     return _FakeRecognizer
 
 

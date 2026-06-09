@@ -38,6 +38,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QWidget
 
 from shotquill.i18n import key_display_name, t
+from shotquill.ocr import get_recognizer
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.geometry import scale_rect_edges
 from shotquill.ui.toolbar import create_toolbar
@@ -227,11 +228,14 @@ class EditorWindow(QMainWindow):
             self._status_badge = QLabel(self._canvas.viewport())
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
+        # OCR is only offered when the platform has an on-device recognizer
+        # (macOS Vision); elsewhere the action is omitted (None).
+        self._recognizer = get_recognizer()
         toolbar = create_toolbar(
             self._canvas,
             self._copy,
             self._save,
-            self._ocr,
+            self._ocr if self._recognizer is not None else None,
             self._pin,
             style=config.toolbar_style(),
         )
@@ -482,7 +486,7 @@ class EditorWindow(QMainWindow):
         # Vision's accurate recognition can take seconds on a full-screen shot,
         # so it runs on a worker thread instead of freezing the GUI; the title
         # shows progress. A second click while one is in flight is ignored.
-        if self._ocr_running:
+        if self._ocr_running or self._recognizer is None:
             return
         self._ocr_running = True
         self._set_status(t("title.ocr_running"))
@@ -491,12 +495,10 @@ class EditorWindow(QMainWindow):
 
     def _run_ocr(self, image: QImage) -> None:
         """Worker thread: recognize and hand the outcome back to the GUI thread."""
-        from shotquill.ocr.macos import VisionTextRecognizer
-
         lines: list[str] | None = None
         error: Exception | None = None
         try:
-            lines = VisionTextRecognizer().recognize(image)
+            lines = self._recognizer.recognize(image)
         except Exception as exc:
             error = exc
         try:

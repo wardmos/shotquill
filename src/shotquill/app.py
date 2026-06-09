@@ -21,10 +21,10 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from shotquill import __version__, permissions, redact
 from shotquill import blocklist as bl
-from shotquill.autostart.macos import MacAutostartManager
-from shotquill.capture.macos import MacScreenCapturer
+from shotquill.autostart import get_manager as get_autostart_manager
 from shotquill.config import Config, human_readable_hotkey
-from shotquill.hotkeys.macos import MacHotkeyManager
+from shotquill.headless import get_capturer
+from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow, RegionContext
@@ -35,14 +35,18 @@ from shotquill.ui.smart_overlay import SmartOverlay
 
 
 def _build_icon() -> QIcon:
-    """Build the menu-bar mark as a macOS *template* image.
+    """Build the menu-bar / tray mark.
 
-    Template images are monochrome: only the alpha channel matters, and macOS
-    tints the opaque pixels to match the menu bar (white on dark, dark on light)
-    like its own status items. We draw the brand tile in solid black with the
-    "S" knocked out, then flag it as a mask. The colored Launchpad icon is a
+    On macOS we render a *template* image: monochrome, only the alpha channel
+    matters, and macOS tints the opaque pixels to match the menu bar (white on
+    dark, dark on light) like its own status items — so the tile is solid black
+    with the "S" knocked out and flagged as a mask. Other desktops (Linux/X11
+    tray) don't tint a mask, which would leave a black tile with a transparent
+    glyph — invisible on dark panels — so there we draw a self-contained icon:
+    a black tile with the "S" painted in white. The colored Launchpad icon is a
     separate ``.icns`` and is unaffected.
     """
+    is_mac = sys.platform == "darwin"
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
@@ -50,21 +54,27 @@ def _build_icon() -> QIcon:
     painter.setPen(Qt.NoPen)
     painter.setBrush(QColor("black"))
     painter.drawRoundedRect(6, 6, 52, 52, 14, 14)
-    # Erase the "S" from the tile so it shows the menu-bar colour through.
     # Size the glyph in pixels relative to the 64px canvas so it fills most of
-    # the tile — a small point size reads as a tiny letter once macOS scales the
-    # whole tile down to menu-bar height.
-    painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+    # the tile — a small point size reads as a tiny letter once the whole tile
+    # is scaled down to menu-bar/tray height. On macOS the "S" is knocked out
+    # (so the menu-bar colour shows through the template); elsewhere it's
+    # painted white so the icon is visible on its own.
+    if is_mac:
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+        glyph_color = QColor("black")
+    else:
+        glyph_color = QColor("white")
     font = QFont()
     font.setBold(True)
     font.setPixelSize(46)
     painter.setFont(font)
-    painter.setPen(QColor("black"))
+    painter.setPen(glyph_color)
     painter.drawText(pixmap.rect(), Qt.AlignCenter, "S")
     painter.end()
 
     icon = QIcon(pixmap)
-    icon.setIsMask(True)  # tell macOS to render it as a template image
+    if is_mac:
+        icon.setIsMask(True)  # tell macOS to render it as a template image
     return icon
 
 
@@ -91,10 +101,13 @@ class ShotquillApp(QObject):
         self._config = Config()
         set_language(self._config.language())
 
-        self._capturer = MacScreenCapturer(include_cursor=self._config.include_cursor())
-        self._hotkeys = MacHotkeyManager()
+        # Platform backends behind the factory seams: macOS gets ScreenCaptureKit
+        # + key-code hotkeys + a LaunchAgent; Linux/X11 gets a QScreen grab +
+        # pynput hotkeys + an XDG autostart entry.
+        self._capturer = get_capturer(include_cursor=self._config.include_cursor())
+        self._hotkeys = get_hotkey_manager()
         self._feedback = CaptureFeedback()
-        self._autostart = MacAutostartManager()
+        self._autostart = get_autostart_manager()
         self._sync_autostart()
         self._windows: list[object] = []  # keep overlays/editors alive
         self._settings_dialog: SettingsDialog | None = None
@@ -425,16 +438,18 @@ class ShotquillApp(QObject):
             pass  # non-fatal: launch-at-login is a convenience, not core function
 
     def _open_save_folder(self) -> None:
-        """Reveal the configured save directory in Finder.
+        """Reveal the configured save directory in the system file manager.
 
         The folder is created on demand the same way the saver does it, so the
         menu item works even before the first capture has written anything —
-        otherwise ``open`` would fail on a path that doesn't exist yet.
+        otherwise the opener would fail on a path that doesn't exist yet. macOS
+        uses ``open``; Linux uses ``xdg-open`` (the freedesktop opener).
         """
         directory = Path(self._config.save_dir()).expanduser()
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["open", str(directory)], check=True)
+            subprocess.run([opener, str(directory)], check=True)
         except (OSError, subprocess.SubprocessError) as exc:
             self._notify(t("notify.open_folder_failed").format(error=exc))
 

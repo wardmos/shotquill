@@ -9,6 +9,8 @@ autostart syncing, window bookkeeping — can be exercised offscreen without
 touching real system frameworks.
 """
 
+import sys
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -605,7 +607,8 @@ def test_failed_smart_grab_restores_shelved_settings(qapp, config, fakes, monkey
 
 def test_open_save_folder_reveals_configured_dir(qapp, config, fakes, monkeypatch, tmp_path):
     # The menu item creates the save dir if needed (so it works before the
-    # first capture) and hands it to Finder via `open`.
+    # first capture) and hands it to the system file manager — `open` on macOS,
+    # `xdg-open` on Linux.
     target = tmp_path / "shots"  # does not exist yet
     config.set_save_dir(str(target))
     app = _build_app(qapp, fakes)
@@ -614,8 +617,9 @@ def test_open_save_folder_reveals_configured_dir(qapp, config, fakes, monkeypatc
     monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **k: calls.append(a[0]))
     app._open_save_folder()
 
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
     assert target.is_dir()  # created on demand
-    assert calls == [["open", str(target)]]
+    assert calls == [[opener, str(target)]]
     app.shutdown()
 
 

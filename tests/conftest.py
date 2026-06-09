@@ -155,7 +155,7 @@ def _isolate_blocklist(monkeypatch, tmp_path):
 
 @pytest.fixture
 def fakes(monkeypatch):
-    """Swap shotquill.app's macOS platform managers for in-memory fakes."""
+    """Swap shotquill.app's platform factories for in-memory fakes."""
     pytest.importorskip("PySide6")
     from shotquill import app as app_module
 
@@ -167,9 +167,9 @@ def fakes(monkeypatch):
         capturer.include_cursor = include_cursor
         return capturer
 
-    monkeypatch.setattr(app_module, "MacScreenCapturer", _make_capturer)
-    monkeypatch.setattr(app_module, "MacHotkeyManager", lambda: hotkeys)
-    monkeypatch.setattr(app_module, "MacAutostartManager", lambda: autostart)
+    monkeypatch.setattr(app_module, "get_capturer", _make_capturer)
+    monkeypatch.setattr(app_module, "get_hotkey_manager", lambda: hotkeys)
+    monkeypatch.setattr(app_module, "get_autostart_manager", lambda: autostart)
     return capturer, hotkeys, autostart
 
 

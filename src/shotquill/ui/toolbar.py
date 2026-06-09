@@ -72,7 +72,7 @@ def create_toolbar(
     canvas: AnnotationCanvas,
     on_copy: Callable[[], None],
     on_save: Callable[[], None],
-    on_ocr: Callable[[], None],
+    on_ocr: Callable[[], None] | None,
     on_pin: Callable[[], None],
     style: str = DEFAULT_TOOLBAR_STYLE,
 ) -> QToolBar:
@@ -127,10 +127,14 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
-    ocr_action = QAction(toolbar_icon("ocr"), t("toolbar.ocr"), toolbar)
-    ocr_action.setToolTip(t("toolbar.ocr_tip"))
-    ocr_action.triggered.connect(on_ocr)
-    toolbar.addAction(ocr_action)
+    # OCR is platform-gated: only shown when an on-device recognizer exists
+    # (macOS Vision today). On Linux there's no backend, so the button is
+    # omitted rather than offered as a guaranteed failure.
+    if on_ocr is not None:
+        ocr_action = QAction(toolbar_icon("ocr"), t("toolbar.ocr"), toolbar)
+        ocr_action.setToolTip(t("toolbar.ocr_tip"))
+        ocr_action.triggered.connect(on_ocr)
+        toolbar.addAction(ocr_action)
 
     pin_action = QAction(toolbar_icon("pin"), t("toolbar.pin"), toolbar)
     pin_action.setToolTip(t("toolbar.pin_tip"))

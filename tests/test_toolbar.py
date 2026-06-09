@@ -103,6 +103,18 @@ def test_copy_and_save_callbacks_are_wired(qtbot):
     assert set(calls) == {"copy", "save", "ocr", "pin"}
 
 
+def test_ocr_action_present_when_callback_given(qtbot):
+    _canvas_, toolbar = _toolbar(qtbot, on_ocr=lambda: None)
+    assert "Copy Text" in {a.text() for a in toolbar.actions()}
+
+
+def test_ocr_action_omitted_when_no_recognizer(qtbot):
+    # on_ocr=None is how the editor signals "no OCR backend on this platform"
+    # (Linux); the button must not appear rather than fail when clicked.
+    _canvas_, toolbar = _toolbar(qtbot, on_ocr=None)
+    assert "Copy Text" not in {a.text() for a in toolbar.actions()}
+
+
 def test_every_button_has_an_icon(qtbot):
     _canvas_, toolbar = _toolbar(qtbot)
     for action in toolbar.actions():
