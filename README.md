@@ -256,8 +256,17 @@ full-screen and region captures** (an opaque block painted over the pixels,
 not an overlay, so nothing sensitive survives in the image). This covers the
 GUI, the CLI, and the MCP server alike.
 
-The list is a plain JSON file you can hand-edit, read by every surface so one
-rule protects them all:
+Manage it from the command line — or hand-edit the JSON file directly:
+
+```bash
+squill blocklist add --bundle-id com.1password.1password
+squill blocklist add --name keychain      # app-name substring
+squill blocklist list                     # --json for machines
+squill blocklist remove --name keychain
+```
+
+The list is a plain JSON file, read by every surface so one rule protects them
+all:
 
 - macOS: `~/Library/Application Support/shotquill/blocklist.json`
 - elsewhere: `$XDG_CONFIG_HOME/shotquill/blocklist.json`

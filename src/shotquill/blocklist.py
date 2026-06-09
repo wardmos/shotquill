@@ -74,6 +74,12 @@ class BlockRule:
             return self.bundle_id
         return f"name~{self.name}"
 
+    def as_dict(self) -> dict:
+        """The single-key JSON shape this rule round-trips through."""
+        if self.bundle_id is not None:
+            return {"bundle_id": self.bundle_id}
+        return {"name": self.name}
+
 
 @dataclass(frozen=True)
 class Blocklist:
@@ -142,11 +148,5 @@ def save(blocklist: Blocklist, path: Path | None = None) -> None:
     """Write the blocklist as JSON (creating the parent directory)."""
     path = path or paths.blocklist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    rules: list[dict] = []
-    for rule in blocklist.rules:
-        if rule.bundle_id is not None:
-            rules.append({"bundle_id": rule.bundle_id})
-        else:
-            rules.append({"name": rule.name})
-    payload = {"version": SCHEMA_VERSION, "rules": rules}
+    payload = {"version": SCHEMA_VERSION, "rules": [r.as_dict() for r in blocklist.rules]}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

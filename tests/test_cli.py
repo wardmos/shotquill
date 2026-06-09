@@ -329,6 +329,65 @@ def test_doctor_lists_blocklist(fake_capturer, tmp_path, capsys):
     assert "app_blocklist" in capsys.readouterr().out
 
 
+# --- blocklist management ---------------------------------------------------
+
+
+def _load_blocklist(tmp_path):
+    from shotquill import blocklist as bl
+
+    return bl.load(tmp_path / "blocklist.json")
+
+
+def test_blocklist_add_then_list(tmp_path, capsys):
+    assert cli.main(["blocklist", "add", "--bundle-id", "com.1password.1password"]) == 0
+    assert capsys.readouterr().out.strip() == "com.1password.1password"
+    assert cli.main(["blocklist", "add", "--name", "keychain"]) == 0
+    capsys.readouterr()
+    assert cli.main(["blocklist", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "com.1password.1password" in out and "name~keychain" in out
+
+
+def test_blocklist_add_is_idempotent(tmp_path, capsys):
+    cli.main(["blocklist", "add", "--name", "keychain"])
+    capsys.readouterr()
+    assert cli.main(["blocklist", "add", "--name", "keychain"]) == 0
+    assert "already" in capsys.readouterr().err
+    rules = _load_blocklist(tmp_path).rules
+    assert len(rules) == 1
+
+
+def test_blocklist_remove(tmp_path, capsys):
+    cli.main(["blocklist", "add", "--bundle-id", "com.apple.keychainaccess"])
+    capsys.readouterr()
+    assert cli.main(["blocklist", "remove", "--bundle-id", "com.apple.keychainaccess"]) == 0
+    assert _load_blocklist(tmp_path).rules == ()
+
+
+def test_blocklist_remove_absent_is_noop_with_note(tmp_path, capsys):
+    assert cli.main(["blocklist", "remove", "--name", "ghost"]) == 0
+    assert "was not on the blocklist" in capsys.readouterr().err
+
+
+def test_blocklist_list_empty(tmp_path, capsys):
+    assert cli.main(["blocklist", "list"]) == 0
+    assert capsys.readouterr().out.strip() == "(empty)"
+
+
+def test_blocklist_list_json(tmp_path, capsys):
+    cli.main(["blocklist", "add", "--bundle-id", "com.x"])
+    capsys.readouterr()
+    assert cli.main(["blocklist", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == [{"bundle_id": "com.x"}]
+
+
+def test_blocklist_add_requires_a_selector(tmp_path, capsys):
+    # The mutually exclusive group is required: neither flag is a usage error.
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["blocklist", "add"])
+    assert exc.value.code == 2
+
+
 def test_windows_json(fake_capturer, capsys):
     assert cli.main(["windows", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)

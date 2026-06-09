@@ -154,7 +154,32 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     mcp.set_defaults(func=_cmd_mcp)
 
+    blocklist = sub.add_parser(
+        "blocklist",
+        help="manage the app blocklist (apps that are never captured)",
+    )
+    bl_sub = blocklist.add_subparsers(dest="blocklist_command", required=True)
+
+    bl_list = bl_sub.add_parser("list", help="show the current rules")
+    bl_list.add_argument("--json", action="store_true", help="machine-readable output")
+    bl_list.set_defaults(func=_cmd_blocklist_list)
+
+    bl_add = bl_sub.add_parser("add", help="add a rule")
+    _add_blocklist_selector(bl_add)
+    bl_add.set_defaults(func=_cmd_blocklist_add)
+
+    bl_remove = bl_sub.add_parser("remove", help="remove a matching rule")
+    _add_blocklist_selector(bl_remove)
+    bl_remove.set_defaults(func=_cmd_blocklist_remove)
+
     return parser
+
+
+def _add_blocklist_selector(command: argparse.ArgumentParser) -> None:
+    """The bundle-id / name choice shared by ``blocklist add`` and ``remove``."""
+    target = command.add_mutually_exclusive_group(required=True)
+    target.add_argument("--bundle-id", help="match the owning app's bundle id exactly")
+    target.add_argument("--name", help="match the app name as a case-insensitive substring")
 
 
 def _add_target_options(command: argparse.ArgumentParser) -> None:
@@ -354,3 +379,43 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     from shotquill.mcp import serve
 
     return serve(session_timeout=args.timeout)
+
+
+def _cmd_blocklist_list(args: argparse.Namespace) -> int:
+    from shotquill import blocklist as bl
+
+    blocklist = bl.load()
+    if args.json:
+        print(json.dumps([r.as_dict() for r in blocklist.rules], ensure_ascii=False))
+    elif not blocklist.rules:
+        print("(empty)")
+    else:
+        for rule in blocklist.rules:
+            print(rule.describe())
+    return 0
+
+
+def _cmd_blocklist_add(args: argparse.Namespace) -> int:
+    from shotquill import blocklist as bl
+
+    rule = bl.BlockRule(bundle_id=args.bundle_id, name=args.name)
+    blocklist = bl.load()
+    if rule in blocklist.rules:
+        print(f"squill: {rule.describe()} is already on the blocklist", file=sys.stderr)
+        return 0
+    bl.save(bl.Blocklist(blocklist.rules + (rule,)))
+    print(rule.describe())
+    return 0
+
+
+def _cmd_blocklist_remove(args: argparse.Namespace) -> int:
+    from shotquill import blocklist as bl
+
+    rule = bl.BlockRule(bundle_id=args.bundle_id, name=args.name)
+    blocklist = bl.load()
+    remaining = tuple(r for r in blocklist.rules if r != rule)
+    if len(remaining) == len(blocklist.rules):
+        print(f"squill: {rule.describe()} was not on the blocklist", file=sys.stderr)
+        return 0
+    bl.save(bl.Blocklist(remaining))
+    return 0
