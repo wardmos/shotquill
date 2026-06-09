@@ -3,10 +3,13 @@
 #
 # Usage: packaging/linux/build_appimage.sh <version-or-tag>
 #
-# The Linux build ships the headless CLI/MCP only — there is no menu-bar GUI on
-# Linux yet — so the macOS-only app/ui/pyobjc code is excluded and a bare run
-# shows `--help`. PyInstaller bundles Python + Qt; appimagetool wraps the AppDir
-# into one self-mounting executable.
+# This AppImage ships only the headless CLI/MCP surface. The menu-bar GUI
+# also runs on Linux but is distributed via PyPI / pipx
+# instead, so it can pull in QtWidgets and the rest of the UI stack at install
+# time. Keeping the AppImage CLI-only keeps the binary small and makes it the
+# right shape for scripts and AI agents. The macOS-only app/ui/pyobjc code is
+# excluded so a bare run shows `--help`. PyInstaller bundles Python + Qt;
+# appimagetool wraps the AppDir into one self-mounting executable.
 #
 # glibc floor: AppImage does not bundle glibc, so the binary needs a glibc at
 # least as new as the build host's. Built on GitHub's ubuntu-22.04 that floor is
