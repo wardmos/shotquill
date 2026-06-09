@@ -142,6 +142,34 @@ def test_doctor_reports_blocklist(monkeypatch, tmp_path):
     assert "com.1password.1password" in entry["detail"]
 
 
+def test_doctor_flags_unredacted_blocklist_without_enumeration(monkeypatch, tmp_path):
+    # The honest part: on a backend that can't enumerate windows (Linux), a
+    # blocked app is captured plainly in full-screen grabs — doctor must say so.
+    path = tmp_path / "blocklist.json"
+    bl.save(ONEPW_LIST, path)
+    monkeypatch.setattr(paths, "blocklist_path", lambda: path)
+    check = headless._check_blocklist_redaction(can_enumerate=False)
+    assert check is not None and check["available"] is False
+    assert "NOT redacted" in check["detail"]
+
+
+def test_doctor_blocklist_redaction_ok_with_enumeration(monkeypatch, tmp_path):
+    path = tmp_path / "blocklist.json"
+    bl.save(ONEPW_LIST, path)
+    monkeypatch.setattr(paths, "blocklist_path", lambda: path)
+    check = headless._check_blocklist_redaction(can_enumerate=True)
+    assert check is not None and check["available"] is True
+
+
+def test_doctor_blocklist_redaction_silent_without_rules_or_capture(monkeypatch, tmp_path):
+    path = tmp_path / "blocklist.json"  # never written → empty list, nothing to protect
+    monkeypatch.setattr(paths, "blocklist_path", lambda: path)
+    assert headless._check_blocklist_redaction(can_enumerate=False) is None
+    # Capture unavailable (None) is also silent — the capture check tells that story.
+    bl.save(ONEPW_LIST, path)
+    assert headless._check_blocklist_redaction(can_enumerate=None) is None
+
+
 # --- full-screen / region redaction -----------------------------------------
 
 

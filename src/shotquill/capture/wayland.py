@@ -184,6 +184,23 @@ class PortalScreenCapturer(ScreenCapturer):
         return str(uri)
 
 
+def portal_available() -> bool:
+    """Best-effort: is the Screenshot portal reachable on the session bus?
+
+    ``squill doctor`` uses this to catch a Wayland box with no xdg-desktop-portal
+    installed *before* a capture fails at runtime. Any failure — no session bus,
+    no portal service — reads as unavailable rather than raising."""
+    try:
+        from PySide6.QtDBus import QDBusConnection, QDBusInterface
+
+        bus = QDBusConnection.sessionBus()
+        if not bus.isConnected():
+            return False
+        return bool(QDBusInterface(_PORTAL_SERVICE, _PORTAL_PATH, _SCREENSHOT_IFACE, bus).isValid())
+    except Exception:
+        return False
+
+
 def _uri_to_path(uri: str) -> str:
     """Local filesystem path for a portal ``file://`` URI (or a bare path)."""
     from PySide6.QtCore import QUrl

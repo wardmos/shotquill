@@ -131,3 +131,31 @@ def test_get_capturer_routes_x11_to_qtgrab(monkeypatch):
     from shotquill.capture.qtgrab import QtGrabCapturer
 
     assert isinstance(headless.get_capturer(), QtGrabCapturer)
+
+
+def test_portal_available_returns_a_bool_without_raising():
+    from shotquill.capture import wayland
+
+    assert isinstance(wayland.portal_available(), bool)  # never raises, even with no bus
+
+
+def test_doctor_capture_detail_reports_reachable_portal(monkeypatch):
+    from shotquill.capture import wayland
+
+    monkeypatch.setattr(headless.sys, "platform", "linux")
+    monkeypatch.setattr(headless, "_is_wayland_session", lambda: True)
+    monkeypatch.setattr(wayland, "portal_available", lambda: True)
+    detail, available = headless._capture_detail("PortalScreenCapturer")
+    assert available is True
+    assert "portal" in detail.lower()
+
+
+def test_doctor_capture_detail_flags_unreachable_portal(monkeypatch):
+    from shotquill.capture import wayland
+
+    monkeypatch.setattr(headless.sys, "platform", "linux")
+    monkeypatch.setattr(headless, "_is_wayland_session", lambda: True)
+    monkeypatch.setattr(wayland, "portal_available", lambda: False)
+    detail, available = headless._capture_detail("PortalScreenCapturer")
+    assert available is False
+    assert "install xdg-desktop-portal" in detail  # actionable, not a bare class name

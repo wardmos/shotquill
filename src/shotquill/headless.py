@@ -377,18 +377,14 @@ def doctor_checks() -> list[dict]:
         _check_blocklist(),
     ]
 
-    try:
-        capturer = get_capturer()
-        backend = type(capturer).__name__
-        checks.append({"capability": "capture", "available": True, "detail": backend})
-        try:
-            capturer.list_windows()
-            checks.append({"capability": "list_windows", "available": True, "detail": backend})
-        except CapabilityUnsupported as exc:
-            checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
-    except CapabilityUnsupported as exc:
-        checks.append({"capability": "capture", "available": False, "detail": exc.reason})
-        checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
+    capture_checks, can_enumerate = _capture_checks()
+    checks.extend(capture_checks)
+    # Without window enumeration (Linux today) a full-screen capture can't locate
+    # a blocked app to redact it, so the blocklist silently does NOT protect those
+    # grabs — surface that where there are rules meant to.
+    redaction = _check_blocklist_redaction(can_enumerate)
+    if redaction is not None:
+        checks.append(redaction)
 
     if sys.platform == "darwin":
         checks.append(_check_screen_recording())
@@ -400,6 +396,90 @@ def doctor_checks() -> list[dict]:
         checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
 
     return checks
+
+
+def _capture_checks() -> tuple[list[dict], bool | None]:
+    """The ``capture`` + ``list_windows`` checks, and whether windows can be
+    enumerated (``None`` when capture itself is unavailable).
+
+    On Wayland the backend is xdg-desktop-portal, which is only useful if the
+    portal is actually installed and running (a minimal desktop may lack it), so
+    this probes reachability instead of reporting capture as available merely
+    because the backend class instantiated."""
+    try:
+        capturer = get_capturer()
+    except CapabilityUnsupported as exc:
+        return [
+            {"capability": "capture", "available": False, "detail": exc.reason},
+            {"capability": "list_windows", "available": False, "detail": exc.reason},
+        ], None
+
+    detail, available = _capture_detail(type(capturer).__name__)
+    checks = [{"capability": "capture", "available": available, "detail": detail}]
+    try:
+        capturer.list_windows()
+        checks.append(
+            {"capability": "list_windows", "available": True, "detail": type(capturer).__name__}
+        )
+        return checks, True
+    except CapabilityUnsupported as exc:
+        checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
+        return checks, False
+
+
+def _capture_detail(backend: str) -> tuple[str, bool]:
+    """Detail string and availability for the ``capture`` check.
+
+    On a real Wayland session the grab goes through xdg-desktop-portal; probe
+    that it is reachable and, if not, hand back an actionable hint rather than a
+    bare backend name that hides why captures will fail."""
+    if sys.platform.startswith("linux") and _is_wayland_session():
+        from shotquill.capture.wayland import portal_available
+
+        if portal_available():
+            return "xdg-desktop-portal (Wayland)", True
+        return (
+            "xdg-desktop-portal not reachable — install xdg-desktop-portal and a "
+            "backend for your desktop (e.g. xdg-desktop-portal-gnome / -kde / -wlr)",
+            False,
+        )
+    return backend, True
+
+
+def _check_blocklist_redaction(can_enumerate: bool | None) -> dict | None:
+    """Whether the blocklist can actually redact full-screen captures.
+
+    Returns ``None`` when there is nothing to report — no rules, an unreadable
+    list (already flagged by :func:`_check_blocklist`), or capture unavailable.
+    Redaction needs to enumerate windows to find a blocked app's bounds, so where
+    enumeration is unsupported (Linux today) a blocked app is captured *plainly*
+    in full-screen grabs — a real privacy gap users must know about, not assume
+    the blocklist covers."""
+    if can_enumerate is None:
+        return None
+    from shotquill import blocklist as bl
+    from shotquill import paths
+
+    try:
+        loaded = bl.load(paths.blocklist_path())
+    except bl.BlocklistError:
+        return None  # the app_blocklist check already reports the corrupt file
+    if not loaded:
+        return None  # no rules → nothing to protect
+    if can_enumerate:
+        return {
+            "capability": "blocklist_redaction",
+            "available": True,
+            "detail": "blocked windows are redacted from full-screen/region captures",
+        }
+    return {
+        "capability": "blocklist_redaction",
+        "available": False,
+        "detail": (
+            "no window enumeration on this backend → blocked apps are NOT redacted "
+            "in full-screen captures (captured plainly; logged as redact_unavailable)"
+        ),
+    }
 
 
 def _check_blocklist() -> dict:
