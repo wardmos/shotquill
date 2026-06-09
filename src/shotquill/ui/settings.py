@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -343,14 +344,24 @@ class SettingsDialog(QDialog):
         self._sound.setChecked(config.sound_on_capture())
         form.addRow("", self._sound)
 
-        self._screen_permission = _PermissionRow(
-            permissions.screen_capture_status, permissions.open_screen_capture_pane
-        )
-        self._input_permission = _PermissionRow(
-            permissions.input_monitoring_status, permissions.open_input_monitoring_pane
-        )
-        form.addRow(t("settings.permission_screen"), self._screen_permission)
-        form.addRow(t("settings.permission_input"), self._input_permission)
+        # Both permission rows are macOS-only concepts (Screen Recording / Input
+        # Monitoring TCC grants). Off-darwin the status probes return UNKNOWN
+        # and the "Open System Settings" button would shell out to `open
+        # x-apple-systempreferences:…` — a no-op (or wrong handler) on Linux.
+        # Hide the rows entirely there so Settings doesn't show meaningless
+        # controls; keep the attrs as ``None`` so ``changeEvent`` can skip them.
+        if sys.platform == "darwin":
+            self._screen_permission = _PermissionRow(
+                permissions.screen_capture_status, permissions.open_screen_capture_pane
+            )
+            self._input_permission = _PermissionRow(
+                permissions.input_monitoring_status, permissions.open_input_monitoring_pane
+            )
+            form.addRow(t("settings.permission_screen"), self._screen_permission)
+            form.addRow(t("settings.permission_input"), self._input_permission)
+        else:
+            self._screen_permission = None
+            self._input_permission = None
 
         self._blocklist_button = QPushButton(t("settings.blocklist_button"))
         self._blocklist_button.clicked.connect(self._open_blocklist)
@@ -367,7 +378,14 @@ class SettingsDialog(QDialog):
     def changeEvent(self, event) -> None:
         # Granting a permission happens over in System Settings; coming back
         # re-activates this dialog, so that's the moment to re-read the states.
-        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+        # The rows only exist on macOS (the only platform with these TCC
+        # grants); elsewhere the attrs are ``None`` and there's nothing to
+        # refresh.
+        if (
+            event.type() == QEvent.ActivationChange
+            and self.isActiveWindow()
+            and self._screen_permission is not None
+        ):
             self._screen_permission.refresh()
             self._input_permission.refresh()
         super().changeEvent(event)

@@ -450,6 +450,13 @@ def test_permission_rows_show_status_and_open_the_right_pane(qtbot, config, monk
     from shotquill import permissions
     from shotquill.i18n import t
     from shotquill.permissions import PermissionStatus
+    from shotquill.ui import settings as settings_module
+
+    # The permission rows only render on macOS (the only platform with these
+    # TCC grants). Pin sys.platform so the test exercises that branch on any
+    # host — otherwise the rows would be hidden on a Linux CI box and the
+    # ``_screen_permission`` attr would be ``None``.
+    monkeypatch.setattr(settings_module.sys, "platform", "darwin")
 
     opened = []
     monkeypatch.setattr(permissions, "screen_capture_status", lambda: PermissionStatus.GRANTED)
@@ -471,7 +478,9 @@ def test_permission_rows_show_unknown_when_state_is_unreadable(qtbot, config, mo
     from shotquill import permissions
     from shotquill.i18n import t
     from shotquill.permissions import PermissionStatus
+    from shotquill.ui import settings as settings_module
 
+    monkeypatch.setattr(settings_module.sys, "platform", "darwin")
     monkeypatch.setattr(permissions, "screen_capture_status", lambda: PermissionStatus.UNKNOWN)
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
@@ -486,7 +495,9 @@ def test_permission_rows_refresh_when_dialog_reactivates(qtbot, config, monkeypa
     from shotquill import permissions
     from shotquill.i18n import t
     from shotquill.permissions import PermissionStatus
+    from shotquill.ui import settings as settings_module
 
+    monkeypatch.setattr(settings_module.sys, "platform", "darwin")
     status = [PermissionStatus.DENIED]
     monkeypatch.setattr(permissions, "screen_capture_status", lambda: status[0])
     dialog = SettingsDialog(config)
@@ -497,3 +508,33 @@ def test_permission_rows_refresh_when_dialog_reactivates(qtbot, config, monkeypa
     monkeypatch.setattr(dialog, "isActiveWindow", lambda: True)
     dialog.changeEvent(QEvent(QEvent.ActivationChange))
     assert dialog._screen_permission._label.text() == t("settings.permission_granted")
+
+
+def test_permission_rows_hidden_on_linux(qtbot, config, monkeypatch):
+    # Linux has no equivalent of macOS Screen Recording / Input Monitoring
+    # grants — the rows would surface meaningless "Unknown" status plus an
+    # "Open System Settings" button that would shell out to a macOS-only
+    # `x-apple-systempreferences:` URL. They must not appear in the dialog.
+    from shotquill.ui import settings as settings_module
+
+    monkeypatch.setattr(settings_module.sys, "platform", "linux")
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    assert dialog._screen_permission is None
+    assert dialog._input_permission is None
+
+
+def test_permission_changeEvent_is_a_noop_on_linux(qtbot, config, monkeypatch):
+    # Without the rows there's nothing to refresh on activation — make sure
+    # the activation handler doesn't try to dereference ``None`` (the
+    # original ``self._screen_permission.refresh()`` call would crash).
+    from PySide6.QtCore import QEvent
+
+    from shotquill.ui import settings as settings_module
+
+    monkeypatch.setattr(settings_module.sys, "platform", "linux")
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(dialog, "isActiveWindow", lambda: True)
+    # Must not raise.
+    dialog.changeEvent(QEvent(QEvent.ActivationChange))
