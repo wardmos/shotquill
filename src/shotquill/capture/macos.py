@@ -37,18 +37,19 @@ class MacScreenCapturer(ScreenCapturer):
     def __init__(self, include_cursor: bool = False) -> None:
         self.include_cursor = include_cursor
 
-    def capture_fullscreen(self) -> CaptureResult:
+    def capture_fullscreen(self, exclude_window_ids: frozenset[int] = frozenset()) -> CaptureResult:
         import Quartz
 
         # Logical bounds of the whole virtual desktop: the top-left is the origin
         # (not (0, 0) when a monitor sits left of / above the primary), and the
         # logical width lets the legacy path recover its physical pixel scale.
         ox, oy, logical_w, _ = self._virtual_desktop_bounds()
-        result = self._sck_capture_fullscreen()
+        result = self._sck_capture_fullscreen(exclude_window_ids)
         if result is None:
             # CGRectInfinite spans every display; the image is physical (Retina)
             # pixels but carries no scale of its own, so derive it from the
-            # physical-to-logical width ratio.
+            # physical-to-logical width ratio. The legacy path cannot omit
+            # windows, so it excludes none (the caller redacts them instead).
             result = self._grab_rect(Quartz.CGRectInfinite)
             scale = result.width / logical_w if logical_w else 1.0
             result = replace(result, scale=scale)
@@ -250,8 +251,15 @@ class MacScreenCapturer(ScreenCapturer):
             )
         )
 
-    def _sck_capture_fullscreen(self) -> CaptureResult | None:
-        """All displays via ScreenCaptureKit, or None to use the legacy path."""
+    def _sck_capture_fullscreen(
+        self, exclude_window_ids: frozenset[int] = frozenset()
+    ) -> CaptureResult | None:
+        """All displays via ScreenCaptureKit, or None to use the legacy path.
+
+        Blocklisted windows are omitted from the capture itself (``excluding
+        Windows:``), so what was behind them shows through and windows on top of
+        them stay intact — no solid block, and nothing sensitive is ever in the
+        pixels."""
         sck = self._sck()
         if sck is None:
             return None
@@ -260,16 +268,20 @@ class MacScreenCapturer(ScreenCapturer):
             displays = list(content.displays())
             if not displays:
                 return None
+            exclude = [w for w in content.windows() if int(w.windowID()) in exclude_window_ids]
+            excluded_ids = frozenset(int(w.windowID()) for w in exclude)
             shots = []
             for display in displays:
                 content_filter = sck.SCContentFilter.alloc().initWithDisplay_excludingWindows_(
-                    display, []
+                    display, exclude
                 )
                 scale = float(content_filter.pointPixelScale())
                 shots.append((display.frame(), scale, self._sck_screenshot(sck, content_filter)))
             if len(shots) == 1:
-                return self._cgimage_to_result(shots[0][2], scale=shots[0][1])
-            return self._composite_displays(shots)
+                result = self._cgimage_to_result(shots[0][2], scale=shots[0][1])
+            else:
+                result = self._composite_displays(shots)
+            return replace(result, excluded_window_ids=excluded_ids)
         except Exception:
             return None  # fall back to the legacy capture path
 

@@ -35,6 +35,13 @@ class CaptureResult:
     a single display or a primary at the origin, but the real (possibly
     negative) origin for a multi-monitor full-screen grab, so blocklist
     redaction maps window bounds onto the right pixels.
+
+    ``excluded_window_ids`` are the window ids the capture itself kept out of the
+    image (macOS ScreenCaptureKit can omit specific windows, so a blocklisted
+    app is simply absent — what was behind it shows through, and windows on top
+    of it stay intact). The shared layer redacts only the blocklisted windows
+    *not* in this set, so it never paints a solid block over a window the
+    capture already excluded.
     """
 
     width: int
@@ -44,6 +51,7 @@ class CaptureResult:
     premultiplied: bool = False
     origin_x: int = 0
     origin_y: int = 0
+    excluded_window_ids: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -77,8 +85,13 @@ class ScreenCapturer(ABC):
     include_cursor: bool = False
 
     @abstractmethod
-    def capture_fullscreen(self) -> CaptureResult:
-        """Capture all displays composited into a single image."""
+    def capture_fullscreen(self, exclude_window_ids: frozenset[int] = frozenset()) -> CaptureResult:
+        """Capture all displays composited into a single image.
+
+        ``exclude_window_ids`` names windows to keep out of the capture where the
+        backend can (macOS ScreenCaptureKit); the returned
+        ``CaptureResult.excluded_window_ids`` reports which were actually
+        omitted, so the caller can redact the rest some other way."""
 
     @abstractmethod
     def capture_region(self, region: Rect) -> CaptureResult:

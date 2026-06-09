@@ -184,20 +184,45 @@ def perform_capture(
                 result, capturer, blocklist, origin=(region.x, region.y), target=target, via=via
             )
         return result, target, 1
-    result = capturer.capture_fullscreen()
-    if blocklist:
-        # The capture reports its own logical top-left, so redaction maps window
-        # bounds correctly even on a multi-monitor desktop whose origin is not
-        # (0, 0) — a display placed left of / above the primary.
-        result = _redact_blocked(
-            result,
-            capturer,
-            blocklist,
-            origin=(result.origin_x, result.origin_y),
-            target="fullscreen",
-            via=via,
+    if not blocklist:
+        return capturer.capture_fullscreen(), "fullscreen", 1
+    return _fullscreen_with_blocklist(capturer, blocklist, via=via), "fullscreen", 1
+
+
+def _fullscreen_with_blocklist(capturer: ScreenCapturer, blocklist, *, via: str) -> CaptureResult:
+    """Full-screen capture with blocklisted windows kept out of the image.
+
+    Where the backend can omit them at capture time (macOS ScreenCaptureKit)
+    they are simply absent — windows on top stay intact and nothing is painted.
+    Anything the capture could not exclude (the legacy path) is then redacted by
+    solid block as a fallback. Where windows cannot be enumerated at all (e.g.
+    Wayland) the frame cannot be protected, so it is captured plainly and the
+    gap is logged rather than implying coverage we did not deliver.
+    """
+    from shotquill import audit, redact
+
+    try:
+        windows = capturer.list_windows()
+    except CapabilityUnsupported:
+        audit.record("redact_unavailable", via=via, target="fullscreen")
+        return capturer.capture_fullscreen()
+    blocked = blocklist.blocked(windows)
+    if not blocked:
+        return capturer.capture_fullscreen()
+
+    blocked_ids = frozenset(w.window_id for w in blocked)
+    result = capturer.capture_fullscreen(exclude_window_ids=blocked_ids)
+    # Solid-block any blocklisted window the capture could not omit itself; the
+    # origin/scale it reports map logical bounds onto the right pixels even on a
+    # multi-monitor desktop whose top-left is not (0, 0).
+    remaining = [w for w in blocked if w.window_id not in result.excluded_window_ids]
+    if remaining:
+        result, _ = redact.redact_bounds(
+            result, (result.origin_x, result.origin_y), [w.bounds for w in remaining]
         )
-    return result, "fullscreen", 1
+    labels = ", ".join(w.bundle_id or w.owner for w in blocked)
+    audit.record("capture_redacted", via=via, target=f"fullscreen [hidden: {labels}]")
+    return result
 
 
 def _redact_blocked(
@@ -209,7 +234,8 @@ def _redact_blocked(
     target: str,
     via: str,
 ) -> CaptureResult:
-    """Paint solid blocks over any blocklisted window inside ``result``.
+    """Paint solid blocks over any blocklisted window inside ``result`` (the
+    region path, which cannot omit windows at capture time).
 
     Enumeration is required to find the sensitive windows; where it is
     unavailable (e.g. Wayland) the frame cannot be protected, so we leave it

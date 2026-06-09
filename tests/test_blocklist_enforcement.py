@@ -17,19 +17,27 @@ from shotquill.capture.base import CaptureResult, Rect, WindowInfo
 
 
 class FakeCapturer:
-    def __init__(self, windows=None, list_raises=None):
+    def __init__(self, windows=None, list_raises=None, can_exclude=False):
         self.include_cursor = False
         self._windows = windows or []
         self._list_raises = list_raises
+        # When True, model a backend that omits windows at capture time (macOS
+        # ScreenCaptureKit); otherwise model the legacy path that cannot, so the
+        # caller falls back to a solid block.
+        self._can_exclude = can_exclude
         self.captured = []
+        self.excluded = frozenset()
 
-    def _result(self):
+    def _result(self, excluded=frozenset()):
         # Non-black fill so redaction (which paints opaque black) is observable.
-        return CaptureResult(width=2, height=2, scale=1.0, pixels=bytes([200] * 16))
+        return CaptureResult(
+            width=2, height=2, scale=1.0, pixels=bytes([200] * 16), excluded_window_ids=excluded
+        )
 
-    def capture_fullscreen(self):
+    def capture_fullscreen(self, exclude_window_ids=frozenset()):
         self.captured.append("fullscreen")
-        return self._result()
+        self.excluded = frozenset(exclude_window_ids) if self._can_exclude else frozenset()
+        return self._result(self.excluded)
 
     def capture_region(self, region):
         self.captured.append(("region", region))
@@ -151,6 +159,32 @@ def test_fullscreen_redacts_blocked_window(tmp_path, monkeypatch):
     assert "capture_redacted" in log.read_text(encoding="utf-8")
 
 
+def test_fullscreen_excludes_blocked_window_without_painting(tmp_path, monkeypatch):
+    # When the backend can omit the window from the capture itself (SCK), the
+    # blocked app is simply absent — nothing is painted, so what was behind it
+    # shows through and windows on top stay intact.
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    cap = FakeCapturer(windows=[ONEPW], can_exclude=True)
+    result, target, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST, via="cli")
+    assert target == "fullscreen"
+    assert cap.excluded == frozenset({ONEPW.window_id})  # asked to omit the right window
+    assert not _all_black(result)  # omitted at capture time, not painted over
+    assert "capture_redacted" in log.read_text(encoding="utf-8")
+
+
+def test_fullscreen_solid_blocks_window_the_backend_cannot_exclude(tmp_path, monkeypatch):
+    # The fallback half: a backend that cannot omit windows (legacy path) still
+    # gets the sensitive pixels painted out, so nothing leaks either way.
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    cap = FakeCapturer(windows=[ONEPW], can_exclude=False)
+    result, _, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST, via="cli")
+    assert cap.excluded == frozenset()  # the backend reported omitting nothing
+    assert _all_black(result)  # so the window is solid-blocked instead
+    assert "capture_redacted" in log.read_text(encoding="utf-8")
+
+
 def test_region_redacts_blocked_window():
     cap = FakeCapturer(windows=[ONEPW])
     result, target, _ = headless.perform_capture(cap, region=Rect(0, 0, 2, 2), blocklist=ONEPW_LIST)
@@ -187,7 +221,7 @@ def test_fullscreen_redaction_respects_reported_origin():
                 )
             ]
 
-        def capture_fullscreen(self):
+        def capture_fullscreen(self, exclude_window_ids=frozenset()):
             return CaptureResult(
                 width=2, height=2, scale=1.0, pixels=bytes([200] * 16), origin_x=100, origin_y=50
             )

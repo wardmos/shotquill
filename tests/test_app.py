@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
 from shotquill import blocklist as bl  # noqa: E402
-from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
+from shotquill.capture.base import CaptureResult, Rect, WindowInfo  # noqa: E402
 
 
 def _build_app(qapp, fakes):
@@ -203,8 +203,10 @@ def _block(bundle_id=None, name=None):
 
 
 def test_grab_redacts_blocklisted_window(qapp, config, fakes, monkeypatch):
-    # A blocklisted window on screen is painted out of the full-screen grab —
-    # the same protection the CLI/MCP get, now on the human hotkey path.
+    # Fallback path: a backend that can't omit the window at capture time gets a
+    # blocklisted window painted out of the full-screen grab — the same
+    # protection the CLI/MCP get, now on the human hotkey path. (The fakes'
+    # capture_fullscreen reports excluding nothing.)
     capturer, _hotkeys, _autostart = fakes
     monkeypatch.setattr(
         capturer,
@@ -218,6 +220,39 @@ def test_grab_redacts_blocklisted_window(qapp, config, fakes, monkeypatch):
     image = app._grab(bl.load())
     assert image.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)  # window area blacked out
     assert image.pixelColor(3, 2).getRgb()[:3] == (255, 255, 255)  # the rest untouched
+    app.shutdown()
+
+
+def test_grab_excludes_blocklisted_window_without_painting(qapp, config, fakes, monkeypatch):
+    # When the backend omits the window from the capture itself (macOS SCK), the
+    # grab passes the blocked window's id to capture_fullscreen and paints
+    # nothing — the window is simply absent, so the frame stays untouched.
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(
+        capturer,
+        "list_windows",
+        lambda: [
+            WindowInfo(1, "1Password", "", Rect(0, 0, 2, 2), bundle_id="com.1password.1password")
+        ],
+    )
+    seen = {}
+
+    def excluding_capture(exclude_window_ids=frozenset()):
+        seen["ids"] = exclude_window_ids
+        return CaptureResult(
+            width=4,
+            height=3,
+            scale=1.0,
+            pixels=bytes([255] * 4 * 4 * 3),
+            excluded_window_ids=frozenset(exclude_window_ids),
+        )
+
+    monkeypatch.setattr(capturer, "capture_fullscreen", excluding_capture)
+    _block(bundle_id="com.1password.1password")
+    app = _build_app(qapp, fakes)
+    image = app._grab(bl.load())
+    assert seen["ids"] == frozenset({1})  # the blocked window's id was handed to the backend
+    assert image.pixelColor(0, 0).getRgb()[:3] == (255, 255, 255)  # excluded, not painted over
     app.shutdown()
 
 
@@ -545,7 +580,7 @@ def test_fullscreen_capture_shelves_settings_during_the_grab(qapp, config, fakes
     monkeypatch.setattr(
         capturer,
         "capture_fullscreen",
-        lambda: seen.append(dialog.isVisible()) or original(),
+        lambda *a, **k: seen.append(dialog.isVisible()) or original(),
     )
     monkeypatch.setattr(app, "_deliver_capture", lambda *args: None)
     app._capture_fullscreen()

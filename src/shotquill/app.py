@@ -289,12 +289,24 @@ class ShotquillApp(QObject):
         self._deliver_capture(result_to_qimage(result), origin)
 
     def _grab(self, blocklist: bl.Blocklist) -> QImage | None:
+        # Resolve which on-screen windows are blocklisted *before* capturing, so
+        # the backend can omit them from the grab itself (macOS ScreenCaptureKit):
+        # the window is then simply absent — what was behind it shows through and
+        # windows on top stay intact — instead of a solid block. Whatever the
+        # backend can't omit (the legacy path) is painted out afterwards.
+        blocked = self._blocked_on_screen(blocklist)
+        exclude_ids = frozenset(w.window_id for w in blocked)
         try:
-            result = self._capturer.capture_fullscreen()
+            result = self._capturer.capture_fullscreen(exclude_window_ids=exclude_ids)
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
             return None
-        return result_to_qimage(self._redact_blocked(result, blocklist))
+        remaining = [w for w in blocked if w.window_id not in result.excluded_window_ids]
+        if remaining:
+            result, _ = redact.redact_bounds(
+                result, (result.origin_x, result.origin_y), [w.bounds for w in remaining]
+            )
+        return result_to_qimage(result)
 
     def _load_blocklist_or_abort(self) -> bl.Blocklist | None:
         """The blocklist for this capture, or ``None`` when it can't be read.
@@ -316,23 +328,20 @@ class ShotquillApp(QObject):
             self._notify(t("notify.blocklist_unreadable").format(error=exc))
             return None
 
-    def _redact_blocked(self, result, blocklist: bl.Blocklist):
-        """Paint solid blocks over any blocklisted window in a full-screen grab,
-        so a blocked app never reaches the editor, clipboard, or a saved file —
-        the same protection the CLI/MCP get, on the human path."""
+    def _blocked_on_screen(self, blocklist: bl.Blocklist) -> list:
+        """Blocklisted windows currently on screen, so a blocked app never reaches
+        the editor, clipboard, or a saved file — the same protection the CLI/MCP
+        get, on the human path.
+
+        Empty when nothing is blocked or the windows can't be enumerated (macOS
+        always can; a backend that can't enumerate also can't redact)."""
         if not blocklist:
-            return result
+            return []
         try:
             windows = self._capturer.list_windows()
         except Exception:
-            return result  # can't enumerate → can't redact (macOS always can)
-        blocked = blocklist.blocked(windows)
-        if not blocked:
-            return result
-        redacted, _ = redact.redact_bounds(
-            result, (result.origin_x, result.origin_y), [w.bounds for w in blocked]
-        )
-        return redacted
+            return []
+        return blocklist.blocked(windows)
 
     def _notify(self, message: str) -> None:
         self._tray.showMessage("ShotQuill", message, QSystemTrayIcon.MessageIcon.Critical)

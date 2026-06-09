@@ -38,7 +38,7 @@ class FakeCapturer:
             WindowInfo(window_id=33, owner="Notes", title="Scratch", bounds=Rect(5, 5, 300, 200)),
         ]
 
-    def capture_fullscreen(self) -> CaptureResult:
+    def capture_fullscreen(self, exclude_window_ids=frozenset()) -> CaptureResult:
         self.calls.append(("fullscreen",))
         return _result()
 

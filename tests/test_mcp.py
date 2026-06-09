@@ -38,7 +38,7 @@ class FakeCapturer:
             width=width, height=height, scale=1.0, pixels=bytes([200] * width * height * 4)
         )
 
-    def capture_fullscreen(self) -> CaptureResult:
+    def capture_fullscreen(self, exclude_window_ids=frozenset()) -> CaptureResult:
         self.calls.append(("fullscreen",))
         return self._result()
 

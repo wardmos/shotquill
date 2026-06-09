@@ -54,7 +54,10 @@ class QtGrabCapturer(ScreenCapturer):
         self.include_cursor = include_cursor
         _ensure_gui_session()
 
-    def capture_fullscreen(self) -> CaptureResult:
+    def capture_fullscreen(self, exclude_window_ids: frozenset[int] = frozenset()) -> CaptureResult:
+        # This backend cannot enumerate windows, so it never has ids to exclude
+        # (the caller redacts via rectangles where it does); accept the argument
+        # for the interface and ignore it.
         canvas, virtual, dpr = self._grab_virtual_desktop()
         return _qimage_to_result(canvas, dpr, origin=(virtual.x(), virtual.y()))
 

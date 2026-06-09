@@ -74,7 +74,9 @@ class _FakeCapturer:
         self.fail = False
         self.include_cursor = False
 
-    def capture_fullscreen(self):
+    def capture_fullscreen(self, exclude_window_ids=frozenset()):
+        # This fake cannot omit windows, so it ignores exclude_window_ids and
+        # reports excluding none — the caller redacts by solid block instead.
         if self.fail:
             raise RuntimeError("no permission")
         return CaptureResult(width=4, height=3, scale=1.0, pixels=bytes([255] * 4 * 4 * 3))
