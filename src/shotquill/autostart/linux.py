@@ -39,13 +39,33 @@ def _exec_line(arguments: list[str]) -> str:
 
 
 def build_autostart_desktop(arguments: list[str]) -> str:
-    """Render a minimal autostart ``.desktop`` entry that runs ``arguments``."""
+    """Render an autostart ``.desktop`` entry that runs ``arguments``.
+
+    The extra metadata (Icon/Comment/Categories/StartupNotify/GenericName) is
+    what GNOME Tweaks / KDE Autostart / XFCE Session display in their startup-
+    items lists; without it the entry appears with a generic icon and no
+    description, leaving users unsure whether to leave it on. ``Icon=shotquill``
+    is the theme-icon name; falls back gracefully when the icon isn't installed
+    (e.g. dev runs without a system icon theme).
+
+    ``GenericName`` and ``Comment`` ship with ``[zh_CN]`` siblings so a Chinese
+    desktop session shows localised text in the startup-items UI — the rest of
+    the app already speaks both languages and the .desktop spec resolves these
+    by ``LANG`` automatically.
+    """
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=ShotQuill\n"
+        "GenericName=Screenshot Tool\n"
+        "GenericName[zh_CN]=截图工具\n"
+        "Comment=Capture and annotate screenshots from the menu bar.\n"
+        "Comment[zh_CN]=从菜单栏快速截图并标注。\n"
         f"Exec={_exec_line(arguments)}\n"
+        "Icon=shotquill\n"
         "Terminal=false\n"
+        "Categories=Graphics;Utility;\n"
+        "StartupNotify=false\n"
         "X-GNOME-Autostart-enabled=true\n"
     )
 

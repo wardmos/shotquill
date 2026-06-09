@@ -535,6 +535,119 @@ def test_mcp_rejects_non_positive_timeout(timeout, capsys):
     assert "--timeout" in capsys.readouterr().err
 
 
+# --- install-desktop-entry --------------------------------------------------
+#
+# The command exists because ``pipx install shotquill`` lays the bundled
+# .desktop and SVG inside its private venv (``<sys.prefix>/share/...``) where
+# the freedesktop app menu never looks. ``squill install-desktop-entry`` is
+# the one-liner that bridges the gap by copying into ~/.local/share.
+
+
+def _stage_packaged_data(monkeypatch, tmp_path):
+    """Pretend a wheel installed our data-files under ``sys.prefix/share/...``.
+
+    Mirrors the layout setuptools produces from ``[tool.setuptools.data-files]``
+    so the command's ``_locate_packaged_data`` finds the source files without
+    an actual wheel build."""
+    monkeypatch.setattr(cli.sys, "prefix", str(tmp_path / "prefix"))
+    desktop = tmp_path / "prefix" / "share" / "applications" / "shotquill-gui.desktop"
+    icon = (
+        tmp_path / "prefix" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "shotquill.svg"
+    )
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    desktop.write_text("[Desktop Entry]\nName=ShotQuill\nExec=shotquill\n", encoding="utf-8")
+    icon.write_text("<svg/>", encoding="utf-8")
+    return desktop, icon
+
+
+def _redirect_xdg_data_home(monkeypatch, tmp_path):
+    home = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_DATA_HOME", str(home))
+    return home
+
+
+def test_install_desktop_entry_unsupported_off_linux(monkeypatch, capsys):
+    # macOS / Windows have no freedesktop launcher — fail with the typed
+    # capability code (4) so agents stop retrying instead of treating this
+    # as a transient error.
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    rc = cli.main(["install-desktop-entry"])
+    assert rc == headless.EXIT_UNSUPPORTED
+    assert "Linux-only" in capsys.readouterr().err
+
+
+def test_install_desktop_entry_unsupported_when_payload_missing(monkeypatch, capsys, tmp_path):
+    # Editable installs without ``pip install`` proper (or a hand-built venv
+    # that skipped data-files) don't have the bundled files. Refuse with a
+    # clear hint instead of silently doing nothing.
+    import site
+
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.sys, "prefix", str(tmp_path / "empty-prefix"))
+    monkeypatch.setattr(site, "getuserbase", lambda: str(tmp_path / "empty-user"))
+    _redirect_xdg_data_home(monkeypatch, tmp_path)
+    rc = cli.main(["install-desktop-entry"])
+    assert rc == headless.EXIT_UNSUPPORTED
+    assert "bundled desktop files not found" in capsys.readouterr().err
+
+
+def test_install_desktop_entry_copies_files_to_xdg_data_home(monkeypatch, tmp_path, capsys):
+    # Happy path: bundled data files exist in ``<sys.prefix>/share/...`` (as
+    # pipx leaves them), and the command lays them into ~/.local/share so
+    # GNOME / KDE / XFCE find them via XDG_DATA_DIRS.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    desktop_src, icon_src = _stage_packaged_data(monkeypatch, tmp_path)
+    data_home = _redirect_xdg_data_home(monkeypatch, tmp_path)
+    # The cache refresh shells out to update-desktop-database / gtk-update-icon-cache;
+    # tests must not actually run those (they'd hit the real $PATH).
+    monkeypatch.setattr(cli, "_refresh_desktop_caches", lambda *_args: None)
+
+    rc = cli.main(["install-desktop-entry"])
+
+    assert rc == 0
+    dst_desktop = data_home / "applications" / "shotquill.desktop"
+    dst_icon = data_home / "icons" / "hicolor" / "scalable" / "apps" / "shotquill.svg"
+    assert dst_desktop.is_file()
+    assert dst_icon.is_file()
+    assert dst_desktop.read_text(encoding="utf-8") == desktop_src.read_text(encoding="utf-8")
+    assert dst_icon.read_text(encoding="utf-8") == icon_src.read_text(encoding="utf-8")
+    # The freedesktop spec resolves ``Icon=shotquill`` by basename, and the
+    # .desktop id is the file basename — both destinations must drop any
+    # ``-gui`` suffix and use the canonical names.
+    assert dst_desktop.name == "shotquill.desktop"
+    assert dst_icon.name == "shotquill.svg"
+    out = capsys.readouterr().out
+    assert "installed:" in out
+
+
+def test_install_desktop_entry_is_idempotent(monkeypatch, tmp_path):
+    # A second run after a first must overwrite to the same content — no
+    # error, no "already installed" message-as-failure path.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    _stage_packaged_data(monkeypatch, tmp_path)
+    _redirect_xdg_data_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "_refresh_desktop_caches", lambda *_args: None)
+    assert cli.main(["install-desktop-entry"]) == 0
+    assert cli.main(["install-desktop-entry"]) == 0  # second run also exits 0
+
+
+def test_install_desktop_entry_print_paths_does_not_write(monkeypatch, tmp_path, capsys):
+    # ``--print-paths`` is the diagnostic flag — useful for "what would this
+    # do" without modifying the user's data home.
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    _stage_packaged_data(monkeypatch, tmp_path)
+    data_home = _redirect_xdg_data_home(monkeypatch, tmp_path)
+
+    rc = cli.main(["install-desktop-entry", "--print-paths"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "desktop:" in out and "icon:" in out
+    assert not (data_home / "applications" / "shotquill.desktop").exists()
+    assert not (data_home / "icons" / "hicolor" / "scalable" / "apps" / "shotquill.svg").exists()
+
+
 # --- headless helpers -------------------------------------------------------
 
 

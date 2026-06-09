@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  ShotQuill Linux application icon (placeholder, brand-consistent).
+
+  Matches the tray icon: a black rounded square with a bold white "S".
+  Vector so it scales to every panel/launcher size the desktop asks for.
+  freedesktop-spec path: install to share/icons/hicolor/scalable/apps/shotquill.svg
+
+  SPDX-License-Identifier: Apache-2.0
+  Copyright (C) 2026 wardmos
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256" height="256">
+  <rect x="24" y="24" width="208" height="208" rx="56" ry="56" fill="#000000"/>
+  <text x="128" y="128"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif"
+        font-size="184"
+        font-weight="700"
+        fill="#ffffff"
+        text-anchor="middle"
+        dominant-baseline="central">S</text>
+</svg>

@@ -56,6 +56,18 @@ where = ["src"]
 [tool.setuptools.dynamic]
 version = { attr = "shotquill.__version__" }
 
+# Desktop integration on Linux: pipx / pip lay these under ``<prefix>/share/...``
+# (``~/.local/share`` for ``pipx install``, ``/usr/share`` for a system install).
+# Both paths are on XDG_DATA_DIRS by default, so GNOME / KDE / XFCE pick up the
+# launcher entry in the app menu and the icon theme resolves ``Icon=shotquill``
+# to the SVG. The macOS and AppImage paths ignore these files (the AppImage
+# bundles its own ``packaging/linux/shotquill.desktop`` separately).
+[tool.setuptools.data-files]
+"share/applications" = ["packaging/linux/shotquill-gui.desktop"]
+"share/icons/hicolor/scalable/apps" = [
+    "packaging/linux/icons/hicolor/scalable/apps/shotquill.svg",
+]
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]

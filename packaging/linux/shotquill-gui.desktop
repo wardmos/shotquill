@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=ShotQuill
+GenericName=Screenshot Tool
+GenericName[zh_CN]=截图工具
+Comment=Capture, annotate, and OCR screenshots from the menu bar.
+Comment[zh_CN]=从菜单栏快速截图、标注与文字识别。
+Exec=shotquill
+Icon=shotquill
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=screenshot;screen;capture;annotate;ocr;
+StartupNotify=false
+StartupWMClass=ShotQuill
+X-GNOME-UsesNotifications=true

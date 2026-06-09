@@ -154,6 +154,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     mcp.set_defaults(func=_cmd_mcp)
 
+    install_desktop = sub.add_parser(
+        "install-desktop-entry",
+        help="install the Linux .desktop entry and icon under ~/.local/share",
+        description=(
+            "Copy the bundled .desktop launcher and icon to ~/.local/share so "
+            "ShotQuill shows up in the GNOME / KDE / XFCE application menu. "
+            "Needed after `pipx install shotquill`, because pipx puts data-files "
+            "inside its private venv where the desktop never looks. Idempotent."
+        ),
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    install_desktop.add_argument(
+        "--print-paths",
+        action="store_true",
+        help="show the resolved source and destination paths, then exit (no copy)",
+    )
+    install_desktop.set_defaults(func=_cmd_install_desktop_entry)
+
     blocklist = sub.add_parser(
         "blocklist",
         help="manage the app blocklist (apps that are never captured)",
@@ -418,4 +436,134 @@ def _cmd_blocklist_remove(args: argparse.Namespace) -> int:
         print(f"squill: {rule.describe()} was not on the blocklist", file=sys.stderr)
         return 0
     bl.save(bl.Blocklist(remaining))
+    return 0
+
+
+# --- install-desktop-entry --------------------------------------------------
+#
+# Linux only. ``pipx install shotquill`` puts data-files inside its private
+# venv (``~/.local/pipx/venvs/shotquill/share/...``), which is *not* on
+# XDG_DATA_DIRS — so the app menu never sees them. This command bridges that
+# by copying the bundled .desktop launcher and SVG icon into
+# ``~/.local/share`` where every freedesktop desktop looks.
+
+_DESKTOP_ENTRY_SUBPATH = ("share", "applications", "shotquill-gui.desktop")
+_ICON_SVG_SUBPATH = (
+    "share",
+    "icons",
+    "hicolor",
+    "scalable",
+    "apps",
+    "shotquill.svg",
+)
+
+
+def _locate_packaged_data(subpath: tuple[str, ...]) -> Path | None:
+    """Find a data-files entry shipped with the wheel.
+
+    Searches ``sys.prefix`` (the venv root for pipx / regular venv installs)
+    and ``site.USER_BASE`` (``pip install --user``), since setuptools writes
+    data-files to ``<prefix>/share/...``. Returns the first existing path or
+    ``None`` when neither layout has the file (e.g. an editable install with
+    data-files staging skipped).
+    """
+    import site
+
+    candidates: list[Path] = [Path(sys.prefix, *subpath)]
+    user_base = site.getuserbase()
+    if user_base:
+        candidates.append(Path(user_base, *subpath))
+    return next((c for c in candidates if c.is_file()), None)
+
+
+def _xdg_data_home() -> Path:
+    """``$XDG_DATA_HOME`` per the freedesktop Base Directory spec.
+
+    Falls back to the spec default (``~/.local/share``) when unset, which is
+    what every desktop reads as the user-scope data dir.
+    """
+    import os
+
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+
+
+def _refresh_desktop_caches(applications_dir: Path, icon_root: Path) -> None:
+    """Best-effort: tell the desktop the new entry / icon exists *now*.
+
+    Without ``update-desktop-database`` / ``gtk-update-icon-cache`` the user
+    typically has to log out / in (or wait for the desktop's next scan) before
+    the menu entry appears. Both tools are optional — missing them is fine,
+    the entry still lands and works on the next scan; we just lose the "shows
+    up instantly" win. Errors are swallowed: an unavailable cache tool is the
+    user's reality, not something to fail the install over.
+    """
+    import shutil
+    import subprocess
+
+    for tool, args in (
+        ("update-desktop-database", [str(applications_dir)]),
+        ("gtk-update-icon-cache", ["-f", "-t", str(icon_root)]),
+    ):
+        binary = shutil.which(tool)
+        if not binary:
+            continue
+        try:
+            subprocess.run([binary, *args], check=False, capture_output=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def _cmd_install_desktop_entry(args: argparse.Namespace) -> int:
+    """Copy the GUI .desktop and icon to ``~/.local/share``.
+
+    Returns 4 (capability unavailable) on non-Linux and when the bundled data
+    files can't be located — there's nothing to install on either, so callers
+    shouldn't keep retrying. Idempotent: a second run overwrites the same
+    files with identical content.
+    """
+    if not sys.platform.startswith("linux"):
+        print(
+            "squill: install-desktop-entry is Linux-only "
+            "(this platform doesn't use freedesktop launchers)",
+            file=sys.stderr,
+        )
+        return headless.EXIT_UNSUPPORTED
+
+    desktop_src = _locate_packaged_data(_DESKTOP_ENTRY_SUBPATH)
+    icon_src = _locate_packaged_data(_ICON_SVG_SUBPATH)
+    if desktop_src is None or icon_src is None:
+        print(
+            "squill: bundled desktop files not found in this install — "
+            "expected at <prefix>/share/applications and <prefix>/share/icons; "
+            "are you running an editable install built without data-files?",
+            file=sys.stderr,
+        )
+        return headless.EXIT_UNSUPPORTED
+
+    data_home = _xdg_data_home()
+    applications_dir = data_home / "applications"
+    icon_dir = data_home / "icons" / "hicolor" / "scalable" / "apps"
+    # The freedesktop spec resolves ``Icon=shotquill`` by basename across the
+    # icon theme, so the destination file must be named ``shotquill.svg`` even
+    # if the source name differed. Same idea for the launcher: ``shotquill.desktop``
+    # is the canonical id (StartupWMClass / .desktop file ids both look for it).
+    desktop_dst = applications_dir / "shotquill.desktop"
+    icon_dst = icon_dir / "shotquill.svg"
+
+    if args.print_paths:
+        print(f"desktop: {desktop_src} -> {desktop_dst}")
+        print(f"icon:    {icon_src} -> {icon_dst}")
+        return 0
+
+    import shutil
+
+    applications_dir.mkdir(parents=True, exist_ok=True)
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(desktop_src, desktop_dst)
+    shutil.copyfile(icon_src, icon_dst)
+    desktop_dst.chmod(0o644)
+    icon_dst.chmod(0o644)
+    _refresh_desktop_caches(applications_dir, data_home / "icons")
+    print(f"installed: {desktop_dst}")
+    print(f"installed: {icon_dst}")
     return 0
