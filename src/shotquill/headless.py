@@ -72,10 +72,29 @@ def get_capturer(include_cursor: bool = False) -> ScreenCapturer:
 
         return MacScreenCapturer(include_cursor=include_cursor)
     if sys.platform.startswith("linux"):
+        if _is_wayland_session():
+            from shotquill.capture.wayland import PortalScreenCapturer
+
+            return PortalScreenCapturer(include_cursor=include_cursor)
         from shotquill.capture.qtgrab import QtGrabCapturer
 
         return QtGrabCapturer(include_cursor=include_cursor)
     raise CapabilityUnsupported("capture", f"no backend for platform {sys.platform!r}")
+
+
+def _is_wayland_session() -> bool:
+    """True on a real Wayland desktop, where out-of-band grabs are refused and
+    capture must go through xdg-desktop-portal instead of QScreen.grabWindow.
+
+    An explicit ``QT_QPA_PLATFORM`` (e.g. ``offscreen`` in tests, or a forced
+    X11/xcb) wins, so the Qt-grab path stays selectable without a live portal."""
+    import os
+
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return False
+    return os.environ.get("XDG_SESSION_TYPE") == "wayland" or bool(
+        os.environ.get("WAYLAND_DISPLAY")
+    )
 
 
 def get_recognizer() -> TextRecognizer:
