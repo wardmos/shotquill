@@ -11,6 +11,7 @@ import pytest
 from pynput.keyboard import Key
 
 from shotquill.hotkeys import linux
+from shotquill.hotkeys.base import HotkeyUnavailable
 
 
 class _FakeListener:
@@ -188,3 +189,101 @@ def test_stop_is_idempotent(fake_listener):
     manager.stop()
     manager.stop()  # second stop is a no-op, must not raise
     assert fake_listener.instances[-1].stopped is True
+
+
+def _force_wayland(monkeypatch):
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+
+def test_start_raises_hotkey_unavailable_under_wayland(fake_listener, monkeypatch):
+    # pynput's X11 listener "starts" under a Wayland compositor but never sees
+    # events, so the user has a configured hotkey that just doesn't fire. The
+    # manager must refuse loudly so the app layer can surface why instead of
+    # leaving the user with silent failure.
+    _force_wayland(monkeypatch)
+    manager = linux.LinuxHotkeyManager()
+    manager.register("<ctrl>+<shift>+s", lambda: None)
+    with pytest.raises(HotkeyUnavailable) as info:
+        manager.start()
+    assert "Wayland" in info.value.reason
+    assert fake_listener.instances == []  # no doomed listener was spawned
+
+
+def test_start_without_bindings_does_not_probe_wayland(fake_listener, monkeypatch):
+    # An empty binding set is a no-op anyway; refusing here would make the app
+    # bail at construction on Wayland before it could ever say "use the menu".
+    _force_wayland(monkeypatch)
+    manager = linux.LinuxHotkeyManager()
+    manager.start()  # must not raise
+    assert fake_listener.instances == []
+
+
+def test_qt_qpa_platform_override_keeps_listener_usable(fake_listener, monkeypatch):
+    # Tests force QT_QPA_PLATFORM=offscreen so the X11 detection has to defer to
+    # it — otherwise our own suite would trip the Wayland guard on a CI box that
+    # happens to set WAYLAND_DISPLAY.
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    manager = linux.LinuxHotkeyManager()
+    manager.register("<ctrl>+a", lambda: None)
+    manager.start()  # must not raise
+    assert fake_listener.instances[-1].started is True
+
+
+def test_wayland_gate_holds_after_stop_and_restart(fake_listener, monkeypatch):
+    # Regression: if the first start() raised but the second start() (e.g. the
+    # user re-applied Settings) silently spawned a listener, the listener would
+    # run dead on Wayland and the user would see the old "silent hotkey" bug.
+    _force_wayland(monkeypatch)
+    manager = linux.LinuxHotkeyManager()
+    manager.register("<ctrl>+a", lambda: None)
+    with pytest.raises(HotkeyUnavailable):
+        manager.start()
+    manager.stop()
+    with pytest.raises(HotkeyUnavailable):
+        manager.start()
+    assert fake_listener.instances == []  # no listener ever spawned
+
+
+def test_hotkey_unavailable_carries_reason_in_str_and_attr():
+    # The reason field is what the app surfaces in a notification, and str(exc)
+    # is what shows up in stack traces / logs — both must include the message,
+    # so a future refactor doesn't accidentally hide it behind a generic
+    # "HotkeyUnavailable" with no detail.
+    exc = HotkeyUnavailable("Wayland blocks global key grabs.")
+    assert exc.reason == "Wayland blocks global key grabs."
+    assert "Wayland" in str(exc)
+    assert isinstance(exc, RuntimeError)  # so generic except RuntimeError catches it
+
+
+def test_is_wayland_session_detects_wayland_env(monkeypatch):
+    # The hotkey backend ships its own session probe (the headless module has
+    # a parallel one for capture); a regression that drops the check would
+    # let the listener spawn on Wayland again, where it sees no events.
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert linux._is_wayland_session() is True
+
+    monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert linux._is_wayland_session() is True
+
+
+def test_is_wayland_session_false_on_x11(monkeypatch):
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert linux._is_wayland_session() is False
+
+
+def test_is_wayland_session_defers_to_qt_qpa_override(monkeypatch):
+    # Tests force ``QT_QPA_PLATFORM=offscreen``; without the override-wins rule
+    # our own suite would trip the Wayland guard on any CI box that happens to
+    # set WAYLAND_DISPLAY for unrelated reasons.
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert linux._is_wayland_session() is False

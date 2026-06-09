@@ -112,6 +112,10 @@ class _FakeHotkeys:
         self.stopped = 0
         self.cleared = 0
         self.raise_permission_error = False
+        # Set to a reason string to make start() raise HotkeyUnavailable instead
+        # (the Linux/Wayland path the app should surface differently from the
+        # macOS Input Monitoring grant prompt).
+        self.raise_unavailable: str | None = None
 
     def register(self, combo, callback):
         self.bindings[combo] = callback
@@ -124,6 +128,10 @@ class _FakeHotkeys:
         self.bindings.clear()
 
     def start(self):
+        if self.raise_unavailable is not None:
+            from shotquill.hotkeys.base import HotkeyUnavailable
+
+            raise HotkeyUnavailable(self.raise_unavailable)
         if self.raise_permission_error:
             raise PermissionError("Input Monitoring required")
         self.started += 1

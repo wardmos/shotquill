@@ -37,7 +37,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QWidget
 
-from shotquill.i18n import key_display_name, t
+from shotquill.i18n import adjust_hint_key, key_display_name, t
 from shotquill.ocr import get_recognizer
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.geometry import scale_rect_edges
@@ -436,7 +436,7 @@ class EditorWindow(QMainWindow):
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
 
     def _show_adjust_hint(self) -> None:
-        self._set_status(t("editor.adjust_hint"))
+        self._set_status(t(adjust_hint_key()))
         self._hint_showing = True
 
     def _retire_adjust_hint(self) -> None:

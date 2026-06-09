@@ -31,6 +31,208 @@ def test_build_icon_is_not_null(qapp):
     assert not icon.isNull()
 
 
+def test_build_icon_attaches_multiple_sizes_on_linux(qapp, monkeypatch):
+    # A single 64px pixmap renders soft on a HiDPI panel (Qt has to downscale
+    # per frame) and small on a standard panel. Confirm the Linux branch hands
+    # Qt a multi-resolution icon so it can pick the right one per panel.
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
+    icon = app_module._build_icon()
+    sizes = {(s.width(), s.height()) for s in icon.availableSizes()}
+    # The actual list lives in _build_icon; assert the small/large extremes
+    # are there so it doesn't silently collapse back to a single size.
+    assert (16, 16) in sizes
+    assert (64, 64) in sizes
+    assert len(sizes) >= 4
+
+
+def test_build_icon_marks_macos_template(qapp, monkeypatch):
+    # macOS reads the tray icon as a *template* (only alpha matters; the menu
+    # bar tints opaque pixels white-on-dark / dark-on-light). Without the mask
+    # flag the icon would render as a black tile that's invisible on a dark
+    # menu bar — a regression that's silent in tests but jarring on Mac.
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    icon = app_module._build_icon()
+    assert icon.isMask() is True
+
+
+def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
+    # Non-Mac desktops (Linux/X11 tray) don't tint masks: marking the icon as
+    # a template here would leave a black tile with a transparent "S" — i.e.
+    # the very bug the multi-size Linux branch was added to avoid.
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
+    icon = app_module._build_icon()
+    assert icon.isMask() is False
+
+
+def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
+    # The renderer derives padding / radius / glyph height from ``size`` so
+    # small tray panels still get a readable "S" instead of a near-empty tile.
+    # Check the extremes the icon factory actually asks for (16 and 64) and
+    # confirm each produces a non-empty pixmap with some opaque pixels.
+    from PySide6.QtCore import Qt
+
+    for size in (16, 64):
+        pixmap = app_module._render_tray_pixmap(size, is_mac=False)
+        assert pixmap.size().width() == size
+        assert pixmap.size().height() == size
+        # Sample the centre pixel: the "S" sits there and is painted white,
+        # so the alpha must be non-zero. (Fully transparent centre would
+        # mean either the tile or the glyph went missing.)
+        centre = pixmap.toImage().pixelColor(size // 2, size // 2)
+        assert centre.alpha() > 0
+        # And not the placeholder transparent fill.
+        assert centre != Qt.transparent
+
+
+def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
+    # The Linux/X11 tray path can't tint masks, so the "S" must be painted
+    # directly — verify by scanning for any white-ish pixel. A regression
+    # that left the glyph unpainted (or painted it black on black) would
+    # leave only a featureless black tile that's invisible against a dark
+    # panel.
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    found_white = False
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            # Antialiasing softens edges, so accept anything that's clearly
+            # on the white-of-glyph side — alpha > 0 AND the average channel
+            # value is past mid-grey.
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                found_white = True
+                break
+        if found_white:
+            break
+    assert found_white, "expected the 'S' glyph to be painted white somewhere on the tile"
+
+
+def test_render_tray_pixmap_macos_knocks_glyph_out_of_mask(qapp):
+    # macOS reads the icon as a *template*: every opaque pixel is tinted by
+    # AppKit, every transparent pixel passes through. The "S" is rendered
+    # with ``CompositionMode_DestinationOut`` so the glyph carves a
+    # transparent hole through the black tile — the menu-bar colour shines
+    # through there. A regression that swapped the composition mode (e.g.
+    # painted black-on-black) would still produce a black tile but with no
+    # punched-out "S", so the icon would read as a solid square. Detect by
+    # confirming there's at least one fully-transparent pixel *inside* the
+    # tile boundary: only the knock-out path produces that.
+    pixmap = app_module._render_tray_pixmap(64, is_mac=True)
+    image = pixmap.toImage()
+    # Scan the middle band where the glyph sits (avoid the rounded corners,
+    # which are also transparent regardless of the composition mode).
+    found_hole = False
+    for y in range(16, 48):
+        for x in range(16, 48):
+            if image.pixelColor(x, y).alpha() == 0:
+                found_hole = True
+                break
+        if found_hole:
+            break
+    assert found_hole, "macOS template must punch the 'S' out of the black tile"
+    # The macOS path never paints white — only black with knock-outs — so any
+    # white pixel anywhere means the wrong branch ran.
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0:
+                assert (pixel.red(), pixel.green(), pixel.blue()) == (0, 0, 0), (
+                    "macOS template path must paint only black; found "
+                    f"({pixel.red()},{pixel.green()},{pixel.blue()}) at ({x},{y})"
+                )
+
+
+def test_render_tray_pixmap_keeps_glyph_inside_tile_bounds(qapp):
+    # At extreme small sizes the derived font.pixelSize could in principle
+    # produce a glyph taller than the rounded tile, which would leak opaque
+    # pixels into the padding strip (outside the tile but inside the pixmap).
+    # That would render as a stray dark splotch on a panel that expects a
+    # clean rounded square. Scan the outermost row/column of the pixmap and
+    # confirm everything there is transparent — i.e. no glyph overflow.
+    for size in (16, 22, 24, 32, 48, 64):
+        pixmap = app_module._render_tray_pixmap(size, is_mac=False)
+        image = pixmap.toImage()
+        edges = [(x, 0) for x in range(size)] + [(x, size - 1) for x in range(size)]
+        edges += [(0, y) for y in range(size)] + [(size - 1, y) for y in range(size)]
+        for x, y in edges:
+            assert image.pixelColor(x, y).alpha() == 0, (
+                f"glyph or tile leaked to the pixmap edge at size={size}, ({x},{y})"
+            )
+
+
+def _stub_run_environment(qapp, monkeypatch):
+    """Shared monkeypatching for the ``run()`` tray-unavailable tests."""
+    monkeypatch.setattr(app_module.QSystemTrayIcon, "isSystemTrayAvailable", lambda: False)
+    # Stub QApplication so run() doesn't try to create a second one. The
+    # qapp fixture already gave us a live QApplication.
+    monkeypatch.setattr(app_module, "QApplication", lambda argv: qapp)
+    shown: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda parent, title, body: shown.append((title, body)),
+    )
+    return shown
+
+
+def test_run_shows_dialog_when_tray_unavailable(qapp, monkeypatch):
+    # The previous behaviour printed one stderr line and returned 1 — a user
+    # double-clicking the desktop entry on GNOME 42+ (no legacy tray) saw
+    # nothing happen. ``run`` must now also pop a QMessageBox so the failure
+    # is visible to GUI users; the stderr line stays for CLI invocations.
+    from shotquill import i18n
+
+    shown = _stub_run_environment(qapp, monkeypatch)
+
+    rc = app_module.run()
+
+    assert rc == 1
+    assert len(shown) == 1
+    title, body = shown[0]
+    assert title == i18n.t("tray.unavailable_title")
+    # Body is the platform-appropriate one — Linux mentions AppIndicator;
+    # other platforms get the generic body. Either way it's non-empty.
+    assert body
+
+
+def test_run_dialog_body_is_linux_specific_on_linux(qapp, monkeypatch):
+    # Lock in the platform branch: on Linux the body must mention the
+    # AppIndicator extension — the actionable hint for the common GNOME 42+
+    # stumble. Translations should never drop this token; if they do,
+    # ``test_every_string_has_all_languages`` still passes but the user gets
+    # a body that doesn't tell them what to do.
+    from shotquill import i18n
+
+    monkeypatch.setattr(i18n.sys, "platform", "linux")
+    shown = _stub_run_environment(qapp, monkeypatch)
+
+    app_module.run()
+
+    _, body = shown[0]
+    assert body == i18n.t("tray.unavailable_body_linux")
+    assert "AppIndicator" in body
+    # Don't drop the "CLI/MCP still works" escape hatch in a translation —
+    # this is the only way a tray-less Linux user knows they aren't blocked.
+    assert "squill" in body
+
+
+def test_run_dialog_body_is_generic_off_linux(qapp, monkeypatch):
+    # Off-Linux falls through to the generic body — there's no equivalent
+    # to the GNOME 42+ tray-removed story on macOS/Windows, so the message
+    # stays short. The platform branch lives in ``tray_unavailable_body_key``
+    # rather than in ``run``, so this guards both call sites at once.
+    from shotquill import i18n
+
+    monkeypatch.setattr(i18n.sys, "platform", "darwin")
+    shown = _stub_run_environment(qapp, monkeypatch)
+
+    app_module.run()
+
+    _, body = shown[0]
+    assert body == i18n.t("tray.unavailable_body_generic")
+    assert "squill" in body  # CLI/MCP escape hatch stays in the body
+
+
 def test_app_is_qobject_for_queued_hotkey_delivery(qapp, config, fakes):
     # ShotquillApp must be a QObject so the hotkey bridge's signals — emitted
     # from pynput's listener thread — reach the capture slots via a *queued*
@@ -64,6 +266,10 @@ def test_apply_hotkeys_skips_disabled_combos(qapp, config, fakes):
 def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
     qapp, config, fakes, monkeypatch
 ):
+    # On macOS, a denied Input Monitoring grant raises PermissionError; the app
+    # must both notify the user AND open the right System Settings pane (so the
+    # user has a one-tap path to fix it without hunting through preferences).
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
     _capturer, hotkeys, _autostart = fakes
     hotkeys.raise_permission_error = True
     opened = []
@@ -79,6 +285,54 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
 
     assert opened == [True]
     assert messages
+    app.shutdown()
+
+
+def test_apply_hotkeys_skips_macos_pane_off_darwin(qapp, config, fakes, monkeypatch):
+    # The Input Monitoring deep-link is an `x-apple-systempreferences:` URL
+    # opened via the macOS `open` binary — on Linux that's a no-op (or spawns
+    # the wrong handler), so the app must not call it. The user still gets the
+    # notification; nothing tries to "fix" something Linux doesn't have.
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_permission_error = True
+    opened = []
+    messages = []
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append(True)
+    )
+    monkeypatch.setattr(
+        app_module.QSystemTrayIcon, "showMessage", lambda *args: messages.append(args)
+    )
+
+    app = _build_app(qapp, fakes)
+
+    assert opened == []  # macOS-only pane never opened on Linux
+    assert messages  # but the user is still told something is wrong
+    app.shutdown()
+
+
+def test_apply_hotkeys_notifies_on_wayland(qapp, config, fakes, monkeypatch):
+    # HotkeyUnavailable (e.g. Wayland blocks global key grabs) is unactionable:
+    # show the reason so the user knows why their hotkey is dead, but never
+    # spawn the macOS settings pane — there is no permission to grant.
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_unavailable = "Wayland blocks global key grabs."
+    opened = []
+    messages = []
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append(True)
+    )
+    monkeypatch.setattr(
+        app_module.QSystemTrayIcon, "showMessage", lambda *args: messages.append(args)
+    )
+
+    app = _build_app(qapp, fakes)
+
+    assert opened == []
+    assert messages, "user must be told why hotkeys are silent"
+    body = " ".join(str(part) for part in messages[0])
+    assert "Wayland" in body
     app.shutdown()
 
 
@@ -334,6 +588,30 @@ def test_smart_capture_fails_closed_on_corrupt_blocklist(qapp, config, fakes, mo
     app._capture_smart()
     assert grabbed == []  # no overlay built, no pixels grabbed
     assert notified
+    app.shutdown()
+
+
+def test_smart_capture_survives_list_windows_unsupported(qapp, config, fakes, monkeypatch):
+    # The Linux QtGrabCapturer raises CapabilityUnsupported from list_windows()
+    # because X11 window enumeration isn't implemented on that backend. The
+    # smart-capture flow has to keep working — the overlay just loses the
+    # per-window click target and degrades to region / full-screen modes.
+    from shotquill.headless import CapabilityUnsupported
+
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported(
+            "list_windows", "window enumeration is not implemented on this backend yet"
+        )
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    # The call must not raise and must leave the blocked-window set empty —
+    # nothing was enumerable, so nothing can be marked blocked; the overlay
+    # just degrades to region / full-screen modes.
+    app._capture_smart()
+    assert app._blocked_windows == {}
     app.shutdown()
 
 

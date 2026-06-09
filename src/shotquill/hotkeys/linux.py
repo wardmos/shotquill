@@ -15,19 +15,37 @@ server; the binding bookkeeping and match logic here are covered by driving
 ``on_press``/``on_release`` with synthetic keys.
 
 Wayland is out of scope: it blocks global key grabs by design (a compositor-level
-shortcut or the GlobalShortcuts portal is needed instead).
+shortcut or the GlobalShortcuts portal is needed instead). ``start`` detects this
+up front and raises :class:`HotkeyUnavailable` rather than spinning up a listener
+that would never see events — silent failure is the worst outcome here, since the
+user has visibly configured hotkeys in Settings.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from pynput import keyboard
 from pynput.keyboard import Key
 
-from shotquill.hotkeys.base import HotkeyManager
+from shotquill.hotkeys.base import HotkeyManager, HotkeyUnavailable
 from shotquill.hotkeys.combo import parse_combo
+
+
+def _is_wayland_session() -> bool:
+    """True on a real Wayland desktop, where global key grabs are refused.
+
+    Mirrors :func:`shotquill.headless._is_wayland_session`: an explicit
+    ``QT_QPA_PLATFORM`` (e.g. tests forcing ``offscreen``) wins so the manager
+    stays exercisable without a live X server."""
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return False
+    return os.environ.get("XDG_SESSION_TYPE") == "wayland" or bool(
+        os.environ.get("WAYLAND_DISPLAY")
+    )
+
 
 # Every pynput modifier key (generic + left/right variants) -> canonical name.
 # Key.cmd is the Super/Meta key on Linux.
@@ -94,7 +112,17 @@ class LinuxHotkeyManager(HotkeyManager):
         Like macOS, re-applying settings hot-swaps ``_compiled`` (an atomic
         reference swap, safe against the listener thread's reads) and leaves any
         running listener alone, so changing a hotkey never restarts the thread.
+
+        On a Wayland session :class:`HotkeyUnavailable` is raised before spinning
+        up a listener: pynput's X11 backend would start cleanly but never receive
+        events under a Wayland compositor, leaving the user with a silently dead
+        hotkey. Failing loudly here lets the app fall back to the menu/tray.
         """
+        if self._bindings and _is_wayland_session():
+            raise HotkeyUnavailable(
+                "Wayland blocks global key grabs; use the tray menu or bind a "
+                "compositor shortcut to `squill capture`."
+            )
         self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
         if self._listener is not None:
             return  # already listening: the new bindings are live immediately

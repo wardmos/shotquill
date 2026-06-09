@@ -12,6 +12,20 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 
+class HotkeyUnavailable(RuntimeError):
+    """The session refuses global hotkey grabs (e.g. Wayland blocks them).
+
+    Distinct from ``PermissionError`` (which means "ask the user for a grant
+    we can guide them to"): there is nothing actionable from inside the app
+    here, so the caller should surface the reason and keep the menu/tray
+    actions working as the fallback path. ``reason`` is a human-readable
+    explanation the app can show in a notification."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class HotkeyManager(ABC):
     """Registers global hotkeys and invokes callbacks when they are pressed."""
 

@@ -9,6 +9,8 @@ placeholders are returned as templates for the caller to ``.format()``.
 
 from __future__ import annotations
 
+import sys
+
 DEFAULT_LANGUAGE = "en"
 LANGUAGES = ("en", "zh")
 
@@ -45,6 +47,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "Enable it in System Settings, then restart ShotQuill.",
         "zh": "全局快捷键需要输入监控权限。请在系统设置中启用后重启 ShotQuill。",
     },
+    "notify.hotkeys_unavailable": {
+        "en": "Global hotkeys are unavailable: {reason} The tray menu still works.",
+        "zh": "全局快捷键不可用：{reason} 你仍然可以使用托盘菜单。",
+    },
     "smart.hint": {
         "en": "Click a window · drag for a region · click here for full screen"
         " · arrows/WASD nudge the cursor · Esc cancels",
@@ -53,6 +59,33 @@ _STRINGS: dict[str, dict[str, str]] = {
     "editor.adjust_hint": {
         "en": "Arrows move crop · ⌥ resizes · ⇧ ×10 · until first annotation",
         "zh": "方向键微调选区 · ⌥ 调大小 · ⇧ ×10 · 开始标注后固定",
+    },
+    # Linux/X11 variant: ⌥/⇧ are macOS keycap glyphs that speak Mac convention.
+    # The editor picks this variant off-darwin so the hint reads natively.
+    "editor.adjust_hint_text": {
+        "en": "Arrows move crop · Alt resizes · Shift ×10 · until first annotation",
+        "zh": "方向键微调选区 · Alt 调大小 · Shift ×10 · 开始标注后固定",
+    },
+    # System-tray missing dialog (shown when QSystemTrayIcon.isSystemTrayAvailable
+    # is false — GNOME 42+ shipped without legacy tray support is the common case).
+    "tray.unavailable_title": {
+        "en": "ShotQuill needs a system tray",
+        "zh": "ShotQuill 需要系统托盘",
+    },
+    "tray.unavailable_body_linux": {
+        "en": "No system tray was detected. ShotQuill lives in the tray, so it "
+        "can't start without one. On GNOME 42+ install the AppIndicator "
+        "extension; KDE, XFCE, MATE and Cinnamon ship one by default. "
+        "The `squill` CLI and MCP server still work without a tray.",
+        "zh": "没有检测到系统托盘。ShotQuill 常驻托盘，没有托盘就无法启动。"
+        "GNOME 42+ 请安装 AppIndicator 扩展；KDE / XFCE / MATE / Cinnamon "
+        "默认就带托盘。`squill` 命令行和 MCP 服务在没有托盘的情况下仍可使用。",
+    },
+    "tray.unavailable_body_generic": {
+        "en": "No system tray / menu bar is available on this system, so "
+        "ShotQuill can't start. The `squill` CLI and MCP server still work.",
+        "zh": "本系统没有可用的托盘或菜单栏，ShotQuill 无法启动。"
+        "`squill` 命令行和 MCP 服务仍可使用。",
     },
     "about.body": {"en": "Screenshot & annotation tool.", "zh": "截图与标注工具。"},
     # Editor window titles
@@ -236,3 +269,25 @@ def t(key: str) -> str:
     if entry is None:
         return key
     return entry.get(_current) or entry.get(DEFAULT_LANGUAGE) or key
+
+
+def adjust_hint_key() -> str:
+    """The right ``editor.adjust_hint*`` key for this platform.
+
+    macOS uses ``⌥`` / ``⇧`` keycap glyphs throughout its UI, so the original
+    hint reads natively there. Linux/X11 (and other) users expect ``Alt`` /
+    ``Shift`` text, so they get a sibling string. Centralised here so the
+    editor doesn't repeat the ``sys.platform`` check inline.
+    """
+    return "editor.adjust_hint" if sys.platform == "darwin" else "editor.adjust_hint_text"
+
+
+def tray_unavailable_body_key() -> str:
+    """The right ``tray.unavailable_body_*`` key for this platform.
+
+    Linux gets a body that points at the AppIndicator extension (the common
+    GNOME 42+ stumble); other platforms get a shorter generic body.
+    """
+    if sys.platform.startswith("linux"):
+        return "tray.unavailable_body_linux"
+    return "tray.unavailable_body_generic"

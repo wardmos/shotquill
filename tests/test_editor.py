@@ -588,7 +588,9 @@ def test_adjust_hint_shown_until_first_annotation(qtbot, config):
     from shotquill import i18n
 
     window = _region_editor(qtbot, config)
-    assert window.windowTitle() == i18n.t("editor.adjust_hint")
+    # The editor picks the hint key per platform (⌥/⇧ on macOS, Alt/Shift
+    # elsewhere); use the same selector so the test passes on either host.
+    assert window.windowTitle() == i18n.t(i18n.adjust_hint_key())
     window._canvas.undo_stack().push(QUndoCommand())
     assert window.windowTitle() == i18n.t("title.annotate")
 

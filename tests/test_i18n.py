@@ -83,3 +83,26 @@ def test_key_display_name_keeps_modifier_prefix_and_unknown_keys():
     assert i18n.key_display_name("Ctrl+Return") == "Ctrl+回车"
     assert i18n.key_display_name("Ctrl+D") == "Ctrl+D"
     assert i18n.key_display_name("") == ""
+
+
+def test_adjust_hint_key_picks_per_platform(monkeypatch):
+    # Mac users see the keycap glyphs (⌥/⇧) they recognise from native apps;
+    # everyone else gets the text variant so the hint doesn't look alien.
+    monkeypatch.setattr(i18n.sys, "platform", "darwin")
+    assert i18n.adjust_hint_key() == "editor.adjust_hint"
+    monkeypatch.setattr(i18n.sys, "platform", "linux")
+    assert i18n.adjust_hint_key() == "editor.adjust_hint_text"
+    monkeypatch.setattr(i18n.sys, "platform", "win32")
+    # Off-mac falls through to the text variant — Windows uses Alt/Shift too.
+    assert i18n.adjust_hint_key() == "editor.adjust_hint_text"
+
+
+def test_tray_unavailable_body_key_picks_per_platform(monkeypatch):
+    # Linux gets the AppIndicator-extension pointer (the common GNOME 42+
+    # stumble); macOS and Windows get the shorter generic body.
+    monkeypatch.setattr(i18n.sys, "platform", "linux")
+    assert i18n.tray_unavailable_body_key() == "tray.unavailable_body_linux"
+    monkeypatch.setattr(i18n.sys, "platform", "darwin")
+    assert i18n.tray_unavailable_body_key() == "tray.unavailable_body_generic"
+    monkeypatch.setattr(i18n.sys, "platform", "win32")
+    assert i18n.tray_unavailable_body_key() == "tray.unavailable_body_generic"

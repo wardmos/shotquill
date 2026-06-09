@@ -25,6 +25,7 @@ from shotquill.autostart import get_manager as get_autostart_manager
 from shotquill.config import Config, human_readable_hotkey
 from shotquill.headless import get_capturer
 from shotquill.hotkeys import get_manager as get_hotkey_manager
+from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow, RegionContext
@@ -45,20 +46,44 @@ def _build_icon() -> QIcon:
     glyph — invisible on dark panels — so there we draw a self-contained icon:
     a black tile with the "S" painted in white. The colored Launchpad icon is a
     separate ``.icns`` and is unaffected.
+
+    For non-macOS tray icons we attach multiple pixel sizes (16/22/24/32/48/64)
+    so Qt can pick the right one for a HiDPI panel; a single 64px pixmap would
+    otherwise be downscaled per-frame and read as a soft blob on standard-DPI
+    panels and a blurry one on HiDPI.
     """
     is_mac = sys.platform == "darwin"
-    pixmap = QPixmap(64, 64)
+    if is_mac:
+        # macOS reads a single template pixmap; AppKit composites it per-DPI.
+        pixmap = _render_tray_pixmap(64, is_mac=True)
+        icon = QIcon(pixmap)
+        icon.setIsMask(True)  # tell macOS to render it as a template image
+        return icon
+    icon = QIcon()
+    for size in (16, 22, 24, 32, 48, 64):
+        icon.addPixmap(_render_tray_pixmap(size, is_mac=False))
+    return icon
+
+
+def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
+    """Render the rounded-square "S" tray glyph at ``size``×``size`` pixels.
+
+    The proportions (corner radius, tile padding, glyph height) are all derived
+    from ``size`` so smaller pixmaps stay legible — at 16px the glyph dominates
+    the tile, at 64px there is breathing room. macOS gets the "S" knocked out of
+    a black mask; everywhere else the glyph is painted white so the tile reads
+    on dark panels without relying on the desktop to tint it.
+    """
+    pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setPen(Qt.NoPen)
     painter.setBrush(QColor("black"))
-    painter.drawRoundedRect(6, 6, 52, 52, 14, 14)
-    # Size the glyph in pixels relative to the 64px canvas so it fills most of
-    # the tile — a small point size reads as a tiny letter once the whole tile
-    # is scaled down to menu-bar/tray height. On macOS the "S" is knocked out
-    # (so the menu-bar colour shows through the template); elsewhere it's
-    # painted white so the icon is visible on its own.
+    padding = max(1, round(size * 6 / 64))
+    radius = max(2, round(size * 14 / 64))
+    tile = size - 2 * padding
+    painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
     if is_mac:
         painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
         glyph_color = QColor("black")
@@ -66,16 +91,12 @@ def _build_icon() -> QIcon:
         glyph_color = QColor("white")
     font = QFont()
     font.setBold(True)
-    font.setPixelSize(46)
+    font.setPixelSize(max(8, round(size * 46 / 64)))
     painter.setFont(font)
     painter.setPen(glyph_color)
     painter.drawText(pixmap.rect(), Qt.AlignCenter, "S")
     painter.end()
-
-    icon = QIcon(pixmap)
-    if is_mac:
-        icon.setIsMask(True)  # tell macOS to render it as a template image
-    return icon
+    return pixmap
 
 
 class _HotkeyBridge(QObject):
@@ -183,9 +204,16 @@ class ShotquillApp(QObject):
                 self._hotkeys.register(self._config.hotkey(action), emit)
         try:
             self._hotkeys.start()
+        except HotkeyUnavailable as exc:
+            # The session refuses global grabs (e.g. Wayland). Nothing to grant
+            # — surface the reason once and keep the tray menu working.
+            self._notify(t("notify.hotkeys_unavailable").format(reason=exc.reason))
         except PermissionError:
             self._notify(t("notify.hotkeys_need_input_monitoring"))
-            permissions.open_input_monitoring_pane()
+            # The deep-link is macOS-specific (an x-apple-systempreferences URL
+            # opened via `open`); skip it elsewhere where it would be a no-op.
+            if sys.platform == "darwin":
+                permissions.open_input_monitoring_pane()
 
     def _shelve_settings_dialog(self) -> None:
         """Hide an open (modeless) Settings window while a capture runs.
@@ -516,7 +544,15 @@ def run() -> int:
     app.setQuitOnLastWindowClosed(False)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        print("No system tray / menu bar available on this system.", file=sys.stderr)
+        from shotquill.i18n import tray_unavailable_body_key
+
+        title = t("tray.unavailable_title")
+        body = t(tray_unavailable_body_key())
+        # A user double-clicking the desktop entry sees nothing if we only
+        # print and exit — show a proper dialog so the failure isn't silent,
+        # and keep the stderr line for the CLI/launcher path.
+        print(f"{title}: {body}", file=sys.stderr)
+        QMessageBox.critical(None, title, body)
         return 1
 
     instance = ShotquillApp(app)

@@ -14,6 +14,8 @@ QApplication.
 
 from __future__ import annotations
 
+import sys
+
 from shotquill.i18n import DEFAULT_LANGUAGE
 
 DEFAULT_HOTKEYS: dict[str, str] = {
@@ -102,11 +104,34 @@ _MODIFIER_SYMBOLS = {
     "<shift>": "⇧",
 }
 
+# Text labels used everywhere outside macOS. The ``+`` is baked in so we can
+# still ``"".join(...)`` the parts; the final segment (the letter) has no
+# trailing ``+`` because it isn't in this dict and falls through to ``.upper()``.
+# ``<cmd>`` becomes ``Super+`` because that's what the Super/Meta key is called
+# in the freedesktop convention (Linux/X11/Wayland), not ``Cmd+``.
+_MODIFIER_TEXT = {
+    "<alt>": "Alt+",
+    "<cmd>": "Super+",
+    "<ctrl>": "Ctrl+",
+    "<shift>": "Shift+",
+}
 
-def human_readable_hotkey(combo: str) -> str:
-    """Convert a pynput combo like ``<alt>+a`` into a display string like ``⌥A``."""
+
+def human_readable_hotkey(combo: str, *, mac_style: bool | None = None) -> str:
+    """Convert a pynput combo like ``<alt>+a`` into a display string.
+
+    ``mac_style=True`` renders Apple key symbols (``⌥A``) — the right look in
+    macOS menus, where every native app uses them. ``mac_style=False`` renders
+    text labels (``Alt+A``), which is what every Linux desktop uses and what a
+    Linux user expects to see in a tray menu. ``mac_style=None`` (the default)
+    picks automatically by ``sys.platform`` so callers don't have to thread
+    the platform through every menu rebuild.
+    """
+    if mac_style is None:
+        mac_style = sys.platform == "darwin"
     parts = [p.strip() for p in combo.split("+") if p.strip()]
-    return "".join(_MODIFIER_SYMBOLS.get(p.lower(), p.upper()) for p in parts)
+    table = _MODIFIER_SYMBOLS if mac_style else _MODIFIER_TEXT
+    return "".join(table.get(p.lower(), p.upper()) for p in parts)
 
 
 class Config:

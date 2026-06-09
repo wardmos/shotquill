@@ -34,10 +34,34 @@ def test_default_image_format():
     assert DEFAULT_IMAGE_FORMAT == "png"
 
 
-def test_human_readable_hotkey():
+def test_human_readable_hotkey_mac_style():
+    # mac_style=True forces the Apple keycap glyphs regardless of the host
+    # platform — matching macOS menu convention.
+    assert human_readable_hotkey("<alt>+a", mac_style=True) == "⌥A"
+    assert human_readable_hotkey("<alt>+s", mac_style=True) == "⌥S"
+    assert human_readable_hotkey("<ctrl>+<cmd>+1", mac_style=True) == "⌃⌘1"
+
+
+def test_human_readable_hotkey_text_style_for_linux():
+    # mac_style=False renders the labels every Linux desktop actually uses —
+    # `⌥A` in a GNOME tray menu reads as a hieroglyph; `Alt+A` reads as the
+    # key the user already presses. ``<cmd>`` becomes ``Super+`` because the
+    # Mac Cmd key maps to Super/Meta on Linux keyboards.
+    assert human_readable_hotkey("<alt>+a", mac_style=False) == "Alt+A"
+    assert human_readable_hotkey("<alt>+s", mac_style=False) == "Alt+S"
+    assert human_readable_hotkey("<ctrl>+<shift>+f5", mac_style=False) == "Ctrl+Shift+F5"
+    assert human_readable_hotkey("<cmd>+a", mac_style=False) == "Super+A"
+
+
+def test_human_readable_hotkey_default_follows_platform(monkeypatch):
+    # The default (mac_style=None) auto-detects so app code doesn't have to
+    # thread the platform through every menu rebuild.
+    import shotquill.config as config_module
+
+    monkeypatch.setattr(config_module.sys, "platform", "darwin", raising=False)
     assert human_readable_hotkey("<alt>+a") == "⌥A"
-    assert human_readable_hotkey("<alt>+s") == "⌥S"
-    assert human_readable_hotkey("<ctrl>+<cmd>+1") == "⌃⌘1"
+    monkeypatch.setattr(config_module.sys, "platform", "linux", raising=False)
+    assert human_readable_hotkey("<alt>+a") == "Alt+A"
 
 
 def test_feedback_defaults():
@@ -88,8 +112,12 @@ def test_to_bool_parses_qsettings_strings():
 
 
 def test_human_readable_hotkey_ignores_blank_segments():
-    assert human_readable_hotkey("") == ""
-    assert human_readable_hotkey("<alt>++a") == "⌥A"
+    # Pin mac_style so the assertion doesn't drift with the host platform
+    # (default = sys.platform-dependent, ``Alt+A`` off-mac).
+    assert human_readable_hotkey("", mac_style=True) == ""
+    assert human_readable_hotkey("<alt>++a", mac_style=True) == "⌥A"
+    assert human_readable_hotkey("", mac_style=False) == ""
+    assert human_readable_hotkey("<alt>++a", mac_style=False) == "Alt+A"
 
 
 # --- Config (backed by an isolated temp QSettings via the `config` fixture) ---
