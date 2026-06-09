@@ -254,6 +254,51 @@ def test_window_preview_skips_blocklisted_window(qapp, config, fakes):
     app.shutdown()
 
 
+def _corrupt_blocklist():
+    from shotquill import paths
+
+    paths.blocklist_path().write_text("{ not valid json", encoding="utf-8")
+
+
+def test_abort_on_bad_blocklist_signals_and_notifies(qapp, config, fakes, monkeypatch):
+    # A present-but-corrupt list can't tell us what to protect, so the probe
+    # reports "abort" and warns the user — the GUI fails closed like headless.
+    _corrupt_blocklist()
+    app = _build_app(qapp, fakes)
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+    assert app._abort_on_bad_blocklist() is True
+    assert notified and "blocklist" in notified[0].casefold()
+    app.shutdown()
+
+
+def test_capture_fullscreen_fails_closed_on_corrupt_blocklist(qapp, config, fakes, monkeypatch):
+    # The capture bails before grabbing any pixels — never hands a frame to the
+    # editor/clipboard when it cannot honour the user's blocklist.
+    _corrupt_blocklist()
+    app = _build_app(qapp, fakes)
+    grabbed, delivered, notified = [], [], []
+    monkeypatch.setattr(app, "_grab", lambda: grabbed.append(True))
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_fullscreen()
+    assert grabbed == [] and delivered == []  # aborted before grabbing
+    assert notified  # user told why
+    app.shutdown()
+
+
+def test_smart_capture_fails_closed_on_corrupt_blocklist(qapp, config, fakes, monkeypatch):
+    _corrupt_blocklist()
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []  # no overlay built, no pixels grabbed
+    assert notified
+    app.shutdown()
+
+
 def test_smart_capture_marks_blocklisted_windows(qapp, config, fakes, monkeypatch):
     capturer, _hotkeys, _autostart = fakes
     monkeypatch.setattr(

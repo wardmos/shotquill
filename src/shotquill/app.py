@@ -204,6 +204,9 @@ class ShotquillApp(QObject):
     @Slot()
     def _capture_fullscreen(self) -> None:
         self._shelve_settings_dialog()
+        if self._abort_on_bad_blocklist():
+            self._unshelve_settings_dialog()
+            return
         try:
             screenshot = self._grab()
         finally:
@@ -214,6 +217,9 @@ class ShotquillApp(QObject):
     @Slot()
     def _capture_smart(self) -> None:
         self._shelve_settings_dialog()
+        if self._abort_on_bad_blocklist():
+            self._unshelve_settings_dialog()
+            return
         # Snapshot the window list *before* showing the overlay so our own
         # window isn't a target. An empty/failed list is fine — the overlay
         # then only offers full-screen and region modes.
@@ -291,13 +297,27 @@ class ShotquillApp(QObject):
     def _active_blocklist(self) -> bl.Blocklist:
         """The blocklist, reloaded per capture so Settings edits take effect.
 
-        A corrupt file is treated as empty here (the GUI is interactive — the
-        Settings editor surfaces the problem); the headless surface fails closed
-        instead, where there is no one watching."""
+        Raises :class:`bl.BlocklistError` on a corrupt file rather than
+        swallowing it: a present-but-broken list means the user opted into
+        protection that is now unreadable, so we cannot tell what to redact.
+        Capture entry points fail closed on this (see
+        :meth:`_abort_on_bad_blocklist`) — silently treating it as empty would
+        hand a blocked app to the editor or clipboard, the exact leak the
+        blocklist exists to prevent."""
+        return bl.load()
+
+    def _abort_on_bad_blocklist(self) -> bool:
+        """True when the blocklist is unreadable — caller must abort the capture.
+
+        Probes the list once up front and notifies on corruption, so a capture
+        bails before grabbing pixels rather than mid-flight. A missing or valid
+        list (the common case) returns False and the capture proceeds."""
         try:
-            return bl.load()
-        except bl.BlocklistError:
-            return bl.Blocklist()
+            self._active_blocklist()
+        except bl.BlocklistError as exc:
+            self._notify(t("notify.blocklist_unreadable").format(error=exc))
+            return True
+        return False
 
     def _redact_blocked(self, result):
         """Paint solid blocks over any blocklisted window in a full-screen grab,

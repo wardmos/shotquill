@@ -29,6 +29,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "{app} is on your blocklist — ShotQuill won't capture it.",
         "zh": "{app} 在你的排除名单里——ShotQuill 不会截取它。",
     },
+    "notify.blocklist_unreadable": {
+        "en": "Your blocklist couldn't be read, so ShotQuill won't capture "
+        "(it can't tell what to protect). Fix it in Settings. ({error})",
+        "zh": "无法读取你的排除名单，ShotQuill 不会截图"
+        "（它无法判断该保护什么）。请在设置里修复。（{error}）",
+    },
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.open_folder_failed": {
         "en": "Couldn't open the save folder: {error}",
