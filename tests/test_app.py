@@ -82,7 +82,7 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
 
 def test_grab_returns_qimage_on_success(qapp, config, fakes):
     app = _build_app(qapp, fakes)
-    image = app._grab()
+    image = app._grab(bl.Blocklist())
     assert image is not None
     assert (image.width(), image.height()) == (4, 3)
     app.shutdown()
@@ -92,7 +92,7 @@ def test_grab_returns_none_on_capture_failure(qapp, config, fakes):
     capturer, _hotkeys, _autostart = fakes
     app = _build_app(qapp, fakes)
     capturer.fail = True
-    assert app._grab() is None  # error is reported via the tray, not raised
+    assert app._grab(bl.Blocklist()) is None  # error is reported via the tray, not raised
     app.shutdown()
 
 
@@ -215,7 +215,7 @@ def test_grab_redacts_blocklisted_window(qapp, config, fakes, monkeypatch):
     )
     _block(bundle_id="com.1password.1password")
     app = _build_app(qapp, fakes)
-    image = app._grab()
+    image = app._grab(bl.load())
     assert image.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)  # window area blacked out
     assert image.pixelColor(3, 2).getRgb()[:3] == (255, 255, 255)  # the rest untouched
     app.shutdown()
@@ -227,7 +227,7 @@ def test_grab_unchanged_without_blocklist(qapp, config, fakes, monkeypatch):
         capturer, "list_windows", lambda: [WindowInfo(1, "1Password", "", Rect(0, 0, 2, 2))]
     )
     app = _build_app(qapp, fakes)  # no blocklist file → empty
-    image = app._grab()
+    image = app._grab(bl.Blocklist())
     assert image.pixelColor(0, 0).getRgb()[:3] == (255, 255, 255)  # nothing painted
     app.shutdown()
 
@@ -260,14 +260,15 @@ def _corrupt_blocklist():
     paths.blocklist_path().write_text("{ not valid json", encoding="utf-8")
 
 
-def test_abort_on_bad_blocklist_signals_and_notifies(qapp, config, fakes, monkeypatch):
-    # A present-but-corrupt list can't tell us what to protect, so the probe
-    # reports "abort" and warns the user — the GUI fails closed like headless.
+def test_load_blocklist_returns_none_and_notifies_on_corrupt(qapp, config, fakes, monkeypatch):
+    # A present-but-corrupt list can't tell us what to protect, so the load
+    # returns None (caller aborts) and warns the user — the GUI fails closed
+    # like headless.
     _corrupt_blocklist()
     app = _build_app(qapp, fakes)
     notified = []
     monkeypatch.setattr(app, "_notify", notified.append)
-    assert app._abort_on_bad_blocklist() is True
+    assert app._load_blocklist_or_abort() is None
     assert notified and "blocklist" in notified[0].casefold()
     app.shutdown()
 
@@ -278,7 +279,7 @@ def test_capture_fullscreen_fails_closed_on_corrupt_blocklist(qapp, config, fake
     _corrupt_blocklist()
     app = _build_app(qapp, fakes)
     grabbed, delivered, notified = [], [], []
-    monkeypatch.setattr(app, "_grab", lambda: grabbed.append(True))
+    monkeypatch.setattr(app, "_grab", lambda *a: grabbed.append(True))
     monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
     monkeypatch.setattr(app, "_notify", notified.append)
     app._capture_fullscreen()
@@ -291,7 +292,7 @@ def test_smart_capture_fails_closed_on_corrupt_blocklist(qapp, config, fakes, mo
     _corrupt_blocklist()
     app = _build_app(qapp, fakes)
     grabbed, notified = [], []
-    monkeypatch.setattr(app, "_grab", lambda: grabbed.append(True))
+    monkeypatch.setattr(app, "_grab", lambda *a: grabbed.append(True))
     monkeypatch.setattr(app, "_notify", notified.append)
     app._capture_smart()
     assert grabbed == []  # no overlay built, no pixels grabbed
