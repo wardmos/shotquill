@@ -69,3 +69,38 @@ jobs:
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: bash packaging/macos/update_tap.sh "${{ github.ref_name }}" "${{ steps.sha.outputs.arm_sha }}" "${{ steps.sha.outputs.intel_sha }}"
+
+  publish-pypi:
+    # `pipx install shotquill` / `pip install shotquill` — the primary channel
+    # for the CLI/MCP audience. The package is pure Python (one py3-none-any
+    # wheel covers every OS; PySide6 and the macOS-only pyobjc deps resolve at
+    # install time), so it builds anywhere; ubuntu is just the cheapest runner.
+    needs: build-macos  # don't publish a release the gated build/tests rejected
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      # OIDC token for PyPI Trusted Publishing — no API token stored in repo
+      # secrets. Configure the trusted publisher once on pypi.org (project
+      # shotquill, this repo + workflow `release.yml`, environment `pypi`).
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+      - name: Check metadata renders on PyPI
+        run: |
+          python -m pip install --upgrade twine
+          twine check dist/*
+      - name: Publish to PyPI
+        # Pinned to a commit SHA (supply-chain hardening); v1.14.0.
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        with:
+          # A re-run of the release (same tag/version) shouldn't fail on the
+          # immutable PyPI upload that already happened.
+          skip-existing: true

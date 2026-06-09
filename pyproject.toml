@@ -10,14 +10,21 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "wardmos" }]
-keywords = ["screenshot", "annotation", "macos", "qt", "pyside6"]
+keywords = ["screenshot", "annotation", "macos", "linux", "cli", "mcp", "qt", "pyside6"]
 classifiers = [
     "Environment :: MacOS X",
+    "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Graphics :: Capture :: Screen Capture",
+    "Topic :: Utilities",
 ]
+
 dependencies = [
     "PySide6>=6.6",
     "pynput>=1.7",
@@ -26,6 +33,11 @@ dependencies = [
     "pyobjc-framework-ScreenCaptureKit>=10.0 ; sys_platform == 'darwin'",
     "pyobjc-framework-Vision>=10.0 ; sys_platform == 'darwin'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/wardmos/shotquill"
+Repository = "https://github.com/wardmos/shotquill"
+Issues = "https://github.com/wardmos/shotquill/issues"
 
 [project.optional-dependencies]
 dev = [
