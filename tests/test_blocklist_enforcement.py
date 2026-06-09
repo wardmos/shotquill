@@ -171,3 +171,26 @@ def test_fullscreen_redaction_gap_is_logged_when_enumeration_unavailable(tmp_pat
     result, _, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST)
     assert not _all_black(result)  # cannot enumerate → frame left as-is
     assert "redact_unavailable" in log.read_text(encoding="utf-8")
+
+
+def test_fullscreen_redaction_respects_reported_origin():
+    # A multi-monitor grab whose top-left is logical (100, 50): a blocked window
+    # at (100, 50) must map to the image's (0, 0), not be shifted off-frame. With
+    # the old (0, 0) assumption nothing would be redacted, so this pins the fix.
+    class OffsetCapturer:
+        include_cursor = False
+
+        def list_windows(self):
+            return [
+                WindowInfo(
+                    1, "1Password", "", Rect(100, 50, 2, 2), bundle_id="com.1password.1password"
+                )
+            ]
+
+        def capture_fullscreen(self):
+            return CaptureResult(
+                width=2, height=2, scale=1.0, pixels=bytes([200] * 16), origin_x=100, origin_y=50
+            )
+
+    result, _, _ = headless.perform_capture(OffsetCapturer(), blocklist=ONEPW_LIST)
+    assert _all_black(result)

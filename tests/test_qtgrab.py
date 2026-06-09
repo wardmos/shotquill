@@ -44,6 +44,19 @@ def test_region_outside_desktop_rejected(capturer):
         capturer.capture_region(Rect(x=99999, y=99999, width=10, height=10))
 
 
+def test_fullscreen_reports_virtual_origin(capturer):
+    from PySide6.QtGui import QGuiApplication
+
+    virtual = QGuiApplication.screens()[0].virtualGeometry()
+    result = capturer.capture_fullscreen()
+    assert (result.origin_x, result.origin_y) == (virtual.x(), virtual.y())
+
+
+def test_region_reports_its_origin(capturer):
+    result = capturer.capture_region(Rect(x=7, y=5, width=10, height=8))
+    assert (result.origin_x, result.origin_y) == (7, 5)
+
+
 def test_window_operations_are_typed_unsupported(capturer):
     with pytest.raises(headless.CapabilityUnsupported):
         capturer.list_windows()

@@ -186,12 +186,16 @@ def perform_capture(
         return result, target, 1
     result = capturer.capture_fullscreen()
     if blocklist:
-        # The composite's top-left is the desktop origin; (0, 0) for a single
-        # display or a primary at the origin. Multi-monitor layouts that place a
-        # display left of / above the primary need the real origin plumbed
-        # through — flagged for the macOS wiring pass.
+        # The capture reports its own logical top-left, so redaction maps window
+        # bounds correctly even on a multi-monitor desktop whose origin is not
+        # (0, 0) — a display placed left of / above the primary.
         result = _redact_blocked(
-            result, capturer, blocklist, origin=(0, 0), target="fullscreen", via=via
+            result,
+            capturer,
+            blocklist,
+            origin=(result.origin_x, result.origin_y),
+            target="fullscreen",
+            via=via,
         )
     return result, "fullscreen", 1
 

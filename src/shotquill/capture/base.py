@@ -29,6 +29,12 @@ class CaptureResult:
     ``premultiplied`` is True when the alpha channel is premultiplied into the
     colour channels (as macOS window captures are); the imaging layer picks the
     matching QImage format so transparent window corners render correctly.
+
+    ``origin_x`` / ``origin_y`` are the logical (point) coordinates of the
+    image's top-left in the same space as ``WindowInfo.bounds`` — ``(0, 0)`` for
+    a single display or a primary at the origin, but the real (possibly
+    negative) origin for a multi-monitor full-screen grab, so blocklist
+    redaction maps window bounds onto the right pixels.
     """
 
     width: int
@@ -36,6 +42,8 @@ class CaptureResult:
     scale: float
     pixels: bytes
     premultiplied: bool = False
+    origin_x: int = 0
+    origin_y: int = 0
 
 
 @dataclass(frozen=True)

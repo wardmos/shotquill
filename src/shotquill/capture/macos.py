@@ -23,6 +23,7 @@ not need to know about the capture backend.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
 
@@ -40,10 +41,14 @@ class MacScreenCapturer(ScreenCapturer):
         import Quartz
 
         result = self._sck_capture_fullscreen()
-        if result is not None:
-            return result
-        # CGRectInfinite spans every display in the virtual desktop.
-        return self._grab_rect(Quartz.CGRectInfinite)
+        if result is None:
+            # CGRectInfinite spans every display in the virtual desktop.
+            result = self._grab_rect(Quartz.CGRectInfinite)
+        # The composite's top-left is the union of every display's origin, which
+        # is not (0, 0) when a monitor sits left of / above the primary; tag it
+        # so blocklist redaction maps window bounds to the right pixels.
+        ox, oy = self._virtual_desktop_origin()
+        return replace(result, origin_x=ox, origin_y=oy)
 
     def capture_region(self, region: Rect) -> CaptureResult:
         # Unused at runtime (the app crops regions out of the full-screen grab),
@@ -51,7 +56,30 @@ class MacScreenCapturer(ScreenCapturer):
         import Quartz
 
         rect = Quartz.CGRectMake(region.x, region.y, region.width, region.height)
-        return self._grab_rect(rect)
+        result = self._grab_rect(rect)
+        return replace(result, origin_x=region.x, origin_y=region.y)
+
+    @staticmethod
+    def _virtual_desktop_origin() -> tuple[int, int]:  # pragma: no cover - macOS only
+        """Top-left (logical) of the whole virtual desktop = the minimum origin
+        over all active displays, in the same coordinate space as window
+        bounds. The origin is a best-effort hint for redaction, so any failure
+        reading the display list falls back to (0, 0) rather than breaking the
+        capture."""
+        try:
+            import Quartz
+
+            err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
+            if err or not count:
+                return (0, 0)
+            xs, ys = [], []
+            for did in ids[:count]:
+                bounds = Quartz.CGDisplayBounds(did)
+                xs.append(int(bounds.origin.x))
+                ys.append(int(bounds.origin.y))
+            return (min(xs), min(ys))
+        except Exception:
+            return (0, 0)
 
     @staticmethod
     def _grab_rect(rect) -> CaptureResult:

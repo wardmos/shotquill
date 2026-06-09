@@ -55,8 +55,8 @@ class QtGrabCapturer(ScreenCapturer):
         _ensure_gui_session()
 
     def capture_fullscreen(self) -> CaptureResult:
-        canvas, _virtual, dpr = self._grab_virtual_desktop()
-        return _qimage_to_result(canvas, dpr)
+        canvas, virtual, dpr = self._grab_virtual_desktop()
+        return _qimage_to_result(canvas, dpr, origin=(virtual.x(), virtual.y()))
 
     def capture_region(self, region: Rect) -> CaptureResult:
         from PySide6.QtCore import QRect
@@ -70,7 +70,9 @@ class QtGrabCapturer(ScreenCapturer):
         )
         if not crop.intersects(canvas.rect()):
             raise ValueError(f"region {region} is outside the virtual desktop")
-        return _qimage_to_result(canvas.copy(crop.intersected(canvas.rect())), dpr)
+        return _qimage_to_result(
+            canvas.copy(crop.intersected(canvas.rect())), dpr, origin=(region.x, region.y)
+        )
 
     def list_windows(self) -> list[WindowInfo]:
         raise CapabilityUnsupported(
@@ -113,7 +115,7 @@ class QtGrabCapturer(ScreenCapturer):
         return canvas, virtual, dpr
 
 
-def _qimage_to_result(image, scale: float) -> CaptureResult:
+def _qimage_to_result(image, scale: float, origin: tuple[int, int] = (0, 0)) -> CaptureResult:
     """Flatten a QImage into the raw-RGBA CaptureResult the pipeline expects."""
     from PySide6.QtGui import QImage
 
@@ -129,4 +131,6 @@ def _qimage_to_result(image, scale: float) -> CaptureResult:
         height=image.height(),
         scale=float(scale),
         pixels=raw,
+        origin_x=int(origin[0]),
+        origin_y=int(origin[1]),
     )
