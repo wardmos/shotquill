@@ -166,6 +166,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Open System Settings…",
         "zh": "打开系统设置…",
     },
+    "settings.blocklist": {"en": "Blocked apps", "zh": "排除名单"},
+    "settings.blocklist_button": {"en": "Blocked apps…", "zh": "排除名单…"},
+    # Blocklist editor
+    "blocklist.title": {"en": "Blocked apps", "zh": "排除应用"},
+    "blocklist.hint": {
+        "en": "These apps are never captured — refused outright, and painted out of "
+        "full-screen and region shots.",
+        "zh": "这些应用永不被截图——直接拒绝，并在全屏和区域截图中打码。",
+    },
+    "blocklist.type_bundle": {"en": "Bundle ID", "zh": "Bundle ID"},
+    "blocklist.type_name": {"en": "App name", "zh": "应用名"},
+    "blocklist.add": {"en": "Add", "zh": "添加"},
+    "blocklist.remove": {"en": "Remove", "zh": "移除"},
+    "blocklist.add_running": {"en": "Add running app…", "zh": "添加运行中的应用…"},
+    "blocklist.pick_running": {"en": "Pick a running app", "zh": "选择一个运行中的应用"},
+    "blocklist.corrupt": {
+        "en": "The blocklist file couldn't be read; starting from an empty list.",
+        "zh": "排除名单文件无法读取，已从空列表开始。",
+    },
 }
 
 # Localized display names for keys shown in tooltips, keyed by the Qt

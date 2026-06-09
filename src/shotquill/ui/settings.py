@@ -352,6 +352,10 @@ class SettingsDialog(QDialog):
         form.addRow(t("settings.permission_screen"), self._screen_permission)
         form.addRow(t("settings.permission_input"), self._input_permission)
 
+        self._blocklist_button = QPushButton(t("settings.blocklist_button"))
+        self._blocklist_button.clicked.connect(self._open_blocklist)
+        form.addRow(t("settings.blocklist"), self._blocklist_button)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
@@ -367,6 +371,13 @@ class SettingsDialog(QDialog):
             self._screen_permission.refresh()
             self._input_permission.refresh()
         super().changeEvent(event)
+
+    def _open_blocklist(self) -> None:
+        # The editor reads and writes the blocklist file directly (applying each
+        # change at once), so it stands apart from this dialog's OK/Cancel.
+        from shotquill.ui.blocklist_dialog import BlocklistDialog
+
+        BlocklistDialog(self).exec()
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(

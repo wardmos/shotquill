@@ -256,7 +256,8 @@ full-screen and region captures** (an opaque block painted over the pixels,
 not an overlay, so nothing sensitive survives in the image). This covers the
 GUI, the CLI, and the MCP server alike.
 
-Manage it from the command line — or hand-edit the JSON file directly:
+Manage it from **Settings → Blocked apps…** (on macOS, pick from the running
+apps), from the command line, or by hand-editing the JSON file directly:
 
 ```bash
 squill blocklist add --bundle-id com.1password.1password
@@ -311,6 +312,8 @@ Open **Settings…** from the menu-bar icon:
   default), each with its own enable toggle.
 - **After capture** — auto-save and/or auto-copy toggles (above).
 - **Include mouse pointer** (off) — composite the cursor into captures.
+- **Blocked apps…** — manage the [app blocklist](#app-blocklist) (apps that are
+  never captured).
 - **Launch at login** — installs a per-user `LaunchAgent`.
 - **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
 
