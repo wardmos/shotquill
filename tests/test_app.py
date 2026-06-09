@@ -16,6 +16,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
+from shotquill import blocklist as bl  # noqa: E402
+from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
 
 
 def _build_app(qapp, fakes):
@@ -190,6 +192,82 @@ def test_window_preview_image_returns_none_on_failure(qapp, config, fakes):
     assert app._window_preview_image(42) is not None
     capturer.fail = True
     assert app._window_preview_image(42) is None
+    app.shutdown()
+
+
+# --- blocklist enforcement on the GUI path ----------------------------------
+
+
+def _block(bundle_id=None, name=None):
+    bl.save(bl.Blocklist((bl.BlockRule(bundle_id=bundle_id, name=name),)))
+
+
+def test_grab_redacts_blocklisted_window(qapp, config, fakes, monkeypatch):
+    # A blocklisted window on screen is painted out of the full-screen grab —
+    # the same protection the CLI/MCP get, now on the human hotkey path.
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(
+        capturer,
+        "list_windows",
+        lambda: [
+            WindowInfo(1, "1Password", "", Rect(0, 0, 2, 2), bundle_id="com.1password.1password")
+        ],
+    )
+    _block(bundle_id="com.1password.1password")
+    app = _build_app(qapp, fakes)
+    image = app._grab()
+    assert image.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)  # window area blacked out
+    assert image.pixelColor(3, 2).getRgb()[:3] == (255, 255, 255)  # the rest untouched
+    app.shutdown()
+
+
+def test_grab_unchanged_without_blocklist(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(
+        capturer, "list_windows", lambda: [WindowInfo(1, "1Password", "", Rect(0, 0, 2, 2))]
+    )
+    app = _build_app(qapp, fakes)  # no blocklist file → empty
+    image = app._grab()
+    assert image.pixelColor(0, 0).getRgb()[:3] == (255, 255, 255)  # nothing painted
+    app.shutdown()
+
+
+def test_capture_window_image_refuses_blocklisted_window(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+
+    app = _build_app(qapp, fakes)
+    app._blocked_windows = {42: WindowInfo(42, "1Password", "", Rect(0, 0, 2, 2))}
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_window_image(42, QRect(0, 0, 2, 2))
+    assert delivered == []  # never captured
+    assert notified and "1Password" in notified[0]
+    app.shutdown()
+
+
+def test_window_preview_skips_blocklisted_window(qapp, config, fakes):
+    app = _build_app(qapp, fakes)
+    app._blocked_windows = {7: WindowInfo(7, "1Password", "", Rect(0, 0, 2, 2))}
+    assert app._window_preview_image(7) is None  # blocked → no preview pixels
+    assert app._window_preview_image(99) is not None  # others preview normally
+    app.shutdown()
+
+
+def test_smart_capture_marks_blocklisted_windows(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(
+        capturer,
+        "list_windows",
+        lambda: [
+            WindowInfo(1, "1Password", "", Rect(0, 0, 2, 2), bundle_id="com.1password.1password"),
+            WindowInfo(2, "Safari", "", Rect(0, 0, 2, 2), bundle_id="com.apple.safari"),
+        ],
+    )
+    _block(name="1password")
+    app = _build_app(qapp, fakes)
+    app._capture_smart()
+    assert set(app._blocked_windows) == {1}  # only the blocked window is marked
     app.shutdown()
 
 

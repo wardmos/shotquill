@@ -19,7 +19,8 @@ from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from shotquill import __version__, permissions
+from shotquill import __version__, permissions, redact
+from shotquill import blocklist as bl
 from shotquill.autostart.macos import MacAutostartManager
 from shotquill.capture.macos import MacScreenCapturer
 from shotquill.config import Config, human_readable_hotkey
@@ -98,6 +99,9 @@ class ShotquillApp(QObject):
         self._windows: list[object] = []  # keep overlays/editors alive
         self._settings_dialog: SettingsDialog | None = None
         self._settings_shelved = False  # Settings hidden while a capture runs
+        # Blocklisted windows on screen for the current smart-capture session
+        # (id → window); refused on click, skipped in the hover preview.
+        self._blocked_windows: dict[int, object] = {}
 
         self._bridge = _HotkeyBridge()
         # Hotkeys are emitted from pynput's listener thread. Force queued delivery
@@ -217,6 +221,9 @@ class ShotquillApp(QObject):
             windows = self._capturer.list_windows()
         except Exception:
             windows = []
+        # Resolve which on-screen windows are blocklisted up front, so the click
+        # and hover-preview paths can refuse / skip them without re-querying.
+        self._blocked_windows = {w.window_id: w for w in self._active_blocklist().blocked(windows)}
         screenshot = self._grab()
         if screenshot is None:
             self._unshelve_settings_dialog()
@@ -254,12 +261,18 @@ class ShotquillApp(QObject):
         the window server, which is thread-safe; QImage is GUI-thread-free).
         Returns None on failure — the overlay then keeps the frozen screenshot.
         """
+        if window_id in self._blocked_windows:
+            return None  # never preview a blocklisted window's pixels
         try:
             return result_to_qimage(self._capturer.capture_window(window_id))
         except Exception:
             return None
 
     def _capture_window_image(self, window_id: int, origin: QRect) -> None:
+        blocked = self._blocked_windows.get(window_id)
+        if blocked is not None:
+            self._notify(t("notify.capture_blocked").format(app=blocked.owner))
+            return
         try:
             result = self._capturer.capture_window(window_id)
         except Exception as exc:
@@ -273,7 +286,37 @@ class ShotquillApp(QObject):
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
             return None
-        return result_to_qimage(result)
+        return result_to_qimage(self._redact_blocked(result))
+
+    def _active_blocklist(self) -> bl.Blocklist:
+        """The blocklist, reloaded per capture so Settings edits take effect.
+
+        A corrupt file is treated as empty here (the GUI is interactive — the
+        Settings editor surfaces the problem); the headless surface fails closed
+        instead, where there is no one watching."""
+        try:
+            return bl.load()
+        except bl.BlocklistError:
+            return bl.Blocklist()
+
+    def _redact_blocked(self, result):
+        """Paint solid blocks over any blocklisted window in a full-screen grab,
+        so a blocked app never reaches the editor, clipboard, or a saved file —
+        the same protection the CLI/MCP get, on the human path."""
+        blocklist = self._active_blocklist()
+        if not blocklist:
+            return result
+        try:
+            windows = self._capturer.list_windows()
+        except Exception:
+            return result  # can't enumerate → can't redact (macOS always can)
+        blocked = blocklist.blocked(windows)
+        if not blocked:
+            return result
+        redacted, _ = redact.redact_bounds(
+            result, (result.origin_x, result.origin_y), [w.bounds for w in blocked]
+        )
+        return redacted
 
     def _notify(self, message: str) -> None:
         self._tray.showMessage("ShotQuill", message, QSystemTrayIcon.MessageIcon.Critical)

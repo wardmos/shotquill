@@ -25,6 +25,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.quit": {"en": "Quit ShotQuill", "zh": "退出 ShotQuill"},
     # Notifications / about
     "notify.capture_failed": {"en": "Capture failed: {error}", "zh": "截图失败：{error}"},
+    "notify.capture_blocked": {
+        "en": "{app} is on your blocklist — ShotQuill won't capture it.",
+        "zh": "{app} 在你的排除名单里——ShotQuill 不会截取它。",
+    },
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.open_folder_failed": {
         "en": "Couldn't open the save folder: {error}",
