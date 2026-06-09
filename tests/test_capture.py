@@ -65,8 +65,8 @@ def quartz(monkeypatch):
         macos.MacScreenCapturer,
         "_cgimage_to_result",
         staticmethod(
-            lambda cg: CaptureResult(
-                width=4, height=2, scale=1.0, pixels=b"x" * 32, premultiplied=True
+            lambda cg, scale=1.0: CaptureResult(
+                width=4, height=2, scale=scale, pixels=b"x" * 32, premultiplied=True
             )
         ),
     )
@@ -190,8 +190,11 @@ def test_sck_includes_cursor_when_opted_in(quartz, monkeypatch):
 
 def test_sck_requests_native_pixel_size(quartz, monkeypatch):
     _install_sck(monkeypatch, quartz, [_FakeDisplay(0, 0, 100, 50, scale=2.0)])
-    macos.MacScreenCapturer().capture_fullscreen()
+    result = macos.MacScreenCapturer().capture_fullscreen()
     assert (quartz["sck_width"], quartz["sck_height"]) == (200, 100)
+    # The Retina scale is reported (not hard-coded 1.0), so blocklist redaction
+    # maps logical window bounds onto the right physical pixels.
+    assert result.scale == 2.0
 
 
 def test_sck_multi_display_composites_into_virtual_desktop(quartz, monkeypatch):
@@ -203,6 +206,7 @@ def test_sck_multi_display_composites_into_virtual_desktop(quartz, monkeypatch):
     result = macos.MacScreenCapturer().capture_fullscreen()
     # Union of the frames is 180x50 points, rendered at the sharpest (2x) scale.
     assert (result.width, result.height) == (360, 100)
+    assert result.scale == 2.0  # reported so redaction maps bounds to pixels
     # Each display lands at its virtual-desktop position, y flipped for CG's
     # bottom-left-origin context.
     assert [rect for rect, _ in quartz["draws"]] == [

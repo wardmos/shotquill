@@ -40,14 +40,20 @@ class MacScreenCapturer(ScreenCapturer):
     def capture_fullscreen(self) -> CaptureResult:
         import Quartz
 
+        # Logical bounds of the whole virtual desktop: the top-left is the origin
+        # (not (0, 0) when a monitor sits left of / above the primary), and the
+        # logical width lets the legacy path recover its physical pixel scale.
+        ox, oy, logical_w, _ = self._virtual_desktop_bounds()
         result = self._sck_capture_fullscreen()
         if result is None:
-            # CGRectInfinite spans every display in the virtual desktop.
+            # CGRectInfinite spans every display; the image is physical (Retina)
+            # pixels but carries no scale of its own, so derive it from the
+            # physical-to-logical width ratio.
             result = self._grab_rect(Quartz.CGRectInfinite)
-        # The composite's top-left is the union of every display's origin, which
-        # is not (0, 0) when a monitor sits left of / above the primary; tag it
-        # so blocklist redaction maps window bounds to the right pixels.
-        ox, oy = self._virtual_desktop_origin()
+            scale = result.width / logical_w if logical_w else 1.0
+            result = replace(result, scale=scale)
+        # Tag the origin so blocklist redaction maps window bounds (logical) onto
+        # the right pixels; the SCK path already reports the correct scale.
         return replace(result, origin_x=ox, origin_y=oy)
 
     def capture_region(self, region: Rect) -> CaptureResult:
@@ -57,29 +63,34 @@ class MacScreenCapturer(ScreenCapturer):
 
         rect = Quartz.CGRectMake(region.x, region.y, region.width, region.height)
         result = self._grab_rect(rect)
-        return replace(result, origin_x=region.x, origin_y=region.y)
+        # Physical pixels of a region requested in logical points; scale is their
+        # ratio so redaction lands on the right pixels.
+        scale = result.width / region.width if region.width else 1.0
+        return replace(result, scale=scale, origin_x=region.x, origin_y=region.y)
 
     @staticmethod
-    def _virtual_desktop_origin() -> tuple[int, int]:  # pragma: no cover - macOS only
-        """Top-left (logical) of the whole virtual desktop = the minimum origin
-        over all active displays, in the same coordinate space as window
-        bounds. The origin is a best-effort hint for redaction, so any failure
-        reading the display list falls back to (0, 0) rather than breaking the
-        capture."""
+    def _virtual_desktop_bounds() -> tuple[int, int, int, int]:  # pragma: no cover - macOS only
+        """Logical bounds ``(x, y, width, height)`` of the whole virtual desktop
+        — the union of every active display's bounds, in the same coordinate
+        space as window bounds. Best-effort for redaction: any failure reading
+        the display list falls back to zeros rather than breaking the capture."""
         try:
             import Quartz
 
             err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
             if err or not count:
-                return (0, 0)
-            xs, ys = [], []
+                return (0, 0, 0, 0)
+            xs, ys, rights, bottoms = [], [], [], []
             for did in ids[:count]:
-                bounds = Quartz.CGDisplayBounds(did)
-                xs.append(int(bounds.origin.x))
-                ys.append(int(bounds.origin.y))
-            return (min(xs), min(ys))
+                b = Quartz.CGDisplayBounds(did)
+                xs.append(int(b.origin.x))
+                ys.append(int(b.origin.y))
+                rights.append(int(b.origin.x + b.size.width))
+                bottoms.append(int(b.origin.y + b.size.height))
+            x, y = min(xs), min(ys)
+            return (x, y, max(rights) - x, max(bottoms) - y)
         except Exception:
-            return (0, 0)
+            return (0, 0, 0, 0)
 
     @staticmethod
     def _grab_rect(rect) -> CaptureResult:
@@ -257,7 +268,7 @@ class MacScreenCapturer(ScreenCapturer):
                 scale = float(content_filter.pointPixelScale())
                 shots.append((display.frame(), scale, self._sck_screenshot(sck, content_filter)))
             if len(shots) == 1:
-                return self._cgimage_to_result(shots[0][2])
+                return self._cgimage_to_result(shots[0][2], scale=shots[0][1])
             return self._composite_displays(shots)
         except Exception:
             return None  # fall back to the legacy capture path
@@ -275,7 +286,8 @@ class MacScreenCapturer(ScreenCapturer):
             if target is None:
                 return None
             content_filter = sck.SCContentFilter.alloc().initWithDesktopIndependentWindow_(target)
-            return self._cgimage_to_result(self._sck_screenshot(sck, content_filter))
+            scale = float(content_filter.pointPixelScale())
+            return self._cgimage_to_result(self._sck_screenshot(sck, content_filter), scale=scale)
         except Exception:
             return None  # fall back to the legacy capture path
 
@@ -308,7 +320,7 @@ class MacScreenCapturer(ScreenCapturer):
             )
             Quartz.CGContextDrawImage(context, dest, image)
         return CaptureResult(
-            width=width, height=height, scale=1.0, pixels=bytes(buffer), premultiplied=True
+            width=width, height=height, scale=scale, pixels=bytes(buffer), premultiplied=True
         )
 
     # --- pixel plumbing -----------------------------------------------------
@@ -337,7 +349,7 @@ class MacScreenCapturer(ScreenCapturer):
         return buffer, context
 
     @staticmethod
-    def _cgimage_to_result(cg_image) -> CaptureResult:
+    def _cgimage_to_result(cg_image, scale: float = 1.0) -> CaptureResult:
         import Quartz
 
         width = int(Quartz.CGImageGetWidth(cg_image))
@@ -347,7 +359,7 @@ class MacScreenCapturer(ScreenCapturer):
         return CaptureResult(
             width=width,
             height=height,
-            scale=1.0,
+            scale=scale,
             pixels=bytes(buffer),
             premultiplied=True,
         )
