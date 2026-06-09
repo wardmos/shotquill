@@ -43,6 +43,20 @@ except Exception:  # pragma: no cover - only hit on a headless dev machine
         shift = object()
         shift_l = object()
         shift_r = object()
+        # Function keys, as real pynput exposes them (the Linux backend matches
+        # f1–f12 by Key member, since they carry no .char).
+        f1 = object()
+        f2 = object()
+        f3 = object()
+        f4 = object()
+        f5 = object()
+        f6 = object()
+        f7 = object()
+        f8 = object()
+        f9 = object()
+        f10 = object()
+        f11 = object()
+        f12 = object()
 
     class _StubListener:  # minimal stand-in; real behaviour is monkeypatched per-test
         def __init__(self, on_press=None, on_release=None) -> None:
