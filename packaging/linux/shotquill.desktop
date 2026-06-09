@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ShotQuill
+GenericName=Screenshot Tool
+Comment=Screenshot, annotation, and OCR — CLI/MCP on Linux
+Exec=squill
+Icon=shotquill
+Categories=Utility;Graphics;
+Terminal=true

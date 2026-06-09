@@ -104,3 +104,48 @@ jobs:
           # A re-run of the release (same tag/version) shouldn't fail on the
           # immutable PyPI upload that already happened.
           skip-existing: true
+
+  build-linux:
+    # Single-file AppImage: the CLI/MCP in a box for users who don't want pip.
+    # Built on ubuntu-22.04, so the glibc floor is 2.35 (Ubuntu 22.04+ /
+    # Debian 12+) — an older floor needs an older build base (a container).
+    needs: build-macos  # the GitHub Release exists by now; we add the AppImage to it
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: write  # action-gh-release uploads the AppImage to the release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # Same pinned build deps as the macOS bundle, for a reproducible build.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c packaging/constraints-release.txt -e ".[dev]" pyinstaller
+      - name: Build AppImage
+        run: bash packaging/linux/build_appimage.sh "${{ github.ref_name }}"
+      - name: Smoke-test the AppImage
+        # Proves the bundle launches on a clean runner (Python + Qt load), so a
+        # broken bundle fails the release instead of shipping.
+        run: |
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          img=$(echo dist/ShotQuill-*.AppImage)
+          chmod +x "$img"
+          "$img" --version
+          QT_QPA_PLATFORM=offscreen "$img" doctor
+      - name: Compute SHA256
+        run: |
+          cd dist
+          for img in ShotQuill-*.AppImage; do
+            sha256sum "$img" > "$img.sha256"
+          done
+      - name: Add AppImage to the release
+        # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          files: |
+            dist/ShotQuill-*.AppImage
+            dist/ShotQuill-*.AppImage.sha256
