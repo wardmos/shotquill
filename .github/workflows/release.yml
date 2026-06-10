@@ -127,6 +127,14 @@ jobs:
           pip install -c packaging/constraints-release.txt -e ".[dev]" pyinstaller
       - name: Build AppImage
         run: bash packaging/linux/build_appimage.sh "${{ github.ref_name }}"
+      - name: Install Qt runtime system libraries
+        # The AppImage deliberately doesn't bundle the EGL/GL stack (Mesa) —
+        # every desktop distro ships it with the graphical session. The bare
+        # server runner has no GUI stack at all, so install the same libs
+        # ci.yml uses for headless PySide6 before launching the bundle.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libdbus-1-3 libxkbcommon0
       - name: Smoke-test the AppImage
         # Proves the bundle launches on a clean runner (Python + Qt load), so a
         # broken bundle fails the release instead of shipping.
