@@ -150,18 +150,21 @@ class ScreenCapturer(ABC):
             raise CapabilityUnsupported("displays", "Qt reports no screens")
         primary = QGuiApplication.primaryScreen()
         ordered = [primary] + [s for s in screens if s is not primary] if primary else screens
-        return [
-            DisplayInfo(
-                index=i,
-                name=screen.name() or f"display {i}",
-                bounds=Rect(
-                    x=screen.geometry().x(),
-                    y=screen.geometry().y(),
-                    width=screen.geometry().width(),
-                    height=screen.geometry().height(),
-                ),
-                scale=float(screen.devicePixelRatio()),
-                primary=screen is primary,
+        displays = []
+        for i, screen in enumerate(ordered):
+            geometry = screen.geometry()
+            displays.append(
+                DisplayInfo(
+                    index=i,
+                    name=screen.name() or f"display {i}",
+                    bounds=Rect(
+                        x=geometry.x(),
+                        y=geometry.y(),
+                        width=geometry.width(),
+                        height=geometry.height(),
+                    ),
+                    scale=float(screen.devicePixelRatio()),
+                    primary=screen is primary,
+                )
             )
-            for i, screen in enumerate(ordered)
-        ]
+        return displays

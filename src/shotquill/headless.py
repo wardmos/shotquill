@@ -224,7 +224,14 @@ def perform_capture(
         picked = select_display(capturer.list_displays(), display)
         bounds = picked.bounds
         target = f"display {picked.index} ({bounds.width}x{bounds.height} at {bounds.x},{bounds.y})"
-        result = capturer.capture_region(bounds)
+        try:
+            result = capturer.capture_region(bounds)
+        except ValueError as exc:
+            # The index was valid at enumeration time, so bounds the backend now
+            # rejects mean the display changed under us (unplugged, or a Wayland
+            # frame that doesn't cover it). That is a re-list-and-re-pick signal
+            # for the caller, not invalid arguments and not a generic failure.
+            raise DisplayNotFound(f"{target} is no longer capturable: {exc}") from exc
         if blocklist:
             result = _redact_blocked(
                 result, capturer, blocklist, origin=(bounds.x, bounds.y), target=target, via=via
@@ -489,6 +496,8 @@ def _check_displays(capturer: ScreenCapturer) -> dict:
         displays = capturer.list_displays()
     except CapabilityUnsupported as exc:
         return {"capability": "displays", "available": False, "detail": exc.reason}
+    except Exception as exc:  # noqa: BLE001 - the doctor reports problems, it must not crash on one
+        return {"capability": "displays", "available": False, "detail": f"probe: {exc}"}
     described = ", ".join(
         f"{d.index}: {d.bounds.width}x{d.bounds.height} at {d.bounds.x},{d.bounds.y}"
         + (" (primary)" if d.primary else "")

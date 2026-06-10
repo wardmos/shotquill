@@ -96,6 +96,35 @@ def test_display_capture_unknown_index_raises_before_any_capture():
     assert cap.captured == []
 
 
+def test_display_capture_stale_bounds_is_no_match_not_invalid_arguments():
+    # The index was valid at enumeration time; bounds the backend then rejects
+    # (display unplugged, Wayland frame not covering it) must surface as the
+    # typed re-list-and-re-pick error, not a raw ValueError that the CLI maps
+    # to exit 1 and MCP mislabels invalid_arguments.
+    class StaleCapturer(FakeCapturer):
+        def capture_region(self, region):
+            raise ValueError(f"region {region} is outside the virtual desktop")
+
+    with pytest.raises(headless.DisplayNotFound) as exc:
+        headless.perform_capture(StaleCapturer(), display=1, blocklist=())
+    assert exc.value.exit_code == headless.EXIT_NO_MATCH
+    assert "display 1" in str(exc.value)
+
+
+def test_doctor_displays_check_survives_a_broken_backend():
+    # The doctor reports problems; it must not crash on one. A capturer whose
+    # list_displays blows up unexpectedly (e.g. a duck-typed fake without the
+    # method) reads as unavailable, not as a doctor traceback.
+    class NoDisplays:
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    check = headless._check_displays(NoDisplays())
+    assert check["capability"] == "displays"
+    assert check["available"] is False
+    assert "probe" in check["detail"]
+
+
 def test_display_capture_without_enumeration_logs_redaction_gap(monkeypatch, tmp_path):
     # With blocklist rules but no window enumeration the display frame cannot
     # be protected — same honest fallback as the region path: capture plainly

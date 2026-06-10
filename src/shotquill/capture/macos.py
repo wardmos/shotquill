@@ -74,7 +74,10 @@ class MacScreenCapturer(ScreenCapturer):
         macOS CLI never has to construct a QGuiApplication just to enumerate."""
         import Quartz
 
-        err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
+        # 128 is a hard cap, not an allocation: CG fills at most this many ids
+        # and reports how many it wrote. Anything beyond it is silently absent,
+        # so the cap is set far above any physically plumbable display count.
+        err, ids, count = Quartz.CGGetActiveDisplayList(128, None, None)
         if err or not count:
             from shotquill.headless import CapabilityUnsupported
 
@@ -108,27 +111,19 @@ class MacScreenCapturer(ScreenCapturer):
             )
         return displays
 
-    @staticmethod
-    def _virtual_desktop_bounds() -> tuple[int, int, int, int]:  # pragma: no cover - macOS only
+    def _virtual_desktop_bounds(self) -> tuple[int, int, int, int]:  # pragma: no cover - macOS only
         """Logical bounds ``(x, y, width, height)`` of the whole virtual desktop
-        — the union of every active display's bounds, in the same coordinate
-        space as window bounds. Best-effort for redaction: any failure reading
-        the display list falls back to zeros rather than breaking the capture."""
+        — the union of every active display's bounds (from ``list_displays``, so
+        the Quartz enumeration lives in one place), in the same coordinate space
+        as window bounds. Best-effort for redaction: any failure enumerating
+        falls back to zeros rather than breaking the capture."""
         try:
-            import Quartz
-
-            err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
-            if err or not count:
-                return (0, 0, 0, 0)
-            xs, ys, rights, bottoms = [], [], [], []
-            for did in ids[:count]:
-                b = Quartz.CGDisplayBounds(did)
-                xs.append(int(b.origin.x))
-                ys.append(int(b.origin.y))
-                rights.append(int(b.origin.x + b.size.width))
-                bottoms.append(int(b.origin.y + b.size.height))
-            x, y = min(xs), min(ys)
-            return (x, y, max(rights) - x, max(bottoms) - y)
+            bounds = [d.bounds for d in self.list_displays()]
+            x = min(b.x for b in bounds)
+            y = min(b.y for b in bounds)
+            right = max(b.x + b.width for b in bounds)
+            bottom = max(b.y + b.height for b in bounds)
+            return (x, y, right - x, bottom - y)
         except Exception:
             return (0, 0, 0, 0)
 
