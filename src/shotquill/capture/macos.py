@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 
-from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
+from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
 
 # ScreenCaptureKit calls are completion-handler based; we block the calling
 # thread until the handler fires. The timeout guards against a wedged capture
@@ -68,6 +68,45 @@ class MacScreenCapturer(ScreenCapturer):
         # ratio so redaction lands on the right pixels.
         scale = result.width / region.width if region.width else 1.0
         return replace(result, scale=scale, origin_x=region.x, origin_y=region.y)
+
+    def list_displays(self) -> list[DisplayInfo]:
+        """Quartz display list (primary first) — overrides the Qt default so the
+        macOS CLI never has to construct a QGuiApplication just to enumerate."""
+        import Quartz
+
+        err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
+        if err or not count:
+            from shotquill.headless import CapabilityUnsupported
+
+            raise CapabilityUnsupported("displays", "CGGetActiveDisplayList reported no displays")
+        main_id = Quartz.CGMainDisplayID()
+        ordered = sorted(ids[:count], key=lambda did: did != main_id)
+        displays = []
+        for i, did in enumerate(ordered):
+            b = Quartz.CGDisplayBounds(did)  # logical points, same space as windows
+            logical_w = int(b.size.width)
+            # Pixel ratio from the current display mode (2.0 on Retina); bounds
+            # stay logical so a display capture is a region capture of them.
+            try:
+                mode = Quartz.CGDisplayCopyDisplayMode(did)
+                scale = Quartz.CGDisplayModeGetPixelWidth(mode) / logical_w if logical_w else 1.0
+            except Exception:
+                scale = 1.0
+            displays.append(
+                DisplayInfo(
+                    index=i,
+                    name=f"display {did}",
+                    bounds=Rect(
+                        x=int(b.origin.x),
+                        y=int(b.origin.y),
+                        width=logical_w,
+                        height=int(b.size.height),
+                    ),
+                    scale=float(scale),
+                    primary=did == main_id,
+                )
+            )
+        return displays
 
     @staticmethod
     def _virtual_desktop_bounds() -> tuple[int, int, int, int]:  # pragma: no cover - macOS only

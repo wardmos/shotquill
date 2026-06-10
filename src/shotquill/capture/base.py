@@ -55,6 +55,25 @@ class CaptureResult:
 
 
 @dataclass(frozen=True)
+class DisplayInfo:
+    """A physical display (monitor) and where it sits on the virtual desktop.
+
+    ``index`` is the stable selection handle the CLI/MCP ``display`` option
+    takes — primary display first, the rest in the platform's enumeration
+    order. ``bounds`` is in logical (point) coordinates in the same space as
+    ``WindowInfo.bounds``, so a display capture is exactly a region capture of
+    its bounds. ``scale`` is the display's pixel ratio (best effort, 1.0 where
+    the platform does not expose it).
+    """
+
+    index: int
+    name: str
+    bounds: Rect
+    scale: float = 1.0
+    primary: bool = False
+
+
+@dataclass(frozen=True)
 class WindowInfo:
     """An on-screen application window: its id, owner app, title, and bounds.
 
@@ -103,4 +122,46 @@ class ScreenCapturer(ABC):
 
     @abstractmethod
     def capture_window(self, window_id: int) -> CaptureResult:
-        """Capture a single window's pixels at native resolution."""
+        """Capture a single window's pixels at native resolution.
+
+        ``list_displays`` below is deliberately *not* abstract: the Qt default
+        works for every current backend, and existing test fakes satisfy the
+        interface without knowing about displays."""
+
+    def list_displays(self) -> list[DisplayInfo]:
+        """List displays, primary first; a display capture is a region capture
+        of the returned bounds.
+
+        Default implementation reads Qt's screen list, which every current
+        backend can reach (the Linux backends already own a ``QGuiApplication``;
+        one is created here if needed). Backends with a more native source can
+        override.
+        """
+        from PySide6.QtGui import QGuiApplication
+
+        if QGuiApplication.instance() is None:
+            # Same on-demand app the Linux backends create; Qt keeps its own
+            # reference once constructed.
+            QGuiApplication([])
+        screens = QGuiApplication.screens()
+        if not screens:
+            from shotquill.headless import CapabilityUnsupported
+
+            raise CapabilityUnsupported("displays", "Qt reports no screens")
+        primary = QGuiApplication.primaryScreen()
+        ordered = [primary] + [s for s in screens if s is not primary] if primary else screens
+        return [
+            DisplayInfo(
+                index=i,
+                name=screen.name() or f"display {i}",
+                bounds=Rect(
+                    x=screen.geometry().x(),
+                    y=screen.geometry().y(),
+                    width=screen.geometry().width(),
+                    height=screen.geometry().height(),
+                ),
+                scale=float(screen.devicePixelRatio()),
+                primary=screen is primary,
+            )
+            for i, screen in enumerate(ordered)
+        ]

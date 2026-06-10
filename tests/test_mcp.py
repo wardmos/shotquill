@@ -16,7 +16,7 @@ import json
 import pytest
 
 from shotquill import audit, headless, mcp, paths
-from shotquill.capture.base import CaptureResult, Rect, WindowInfo
+from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, WindowInfo
 
 PNG_MAGIC = b"\x89PNG"
 
@@ -30,6 +30,12 @@ class FakeCapturer:
             WindowInfo(window_id=11, owner="Safari", title="GitHub", bounds=Rect(0, 25, 800, 600)),
             WindowInfo(window_id=22, owner="Safari", title="Docs", bounds=Rect(40, 25, 800, 600)),
             WindowInfo(window_id=33, owner="Notes", title="Scratch", bounds=Rect(5, 5, 300, 200)),
+        ]
+        self.displays = [
+            DisplayInfo(
+                index=0, name="built-in", bounds=Rect(0, 0, 1440, 900), scale=2.0, primary=True
+            ),
+            DisplayInfo(index=1, name="external", bounds=Rect(1440, -180, 1920, 1080)),
         ]
 
     def _result(self) -> CaptureResult:
@@ -52,6 +58,9 @@ class FakeCapturer:
 
     def list_windows(self) -> list[WindowInfo]:
         return self.windows
+
+    def list_displays(self) -> list[DisplayInfo]:
+        return self.displays
 
 
 @pytest.fixture(autouse=True)
@@ -147,9 +156,10 @@ def test_ping():
 def test_tools_list_descriptors():
     (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     tools = {tool["name"]: tool for tool in response["result"]["tools"]}
-    assert set(tools) == {"capture", "list_windows", "ocr", "doctor"}
+    assert set(tools) == {"capture", "list_windows", "list_displays", "ocr", "doctor"}
     capture_schema = tools["capture"]["inputSchema"]
     assert "window_id" in capture_schema["properties"]
+    assert "display" in capture_schema["properties"]
     assert capture_schema["additionalProperties"] is False
     assert "path" in tools["ocr"]["inputSchema"]["properties"]
 
@@ -159,7 +169,7 @@ def test_tools_list_annotations_and_output_schemas():
     tools = {tool["name"]: tool for tool in response["result"]["tools"]}
     # Screen-reading tools are flagged read-only so hosts can auto-approve
     # them; capture is not (save_path writes a file).
-    for name in ("list_windows", "ocr", "doctor"):
+    for name in ("list_windows", "list_displays", "ocr", "doctor"):
         assert tools[name]["annotations"]["readOnlyHint"] is True
     assert "readOnlyHint" not in tools["capture"]["annotations"]
     for tool in tools.values():
@@ -317,6 +327,52 @@ def test_list_windows_payload(fake_capturer):
         "bounds": {"x": 0, "y": 25, "width": 800, "height": 600},
     }
     assert result["structuredContent"] == payload
+
+
+def test_list_displays_payload(fake_capturer):
+    result = call("list_displays")["result"]
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["displays"][0] == {
+        "index": 0,
+        "name": "built-in",
+        "primary": True,
+        "scale": 2.0,
+        "bounds": {"x": 0, "y": 0, "width": 1440, "height": 900},
+    }
+    assert result["structuredContent"] == payload
+
+
+def test_capture_display_crops_that_monitor(fake_capturer):
+    result = call("capture", {"display": 1})["result"]
+    assert result["isError"] is False
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["target"] == "display 1 (1920x1080 at 1440,-180)"
+    assert fake_capturer.calls == [("region", Rect(x=1440, y=-180, width=1920, height=1080))]
+
+
+def test_capture_unknown_display_is_no_match(fake_capturer):
+    result = call("capture", {"display": 9})["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "no_match"
+    assert "list_displays" in payload["hint"]
+
+
+def test_capture_display_excludes_other_targets(fake_capturer):
+    result = call("capture", {"display": 0, "region": {"x": 0, "y": 0, "width": 5, "height": 5}})[
+        "result"
+    ]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "invalid_arguments"
+    assert fake_capturer.calls == []
+
+
+def test_capture_display_must_be_an_integer(fake_capturer):
+    result = call("capture", {"display": "0"})["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "invalid_arguments"
 
 
 def test_windows_payload_carries_bundle_id():

@@ -17,7 +17,7 @@ import types
 import pytest
 
 from shotquill import audit, cli, headless, paths
-from shotquill.capture.base import CaptureResult, Rect, WindowInfo
+from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, WindowInfo
 
 PNG_MAGIC = b"\x89PNG"
 
@@ -37,6 +37,12 @@ class FakeCapturer:
             WindowInfo(window_id=22, owner="Safari", title="Docs", bounds=Rect(40, 25, 800, 600)),
             WindowInfo(window_id=33, owner="Notes", title="Scratch", bounds=Rect(5, 5, 300, 200)),
         ]
+        self.displays = [
+            DisplayInfo(
+                index=0, name="built-in", bounds=Rect(0, 0, 1440, 900), scale=2.0, primary=True
+            ),
+            DisplayInfo(index=1, name="external", bounds=Rect(1440, -180, 1920, 1080)),
+        ]
 
     def capture_fullscreen(self, exclude_window_ids=frozenset()) -> CaptureResult:
         self.calls.append(("fullscreen",))
@@ -52,6 +58,9 @@ class FakeCapturer:
 
     def list_windows(self) -> list[WindowInfo]:
         return self.windows
+
+    def list_displays(self) -> list[DisplayInfo]:
+        return self.displays
 
 
 @pytest.fixture(autouse=True)
@@ -169,6 +178,30 @@ def test_capture_title_without_app_is_usage_error(fake_capturer, capsys):
 def test_capture_targets_are_mutually_exclusive(fake_capturer):
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["capture", "--window-id", "1", "--app", "safari"])
+    assert excinfo.value.code == 2
+
+
+def test_capture_display_is_a_region_capture_of_its_bounds(fake_capturer, capsys):
+    assert cli.main(["capture", "--display", "1"]) == 0
+    # The external monitor sits right of the primary with a negative y — the
+    # exact case a naive (0, 0)-anchored crop would get wrong.
+    assert fake_capturer.calls == [("region", Rect(x=1440, y=-180, width=1920, height=1080))]
+
+
+def test_capture_display_json_names_the_display(fake_capturer, capsys):
+    assert cli.main(["capture", "--display", "0", "--json"]) == 0
+    meta = json.loads(capsys.readouterr().out)
+    assert meta["target"] == "display 0 (1440x900 at 0,0)"
+
+
+def test_capture_unknown_display_exits_5(fake_capturer, capsys):
+    assert cli.main(["capture", "--display", "9"]) == headless.EXIT_NO_MATCH
+    assert "no display 9" in capsys.readouterr().err
+
+
+def test_capture_display_excludes_other_targets(fake_capturer):
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["capture", "--display", "0", "--region", "0,0,10,10"])
     assert excinfo.value.code == 2
 
 
@@ -406,6 +439,36 @@ def test_windows_unsupported_exits_4(fake_capturer, capsys, monkeypatch):
 
     monkeypatch.setattr(fake_capturer, "list_windows", _nope)
     assert cli.main(["windows"]) == headless.EXIT_UNSUPPORTED
+
+
+# --- displays ----------------------------------------------------------------
+
+
+def test_displays_table(fake_capturer, capsys, isolated_audit):
+    assert cli.main(["displays"]) == 0
+    out = capsys.readouterr().out
+    assert "INDEX" in out
+    assert "1440x900 at 0,0" in out
+    assert "(primary)" in out
+    assert "1920x1080 at 1440,-180" in out
+    entries = _audit_entries(isolated_audit)
+    assert entries and entries[-1]["action"] == "displays"
+
+
+def test_displays_json(fake_capturer, capsys):
+    assert cli.main(["displays", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert [d["index"] for d in data] == [0, 1]
+    assert data[0]["primary"] is True and data[0]["scale"] == 2.0
+    assert data[1]["bounds"] == {"x": 1440, "y": -180, "width": 1920, "height": 1080}
+
+
+def test_displays_unsupported_exits_4(fake_capturer, capsys, monkeypatch):
+    def _nope():
+        raise headless.CapabilityUnsupported("displays", "no screens")
+
+    monkeypatch.setattr(fake_capturer, "list_displays", _nope)
+    assert cli.main(["displays"]) == headless.EXIT_UNSUPPORTED
 
 
 # --- ocr --------------------------------------------------------------------

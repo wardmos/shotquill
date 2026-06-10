@@ -13,9 +13,9 @@ Contract (agents rely on it):
 - ``squill ocr`` takes a file path, ``-`` for stdin, or the same target
   options as ``capture`` to recognize straight off the screen in one step.
 - Exit codes: 0 ok, 1 other error, 2 usage, 3 permission denied,
-  4 capability unavailable on this platform/session, 5 no window matched,
-  6 blocked by the app blocklist. They are printed in every ``--help`` so
-  agents can discover them.
+  4 capability unavailable on this platform/session, 5 no window or display
+  matched, 6 blocked by the app blocklist. They are printed in every
+  ``--help`` so agents can discover them.
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ _EXIT_USAGE = 2
 # they discover the flags, instead of needing the README.
 _EXIT_CODE_EPILOG = (
     "exit codes: 0 ok, 1 error, 2 usage, 3 permission denied, "
-    "4 capability unavailable on this platform/session, 5 no window matched, "
-    "6 blocked by the app blocklist"
+    "4 capability unavailable on this platform/session, 5 no window or display "
+    "matched, 6 blocked by the app blocklist"
 )
 
 
@@ -121,6 +121,14 @@ def _build_parser() -> argparse.ArgumentParser:
     windows.add_argument("--json", action="store_true", help="machine-readable output")
     windows.set_defaults(func=_cmd_windows)
 
+    displays = sub.add_parser(
+        "displays",
+        help="list monitors and their indexes (for `capture --display N`)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    displays.add_argument("--json", action="store_true", help="machine-readable output")
+    displays.set_defaults(func=_cmd_displays)
+
     ocr = sub.add_parser(
         "ocr",
         help="extract text from an image file, stdin, or straight off the screen (on-device)",
@@ -206,6 +214,12 @@ def _add_target_options(command: argparse.ArgumentParser) -> None:
     target.add_argument("--window-id", type=int, help="exact window id (see `squill windows`)")
     target.add_argument("--app", help="pick the front-most window of a matching app (substring)")
     target.add_argument("--region", help="logical-coordinate rectangle as x,y,w,h")
+    target.add_argument(
+        "--display",
+        type=int,
+        metavar="N",
+        help="capture one monitor by index (see `squill displays`; 0 = primary)",
+    )
     command.add_argument("--title", help="narrow --app matches by title substring")
 
 
@@ -240,7 +254,12 @@ def _capture_image(args: argparse.Namespace, region, include_cursor: bool = Fals
     when an app/title match was ambiguous, mirroring the MCP metadata."""
     capturer = headless.get_capturer(include_cursor=include_cursor)
     result, target, matched = headless.perform_capture(
-        capturer, window_id=args.window_id, app=args.app, title=args.title, region=region
+        capturer,
+        window_id=args.window_id,
+        app=args.app,
+        title=args.title,
+        region=region,
+        display=args.display,
     )
     if matched > 1 and not getattr(args, "json", False):
         # In --json mode the ambiguity rides along in the payload instead.
@@ -332,13 +351,28 @@ def _cmd_windows(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_displays(args: argparse.Namespace) -> int:
+    displays = headless.get_capturer().list_displays()
+    if args.json:
+        print(json.dumps(headless.displays_payload(displays), ensure_ascii=False))
+    else:
+        print(f"{'INDEX':>5}  {'GEOMETRY':<22}{'SCALE':<7}NAME")
+        for d in displays:
+            geometry = f"{d.bounds.width}x{d.bounds.height} at {d.bounds.x},{d.bounds.y}"
+            name = d.name + (" (primary)" if d.primary else "")
+            print(f"{d.index:>5}  {geometry:<22}{d.scale:<7g}{name}")
+    audit.record("displays", via="cli", target=f"{len(displays)} displays")
+    return 0
+
+
 def _cmd_ocr(args: argparse.Namespace) -> int:
     # Usage checks first, so a bad invocation is exit 2 even on a host where
     # OCR itself is unavailable (exit codes are the contract agents branch on).
     # --title counts as a capture target here: silently OCRing the file while
     # ignoring it would answer a different question than the caller asked.
     has_target = any(
-        value is not None for value in (args.window_id, args.app, args.title, args.region)
+        value is not None
+        for value in (args.window_id, args.app, args.title, args.region, args.display)
     )
     if args.path is not None and has_target:
         return _usage_error("pass an image path or a capture target, not both")

@@ -231,8 +231,10 @@ menu-bar app; with a subcommand it stays headless:
 squill capture                            # full screen → temp file, path on stdout
 squill capture --app safari -o shot.png   # front-most matching window
 squill capture --region 0,0,800,600 -o -  # stream PNG bytes to a pipe
+squill capture --display 1 -o second.png  # one monitor (`squill displays` lists them)
 squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill windows --json                     # list windows, front-most first
+squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
 squill doctor                             # capability & permission report
 ```
@@ -249,10 +251,10 @@ The parts agents rely on:
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
   `squill ocr -` still read a file or stdin.
 - **Exit codes are the contract**: `0` ok · `2` usage · `3` permission denied ·
-  `4` capability unavailable on this platform/session · `5` no window matched ·
-  `6` blocked by the app blocklist. Every `--help` prints them, so the contract
-  is discoverable without this README; `python -m shotquill` accepts the same
-  subcommands.
+  `4` capability unavailable on this platform/session · `5` no window or
+  display matched · `6` blocked by the app blocklist. Every `--help` prints
+  them, so the contract is discoverable without this README;
+  `python -m shotquill` accepts the same subcommands.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.
@@ -282,9 +284,10 @@ or in `claude_desktop_config.json`:
 }
 ```
 
-Four tools: **capture** (full screen / window by id or app+title / region;
-returns the image inline — pass `max_width` to downscale and save context;
-`save_path` optionally persists), **list_windows**, **ocr** (a file, or
+Five tools: **capture** (full screen / window by id or app+title / one
+monitor by `display` index / region; returns the image inline — pass
+`max_width` to downscale and save context; `save_path` optionally persists),
+**list_windows**, **list_displays**, **ocr** (a file, or
 capture-and-recognize fully in memory so reading on-screen text costs no
 image tokens), and **doctor**. Built for agent ergonomics: every tool
 declares an `outputSchema` and returns typed `structuredContent` (no
@@ -614,6 +617,8 @@ pipx uninstall shotquill               # pipx install
       XDG autostart, full-screen / region capture via `QScreen.grabWindow`,
       global hotkeys via `pynput`
 - [x] **Linux / Wayland CLI + MCP** via `xdg-desktop-portal` (Screenshot portal)
+- [x] **Multi-monitor selection** — `squill displays` + `capture --display N`
+      (and the matching MCP `list_displays` tool / `display` argument)
 - [ ] **Linux GUI on Wayland** — global hotkeys need the GlobalShortcuts portal
       (the OS forbids out-of-band key grabs), and the smart-capture overlay
       needs to play nicely with compositor full-screen rules
