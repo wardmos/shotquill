@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/wardmos/shotquill/actions/workflows/ci.yml"><img src="https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue" alt="Platform: macOS | Linux">
-  <img src="https://img.shields.io/badge/python-3.12-blue" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache 2.0"></a>
 </p>
 
@@ -482,7 +482,7 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 
 ## Tech stack
 
-Python 3.12 + [PySide6](https://doc.qt.io/qtforpython/) (Qt) for a self-drawn,
+Python 3.10+ + [PySide6](https://doc.qt.io/qtforpython/) (Qt) for a self-drawn,
 cross-platform UI:
 
 | Concern               | macOS                                                 | Linux                                                  |
