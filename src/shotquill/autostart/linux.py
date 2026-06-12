@@ -48,9 +48,7 @@ def _quote_exec_arg(arg: str) -> str:
     """
     if not any(c in _EXEC_RESERVED for c in arg):
         return arg
-    escaped = (
-        arg.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$")
-    )
+    escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$")
     return f'"{escaped}"'
 
 
