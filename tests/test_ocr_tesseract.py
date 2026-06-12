@@ -15,6 +15,15 @@ from PySide6.QtGui import QImage  # noqa: E402
 from shotquill.ocr import linux  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _clear_language_cache():
+    # The installed-language cache lives for the process; reset it around each
+    # test so a cached probe from one case can't leak into the next.
+    linux._LANGUAGE_CACHE.clear()
+    yield
+    linux._LANGUAGE_CACHE.clear()
+
+
 def _image() -> QImage:
     image = QImage(4, 3, QImage.Format.Format_RGB888)
     image.fill(0xFFFFFF)
@@ -116,19 +125,47 @@ def test_recognize_wraps_subprocess_error(monkeypatch):
         linux.TesseractTextRecognizer().recognize(_image())
 
 
-def test_installed_languages_parses_list(monkeypatch):
+def test_probe_languages_parses_list(monkeypatch):
     def fake_run(args, **kwargs):
         assert args[1] == "--list-langs"
         # --list-langs is run with text=True, so stdout is already decoded.
         return _FakeProc(stdout="List of available languages:\neng\nchi_sim\n")
 
     monkeypatch.setattr(linux.subprocess, "run", fake_run)
-    assert linux._installed_languages("tesseract") == {"eng", "chi_sim"}
+    assert linux._probe_languages("tesseract") == {"eng", "chi_sim"}
 
 
-def test_installed_languages_empty_on_error(monkeypatch):
+def test_probe_languages_empty_on_error(monkeypatch):
     def boom(args, **kwargs):
         raise OSError("no binary")
 
     monkeypatch.setattr(linux.subprocess, "run", boom)
+    assert linux._probe_languages("tesseract") == set()
+
+
+def test_installed_languages_caches_successful_probe(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(args, **kwargs):
+        calls["n"] += 1
+        return _FakeProc(stdout="List of available languages:\neng\n")
+
+    monkeypatch.setattr(linux.subprocess, "run", fake_run)
+    assert linux._installed_languages("tesseract") == {"eng"}
+    assert linux._installed_languages("tesseract") == {"eng"}
+    # Second call is served from the cache — no extra subprocess spawn.
+    assert calls["n"] == 1
+
+
+def test_installed_languages_does_not_cache_failure(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(args, **kwargs):
+        calls["n"] += 1
+        raise OSError("transient")
+
+    monkeypatch.setattr(linux.subprocess, "run", fake_run)
     assert linux._installed_languages("tesseract") == set()
+    # A transient failure is retried rather than cached for the whole session.
+    assert linux._installed_languages("tesseract") == set()
+    assert calls["n"] == 2

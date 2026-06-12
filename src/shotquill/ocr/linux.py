@@ -27,14 +27,22 @@ _DEFAULT_LANGUAGES = ("chi_sim", "eng")
 
 _BINARY = "tesseract"
 
+# Installed languages per binary path, cached for the process lifetime. Probing
+# spawns a `tesseract --list-langs` subprocess and the answer only changes when
+# the user installs or removes a language pack — rare enough that caching is safe
+# and spares a second spawn on every recognize() call. Only successful (non-empty)
+# probes are cached, so a transient failure is retried rather than poisoning the
+# whole session.
+_LANGUAGE_CACHE: dict[str, set[str]] = {}
+
 
 def tesseract_path() -> str | None:
     """Absolute path to the ``tesseract`` binary, or ``None`` when not installed."""
     return shutil.which(_BINARY)
 
 
-def _installed_languages(binary: str) -> set[str]:
-    """Language codes Tesseract has training data for (empty set on failure)."""
+def _probe_languages(binary: str) -> set[str]:
+    """Ask Tesseract which languages it has training data for (empty on failure)."""
     try:
         proc = subprocess.run(
             [binary, "--list-langs"],
@@ -47,6 +55,17 @@ def _installed_languages(binary: str) -> set[str]:
     # The first line is a human-readable header ("List of available languages…");
     # every line after it is one language code.
     return {line.strip() for line in proc.stdout.splitlines()[1:] if line.strip()}
+
+
+def _installed_languages(binary: str) -> set[str]:
+    """Cached view of :func:`_probe_languages`, keyed by binary path."""
+    cached = _LANGUAGE_CACHE.get(binary)
+    if cached is not None:
+        return cached
+    langs = _probe_languages(binary)
+    if langs:
+        _LANGUAGE_CACHE[binary] = langs
+    return langs
 
 
 class TesseractTextRecognizer(TextRecognizer):
