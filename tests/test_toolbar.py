@@ -8,7 +8,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPixmap  # noqa: E402
-from PySide6.QtWidgets import QSpinBox  # noqa: E402
+from PySide6.QtWidgets import QLabel, QToolButton  # noqa: E402
 
 from shotquill.ui.canvas import AnnotationCanvas  # noqa: E402
 from shotquill.ui.toolbar import _TOOLS, create_toolbar  # noqa: E402
@@ -69,13 +69,24 @@ def test_tool_action_switches_canvas_tool(qtbot):
 
 def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     canvas, toolbar = _toolbar(qtbot)
-    spin = next(
-        toolbar.widgetForAction(a)
-        for a in toolbar.actions()
-        if isinstance(toolbar.widgetForAction(a), QSpinBox)
-    )
-    spin.setValue(13)
+    toolbar.width_spin.setValue(13)
     assert canvas.width() == 13
+
+
+def test_width_control_is_a_captioned_two_row_widget(qtbot):
+    # Two rows like the icon-over-label buttons: the value on top, the caption
+    # below (and pinned to the bottom so it lands on the buttons' label line).
+    # The label lives in that caption, not the spin box's wide inline prefix.
+    _canvas_, toolbar = _toolbar(qtbot)
+    spin = toolbar.width_spin
+    assert spin.prefix() == ""
+    container = spin.parentWidget()
+    captions = [label.text() for label in container.findChildren(QLabel)]
+    assert captions == ["Width"]
+    layout = container.layout()
+    assert layout.indexOf(container.findChild(QLabel)) > layout.indexOf(spin)
+    # The field is capped narrower than the spin box's unbounded default.
+    assert spin.maximumWidth() < 16777215  # QWIDGETSIZE_MAX (the unset value)
 
 
 def test_toolbar_exposes_copy_and_save_actions(qtbot):
@@ -118,8 +129,9 @@ def test_ocr_action_omitted_when_no_recognizer(qtbot):
 def test_every_button_has_an_icon(qtbot):
     _canvas_, toolbar = _toolbar(qtbot)
     for action in toolbar.actions():
-        # Separators and the width spinbox carry no icon by design.
-        if action.isSeparator() or isinstance(toolbar.widgetForAction(action), QSpinBox):
+        # Only the tool/command buttons carry icons; skip separators and custom
+        # widgets (the width control is a captioned spin box, not a QToolButton).
+        if action.isSeparator() or not isinstance(toolbar.widgetForAction(action), QToolButton):
             continue
         assert not action.icon().isNull(), action.text()
 
