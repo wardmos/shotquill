@@ -132,7 +132,15 @@ def get_recognizer() -> TextRecognizer:
         from shotquill.ocr.macos import VisionTextRecognizer
 
         return VisionTextRecognizer()
-    raise CapabilityUnsupported("ocr", "on-device OCR currently requires macOS Vision")
+    if sys.platform.startswith("linux"):
+        from shotquill.ocr.linux import TesseractTextRecognizer, tesseract_path
+
+        if tesseract_path() is not None:
+            return TesseractTextRecognizer()
+        raise CapabilityUnsupported(
+            "ocr", "Tesseract is not installed (install the 'tesseract-ocr' package)"
+        )
+    raise CapabilityUnsupported("ocr", f"no OCR backend for platform {sys.platform!r}")
 
 
 def select_window(
@@ -474,7 +482,8 @@ def doctor_checks() -> list[dict]:
 
     try:
         get_recognizer()
-        checks.append({"capability": "ocr", "available": True, "detail": "Apple Vision"})
+        backend = "Apple Vision" if sys.platform == "darwin" else "Tesseract"
+        checks.append({"capability": "ocr", "available": True, "detail": backend})
     except CapabilityUnsupported as exc:
         checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
 
