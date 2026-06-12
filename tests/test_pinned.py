@@ -14,6 +14,7 @@ from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeyEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from shotquill.i18n import t  # noqa: E402
 from shotquill.ui.pinned import PinnedWindow  # noqa: E402
 
 
@@ -154,3 +155,50 @@ def test_pinned_window_accepts_an_origin_rect(qtbot):
     qtbot.addWidget(window)
     dpr = QGuiApplication.primaryScreen().devicePixelRatio()
     assert window.width() == round(100 / dpr)
+
+
+class _FakeConfig:
+    def __init__(self, directory):
+        self._dir = directory
+
+    def save_dir(self):
+        return self._dir
+
+    def image_format(self):
+        return "png"
+
+
+def test_context_menu_lists_copy_save_close_with_config(qtbot, tmp_path):
+    window = PinnedWindow(_image(100, 80), config=_FakeConfig(str(tmp_path)))
+    qtbot.addWidget(window)
+    labels = [a.text() for a in window._build_menu().actions() if a.text()]
+    assert labels == [t("toolbar.copy"), t("toolbar.save"), t("pin.close")]
+
+
+def test_context_menu_omits_save_without_config(qtbot):
+    window = PinnedWindow(_image(100, 80))  # no config
+    qtbot.addWidget(window)
+    labels = [a.text() for a in window._build_menu().actions() if a.text()]
+    assert labels == [t("toolbar.copy"), t("pin.close")]
+
+
+def test_copy_places_the_full_resolution_image_on_the_clipboard(qtbot):
+    # The display pixmap is scaled to fit the screen, but Copy must hand over the
+    # original physical-resolution image, not the shrunk one.
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    huge = _image(avail.width() * 4, avail.height() * 4)
+    window = PinnedWindow(huge)
+    qtbot.addWidget(window)
+    assert window.width() < huge.width()  # display really was downscaled
+
+    window._copy()
+    clip = QGuiApplication.clipboard().image()
+    assert clip.width() == huge.width() and clip.height() == huge.height()
+
+
+def test_save_writes_the_image_to_the_configured_folder(qtbot, tmp_path):
+    window = PinnedWindow(_image(100, 80), config=_FakeConfig(str(tmp_path)))
+    qtbot.addWidget(window)
+    window._save()
+    written = list(tmp_path.glob("*.png"))
+    assert len(written) == 1 and written[0].stat().st_size > 0
