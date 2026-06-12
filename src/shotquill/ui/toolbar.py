@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
-from PySide6.QtWidgets import QColorDialog, QSpinBox, QToolBar
+from PySide6.QtWidgets import QColorDialog, QLabel, QSpinBox, QToolBar, QVBoxLayout, QWidget
 
 from shotquill.config import DEFAULT_TOOLBAR_STYLE
 from shotquill.i18n import t
@@ -67,7 +67,14 @@ _TIGHT_STYLE = (
     "QToolBar { spacing: 0px; padding: 0px; margin: 0px; }"
     "QToolBar::separator { width: 1px; margin: 0px 3px; }"
     "QToolButton { padding: 1px 0px; font-size: 11px; }"
+    # The width control's caption (the only QLabel in the bar) sits on the same
+    # line as the buttons' under-icon labels, so it matches their font size.
+    "QLabel { font-size: 11px; }"
 )
+# Extra width, on top of the two-digit value text, reserved for the spin box's
+# up/down button column and inner margins. Capping the field to this keeps it
+# from reserving the spin box's generous default width.
+_WIDTH_FIELD_PADDING = 22
 
 
 def _pick_color(canvas: AnnotationCanvas) -> None:
@@ -115,7 +122,17 @@ def create_toolbar(
     width = QSpinBox()
     width.setRange(1, 40)
     width.setValue(canvas.width())
-    width.setPrefix(t("toolbar.width"))
+    width.setAlignment(Qt.AlignHCenter)
+    # The label moves out of the (wide) inline prefix into a caption below, so
+    # drop the prefix. Frameless lets the field shrink to about the icons'
+    # height: a normal spin box is taller than the 16px icons, which would make
+    # the two-row control taller than the buttons and push its caption off their
+    # label line. Removing the box border slims it so the whole control matches a
+    # button's height (pinned below) and the rows line up.
+    width.setFrame(False)
+    # Cap the field to its two-digit value plus the up/down button column, so it
+    # doesn't reserve the spin box's (much wider) default size.
+    width.setMaximumWidth(width.fontMetrics().horizontalAdvance("40") + _WIDTH_FIELD_PADDING)
     # The editor's keyboard surface lives on the canvas/window: arrows adjust
     # a region capture's crop, Space/Enter finish the shot. A focusable spin
     # box would keep those keys after a click — arrows would silently step the
@@ -125,7 +142,25 @@ def create_toolbar(
     width.setFocusPolicy(Qt.NoFocus)
     width.lineEdit().setFocusPolicy(Qt.NoFocus)
     width.valueChanged.connect(canvas.set_width)
-    toolbar.addWidget(width)
+
+    # Stack a caption under the spin box so it reads as two rows like the
+    # icon-over-label buttons. Pin the container to a tool button's height and
+    # the caption to its own line at the bottom, so the caption lands on the
+    # same line as the buttons' labels (and the number on the icons' line).
+    width_caption = QLabel(t("toolbar.width").strip())
+    width_caption.setAlignment(Qt.AlignHCenter)
+    width_control = QWidget()
+    width_box = QVBoxLayout(width_control)
+    width_box.setContentsMargins(0, 0, 0, 0)
+    width_box.setSpacing(0)
+    width_box.addWidget(width)
+    width_box.addWidget(width_caption)
+    sample_button = toolbar.widgetForAction(toolbar.actions()[0])
+    width_control.setFixedHeight(sample_button.sizeHint().height())
+    width_caption.setFixedHeight(width_caption.sizeHint().height())
+    toolbar.addWidget(width_control)
+    # Exposed so tests (and any later sync) can reach the nested spin box.
+    toolbar.width_spin = width
 
     toolbar.addSeparator()
 
