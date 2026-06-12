@@ -236,14 +236,16 @@ class WaylandHotkeyManager(HotkeyManager):
 
     def _on_activated(self, message) -> None:
         """QtDBus ``Activated(o session, s id, t time, a{sv} opts)`` handler:
-        route the shortcut id back to its callback, ignoring activations for any
-        session other than ours (a portal usually only signals our own, but the
-        guard keeps a stray broadcast from firing a stale binding)."""
+        route the shortcut id back to its callback, but only for our own *open*
+        session. When the session handle does not match — including after
+        ``stop()`` left it ``None`` — reject the signal, so a late or stray
+        ``Activated`` (a disconnect race, or the portal signalling a session we
+        just closed) can never fire a capture once we have torn down."""
         args = message.arguments()
         if len(args) < 2:
             return
         session_handle, shortcut_id = str(args[0]), str(args[1])
-        if self._session_handle is not None and session_handle != self._session_handle:
+        if self._session_handle is None or session_handle != self._session_handle:
             return
         self._dispatch(shortcut_id)
 

@@ -136,6 +136,20 @@ def test_on_activated_ignores_other_sessions():
     assert fired == []
 
 
+def test_on_activated_ignores_signals_after_teardown():
+    # After stop() there is no open session, so a late/stray Activated (a
+    # disconnect race, or the portal signalling the session we just closed) must
+    # not fire a capture even though the id map is still populated.
+    fired = []
+    manager = _StubManager()
+    manager.register("<cmd>+a", lambda: fired.append(True))
+    manager.start()
+    handle = manager._session_handle
+    manager.stop()  # _session_handle -> None
+    manager._on_activated(_Message(handle, "sq_cmd_a", 0, {}))
+    assert fired == []
+
+
 def test_on_activated_ignores_malformed_signal():
     manager = _StubManager()
     manager.register("<cmd>+a", lambda: None)
