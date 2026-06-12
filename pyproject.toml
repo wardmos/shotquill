@@ -30,6 +30,10 @@ classifiers = [
 dependencies = [
     "PySide6>=6.6",
     "pynput>=1.7",
+    # X11 window enumeration (squill windows, smart-capture highlight, blocklist
+    # redaction). Already pulled in transitively by pynput's X11 backend, named
+    # explicitly here because shotquill imports it directly.
+    "python-xlib>=0.33 ; sys_platform == 'linux'",
     "pyobjc-framework-Cocoa>=10.0 ; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0 ; sys_platform == 'darwin'",
     "pyobjc-framework-ScreenCaptureKit>=10.0 ; sys_platform == 'darwin'",

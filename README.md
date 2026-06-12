@@ -21,9 +21,10 @@ the whole screen, and it's saved and on your clipboard — or drop into a built-
 editor to annotate, redact, and extract text first.
 
 - **macOS** — full GUI, CLI, MCP, and on-device OCR (Apple Vision).
-- **Linux / X11** — full menu-bar GUI plus CLI / MCP. Window enumeration and
-  on-device OCR aren't implemented yet, so smart-capture degrades to region /
-  full-screen and `squill ocr` is unavailable.
+- **Linux / X11** — full menu-bar GUI plus CLI / MCP, including window
+  enumeration (smart-capture window highlight, `squill windows`, and blocklist
+  redaction of full-screen grabs). On-device OCR isn't implemented yet, so
+  `squill ocr` is unavailable.
 - **Linux / Wayland** — CLI / MCP via `xdg-desktop-portal`. Global hotkeys are
   blocked by Wayland by design (use the tray menu, or bind a compositor-level
   shortcut to `squill capture`); the GUI surfaces this loudly instead of failing
@@ -360,10 +361,10 @@ Anything running as you can capture the screen by other means, so the
 blocklist defends against an over-eager or prompt-injected agent reaching for
 a password manager *through ShotQuill*, not against a determined adversary
 with code execution. Two honest limits: a full-screen capture can only be
-redacted where windows can be enumerated (so not yet under Linux/Wayland — the
-gap is logged as `redact_unavailable` rather than silently passed through),
-and an unreadable blocklist file fails *closed* (captures are refused until
-you fix it).
+redacted where windows can be enumerated (macOS and X11; not under Wayland,
+which forbids it — the gap is logged as `redact_unavailable` rather than
+silently passed through), and an unreadable blocklist file fails *closed*
+(captures are refused until you fix it).
 
 ---
 
@@ -431,9 +432,13 @@ when the portal is reachable.
 Correct — there is no Linux OCR backend yet. The Apple Vision integration is
 macOS-only; a `tesseract` backend is a future item.
 
-**`squill windows` fails with "window enumeration is not implemented".** Also
-correct — X11 window enumeration is on the roadmap but not shipped.
-Full-screen and region capture work; smart-capture degrades to those modes.
+**`squill windows` fails with "no EWMH-compatible window manager is running"
+(or "cannot connect to the X server").** X11 enumeration reads the window
+manager's EWMH properties, so it needs a running, EWMH-compliant WM (virtually
+all modern ones are) and a reachable display. Under Wayland it stays
+unsupported by design — the compositor refuses to let an app enumerate other
+apps' windows. Full-screen and region capture work regardless; smart-capture
+degrades to those modes.
 
 **Smart capture's window highlight never appears.** Same reason as above —
 without window enumeration the overlay can't outline a window. Drag for a
@@ -491,7 +496,7 @@ cross-platform UI:
 | --------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
 | GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                  | same                                                   |
 | Screen capture        | ScreenCaptureKit (macOS 14+), `CGWindowList*` fallback | X11: `QScreen.grabWindow`; Wayland: `xdg-desktop-portal` over QtDBus |
-| Window enumeration    | `CGWindowList` (always available)                     | not yet (X11 EWMH planned; Wayland by design refuses)  |
+| Window enumeration    | `CGWindowList` (always available)                     | X11: EWMH over `python-xlib`; Wayland: by design refuses |
 | Global hotkeys        | `pynput` (Quartz event tap; needs Input Monitoring)   | `pynput` X11 listener (no permission needed); Wayland refuses (use compositor shortcuts) |
 | Launch at login       | per-user `LaunchAgent`                                | XDG `~/.config/autostart/shotquill.desktop`            |
 | Image processing      | Qt (`QImage`)                                          | same                                                   |
@@ -624,8 +629,10 @@ pipx uninstall shotquill               # pipx install
 - [ ] **Linux GUI on Wayland** — global hotkeys need the GlobalShortcuts portal
       (the OS forbids out-of-band key grabs), and the smart-capture overlay
       needs to play nicely with compositor full-screen rules
-- [ ] **X11 / Wayland window enumeration** — `squill windows`, smart-capture
-      window highlight, and full-screen blocklist redaction all need it
+- [x] **X11 window enumeration** — `squill windows`, smart-capture window
+      highlight, and full-screen blocklist redaction, via EWMH over `python-xlib`
+      (Wayland forbids enumerating other apps' windows, so it stays unsupported
+      there by design)
 - [ ] **Linux OCR backend** (tesseract) — `ocr/base.py` abstraction already in
       place, so it's a plug-in implementation
 - [ ] **Windows backend** — `capture/windows.py` + hotkeys + autostart; the
