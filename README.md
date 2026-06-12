@@ -52,14 +52,15 @@ editor to annotate, redact, and extract text first.
 ## Highlights
 
 - **Two capture hotkeys**, both customizable:
-  - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: click a
-    window to grab just it (real pixels, even when partly covered), click empty
-    space for the whole screen, or drag for a region with a live size readout.
-    The target window is spotlit against the dimmed desktop, and a pixel loupe
-    (magnified pixels + crosshair + position/colour) lands region edges
-    precisely. Resting on a window can also fully highlight it first — lifting
-    its pixels out from under any overlap — after a configurable delay
-    (Settings → *Highlight window after*; off by default).
+  - **Capture** (`⌥A`) — one overlay; the pointer picks the mode:
+    - **click a window** — grab just it, real pixels even when partly covered;
+    - **click empty space** — the whole screen;
+    - **drag** — a region, with a live size readout and a pixel loupe (magnified
+      pixels + crosshair + position/colour) for precise edges.
+
+    The hovered target is spotlit against the dimmed desktop. An optional delay
+    (Settings → *Highlight window after*, off by default) fully highlights a
+    window first, lifting its pixels out from under any overlap.
   - **Full screen** (`⌥S`) — every display at once, instantly.
 - **Hands-free by default** — a capture is saved to your folder **and** copied to
   the clipboard automatically, no extra keypress. Fully configurable (see below).
@@ -69,6 +70,10 @@ editor to annotate, redact, and extract text first.
 - **On-device OCR** via Apple's Vision framework — pull text out of a shot,
   fully offline, no network, no API key. Recognizes Chinese (Simplified) + English.
   *(macOS only for now; a tesseract backend for Linux is on the roadmap.)*
+- **Scriptable & agent-ready** — a headless [CLI](#command-line-scripts--agents)
+  (`squill capture` / `windows` / `ocr` / `doctor` — one path on stdout, exit
+  codes as the contract) and a built-in [MCP server](#mcp-server) that gives AI
+  agents eyes on your screen. Every programmatic capture is audit-logged.
 - **Pin to screen** — float an annotated shot on top of the desktop for reference;
   drag to move, double-click or `Esc` to dismiss.
 - **Bilingual UI** — English / 中文, switchable in Settings (defaults to English).
