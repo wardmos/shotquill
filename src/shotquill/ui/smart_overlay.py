@@ -102,6 +102,23 @@ _CURSOR_DELTAS = {
 _NUDGE_MODIFIERS = Qt.ShiftModifier | Qt.KeypadModifier
 
 
+def _compositor_prefers_fullscreen() -> bool:
+    """True when the running Qt platform is Wayland, where the overlay must be
+    presented fullscreen rather than as a stay-on-top top-level.
+
+    A Wayland compositor ignores both an app-set window position and
+    ``WindowStaysOnTopHint``: a plain frameless top-level is stacked and tiled
+    like any other window, so the dim layer can end up *under* foreground
+    windows and off-origin. Fullscreen is the compositor-blessed way to own the
+    whole output and sit above normal windows, which is exactly the overlay's
+    job. Keyed off the live platform name (``wayland`` / ``wayland-egl``), not an
+    env var, so the offscreen test platform and X11/macOS keep the geometry path.
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    return QGuiApplication.platformName().lower().startswith("wayland")
+
+
 class SmartOverlay(QWidget):
     #: Capture signals also carry the shot's on-screen rect (global, logical
     #: points) so the editor can open right where the shot was taken.
@@ -182,6 +199,29 @@ class SmartOverlay(QWidget):
         self.setCursor(Qt.BlankCursor)
         self.setMouseTracking(True)
         self.setGeometry(geometry)
+
+    def present(self) -> None:
+        """Show the overlay on top of everything and take keyboard focus.
+
+        On X11/macOS the frameless stay-on-top top-level sized to the virtual
+        desktop in ``__init__`` is shown as-is. On Wayland the compositor owns
+        geometry and stacking, so we ask it for fullscreen instead — its
+        fullscreen rule raises the surface above normal windows and gives it the
+        whole output, which ``WindowStaysOnTopHint`` + ``setGeometry`` cannot do
+        there. Multi-monitor Wayland is best-effort: fullscreen is per-output, so
+        the overlay covers the screen it lands on (the compositor's active one)
+        rather than the full virtual desktop the X11/macOS path spans.
+
+        The app calls this instead of ``show()`` so the platform branch lives in
+        one place; the raise/activate/focus that follow are the same everywhere.
+        """
+        if _compositor_prefers_fullscreen():
+            self.showFullScreen()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        self.setFocus()
 
     def changeEvent(self, event) -> None:
         # If something steals focus while the overlay is up — a hot corner firing

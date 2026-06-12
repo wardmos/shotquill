@@ -469,6 +469,8 @@ def doctor_checks() -> list[dict]:
     if redaction is not None:
         checks.append(redaction)
 
+    checks.append(_check_hotkeys())
+
     if sys.platform == "darwin":
         checks.append(_check_screen_recording())
 
@@ -479,6 +481,45 @@ def doctor_checks() -> list[dict]:
         checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
 
     return checks
+
+
+def _check_hotkeys() -> dict:
+    """Whether global capture hotkeys can be grabbed on this session.
+
+    Mirrors the capture probe — report what is actually *reachable*, not merely
+    that a backend exists. On Wayland out-of-band key grabs are refused, so the
+    hotkeys go through the xdg-desktop-portal GlobalShortcuts interface, which a
+    minimal desktop may not ship; surface that as the actionable thing to fix. On
+    X11 pynput grabs keys without a grant; on macOS it needs Input Monitoring
+    (a runtime prompt, so reported best-effort)."""
+    if sys.platform == "darwin":
+        return {
+            "capability": "hotkeys",
+            "available": True,
+            "detail": "pynput (needs the Input Monitoring permission)",
+        }
+    if sys.platform.startswith("linux"):
+        if _is_wayland_session():
+            from shotquill.hotkeys.wayland import globalshortcuts_available
+
+            if globalshortcuts_available():
+                return {
+                    "capability": "hotkeys",
+                    "available": True,
+                    "detail": "xdg-desktop-portal GlobalShortcuts reachable",
+                }
+            return {
+                "capability": "hotkeys",
+                "available": False,
+                "detail": "GlobalShortcuts portal unreachable; install xdg-desktop-portal "
+                "(or bind a compositor shortcut to `squill capture`)",
+            }
+        return {"capability": "hotkeys", "available": True, "detail": "pynput (X11)"}
+    return {
+        "capability": "hotkeys",
+        "available": False,
+        "detail": f"no hotkey backend for {sys.platform}",
+    }
 
 
 def _capture_checks() -> tuple[list[dict], bool | None]:

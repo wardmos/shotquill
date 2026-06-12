@@ -30,8 +30,16 @@ class HotkeyManager(ABC):
     """Registers global hotkeys and invokes callbacks when they are pressed."""
 
     @abstractmethod
-    def register(self, combo: str, callback: Callable[[], None]) -> None:
-        """Bind a pynput-style combo (e.g. ``<alt>+a``) to a callback."""
+    def register(
+        self, combo: str, callback: Callable[[], None], description: str | None = None
+    ) -> None:
+        """Bind a pynput-style combo (e.g. ``<alt>+a``) to a callback.
+
+        ``description`` is a human-readable label for the action (e.g. "Smart
+        capture"). The pynput backends ignore it — they grab keys directly — but
+        the Wayland GlobalShortcuts backend hands it to the portal, which shows
+        it in the compositor's own shortcuts settings, so the user can see and
+        re-bind the action there."""
 
     @abstractmethod
     def unregister(self, combo: str) -> None:

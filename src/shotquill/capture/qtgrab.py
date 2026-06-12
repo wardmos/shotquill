@@ -7,8 +7,11 @@ which makes full-screen and region capture on X11 nearly free — enough for
 the headless CLI/MCP path and for real end-to-end tests under Xvfb. The
 expensive parts of Linux support are deliberately *not* here:
 
-- Wayland refuses out-of-band grabs by design; that needs the
-  xdg-desktop-portal backend (planned) and is reported as unsupported.
+- Wayland refuses out-of-band grabs by design; that is served by the
+  xdg-desktop-portal backend (:mod:`shotquill.capture.wayland`), which the
+  capturer factory selects on a Wayland session. This X11 slice is not chosen
+  there, and refuses up front if constructed directly so the failure points at
+  the portal path rather than handing back a blank frame.
 - X11 window enumeration/picking is also deferred — ``list_windows`` and
   ``capture_window`` raise ``CapabilityUnsupported`` so agents get a typed
   signal (exit code 4) instead of an empty list they would misread as
@@ -38,7 +41,9 @@ def _ensure_gui_session() -> None:
         session = os.environ.get("XDG_SESSION_TYPE", "")
         if session == "wayland":
             raise CapabilityUnsupported(
-                "capture", "Wayland blocks out-of-band grabs; portal backend not implemented yet"
+                "capture",
+                "Wayland blocks out-of-band grabs; use the xdg-desktop-portal backend "
+                "(shotquill.capture.wayland.PortalScreenCapturer)",
             )
         if not os.environ.get("DISPLAY"):
             raise CapabilityUnsupported("capture", "no display session (DISPLAY is unset)")
