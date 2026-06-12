@@ -345,6 +345,27 @@ def test_windows_table(fake_capturer, capsys):
     assert "Safari" in out and "GitHub" in out
 
 
+def test_windows_table_strips_terminal_escapes_from_titles(fake_capturer, capsys):
+    # A window's title/class are app-set; a hostile app must not be able to
+    # inject ANSI/control sequences into the human table. JSON stays escaped.
+    from shotquill.capture.base import Rect, WindowInfo
+
+    fake_capturer.windows = [
+        WindowInfo(
+            window_id=1,
+            owner="ev\x1b[31mil",
+            title="t\x1b]0;pwn\x07x\nrest",
+            bounds=Rect(0, 0, 10, 10),
+        ),
+    ]
+    assert cli.main(["windows"]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    # Only the control bytes are dropped; the escapes' now-inert printable
+    # leftovers stay as plain text.
+    assert "ev[31mil" in out and "t]0;pwnxrest" in out
+
+
 def test_capture_blocked_app_exits_6(fake_capturer, tmp_path, capsys):
     from shotquill import blocklist as bl
 

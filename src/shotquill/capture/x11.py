@@ -148,6 +148,16 @@ def list_windows() -> list[WindowInfo]:
     display = _connect()
     try:
         raws, from_stacking = _read_raw(display)
+    except CapabilityUnsupported:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any X protocol/connection fault
+        # A server that drops mid-read (or any unexpected Xlib fault) is still
+        # "can't enumerate" — surface it as the typed unsupported signal callers
+        # branch on (doctor, exit code 4), not a raw traceback they'd treat as a
+        # generic failure.
+        raise CapabilityUnsupported(
+            "list_windows", f"reading the window list failed: {exc}"
+        ) from exc
     finally:
         display.close()
     return windows_from_raw(raws, os.getpid(), from_stacking=from_stacking)

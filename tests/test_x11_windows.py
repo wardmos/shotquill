@@ -209,3 +209,40 @@ def test_capture_window_propagates_unsupported(capturer, monkeypatch):
     monkeypatch.setattr("shotquill.capture.x11.list_windows", boom)
     with pytest.raises(headless.CapabilityUnsupported):
         capturer.capture_window(1)
+
+
+# --- list_windows: error handling ---------------------------------------------
+
+
+def test_unexpected_read_error_becomes_typed_unsupported(monkeypatch):
+    # A server fault mid-read must surface as the typed unsupported signal
+    # callers branch on, not a raw Xlib traceback.
+    from shotquill.capture import x11
+
+    monkeypatch.setattr(x11, "_connect", lambda: _FakeDisplay())
+
+    def boom(_display):
+        raise RuntimeError("connection reset by peer")
+
+    monkeypatch.setattr(x11, "_read_raw", boom)
+    with pytest.raises(headless.CapabilityUnsupported, match="reading the window list failed"):
+        x11.list_windows()
+
+
+def test_display_is_closed_even_when_read_fails(monkeypatch):
+    from shotquill.capture import x11
+
+    display = _FakeDisplay()
+    monkeypatch.setattr(x11, "_connect", lambda: display)
+    monkeypatch.setattr(x11, "_read_raw", lambda _d: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(headless.CapabilityUnsupported):
+        x11.list_windows()
+    assert display.closed
+
+
+class _FakeDisplay:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
