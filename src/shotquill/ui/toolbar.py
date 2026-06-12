@@ -54,12 +54,20 @@ _BUTTON_STYLES: dict[str, Qt.ToolButtonStyle] = {
     "text": Qt.ToolButtonTextOnly,
 }
 
-# Pack the buttons tighter than the platform default: with sixteen buttons in
-# the bar the per-button horizontal padding adds up, and stacked icon-over-
-# label buttons read fine with a small caption (as macOS toolbars do). Only
-# box-model and font properties are set, so the buttons keep their native
-# hover/checked rendering.
-_TIGHT_BUTTONS = "QToolButton { padding: 1px 0px; font-size: 11px; }"
+# Pack the bar tighter than the platform default: with sixteen buttons the
+# per-button padding plus the inter-item spacing and fat separators add up,
+# and once the row no longer fits the shot's width Qt hides the overflow
+# behind an extension chevron the user has to click open. Zeroing the
+# toolbar's spacing/margins and slimming the separators keeps the whole row
+# on one line for far narrower captures; stacked icon-over-label buttons read
+# fine with a small caption (as macOS toolbars do). Only box-model and font
+# properties are set, so the buttons keep their native hover/checked
+# rendering.
+_TIGHT_STYLE = (
+    "QToolBar { spacing: 0px; padding: 0px; margin: 0px; }"
+    "QToolBar::separator { width: 1px; margin: 0px 3px; }"
+    "QToolButton { padding: 1px 0px; font-size: 11px; }"
+)
 
 
 def _pick_color(canvas: AnnotationCanvas) -> None:
@@ -81,7 +89,12 @@ def create_toolbar(
     # Match the glyphs' emitted size; the platform default (24+) would pad
     # every button back out around the smaller icons.
     toolbar.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
-    toolbar.setStyleSheet(_TIGHT_BUTTONS)
+    toolbar.setStyleSheet(_TIGHT_STYLE)
+    # Drop the drag handle (the dotted grip at the bar's leading edge): the
+    # toolbar already auto-places itself in the corner nearest the pointer, so
+    # the grip only ever stole horizontal room and risked an accidental
+    # undock. Fixed-in-place removes the grip and reclaims that width.
+    toolbar.setMovable(False)
     group = QActionGroup(toolbar)
     group.setExclusive(True)
 

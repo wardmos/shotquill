@@ -161,3 +161,10 @@ def test_buttons_are_packed_tighter_than_the_platform_default(qtbot):
 def test_toolbar_button_style_follows_setting(qtbot, style, expected):
     _canvas_, toolbar = _toolbar(qtbot, style=style)
     assert toolbar.toolButtonStyle() == expected
+
+
+def test_toolbar_is_fixed_in_place(qtbot):
+    # No drag handle: the bar auto-places by the pointer, so the grip only ate
+    # width. Fixing it in place drops the grip and reclaims that room.
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert not toolbar.isMovable()
