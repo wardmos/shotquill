@@ -104,7 +104,8 @@ class PinnedWindow(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_offset)
 
     def mouseReleaseEvent(self, event) -> None:
-        self._drag_offset = None
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = None
 
     def mouseDoubleClickEvent(self, event) -> None:
         self.close()

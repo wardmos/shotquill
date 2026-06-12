@@ -65,7 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         import os
 
         try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull_fd, sys.stdout.fileno())
+            finally:
+                os.close(devnull_fd)
         except (OSError, ValueError):  # stdout without a real fd (tests, embeds)
             pass
         return 1

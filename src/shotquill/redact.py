@@ -18,6 +18,7 @@ block always fully covers the window rather than leaving a one-pixel seam.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from shotquill.capture.base import CaptureResult, Rect
 
@@ -53,13 +54,10 @@ def fill_rects(result: CaptureResult, rects: list[tuple[int, int, int, int]]) ->
         for y in range(y0, y1):
             start = y * stride + x0 * 4
             buf[start : start + (x1 - x0) * 4] = row
-    return CaptureResult(
-        width=result.width,
-        height=result.height,
-        scale=result.scale,
-        pixels=bytes(buf),
-        premultiplied=result.premultiplied,
-    )
+    # ``replace`` keeps every other field (origin, scale, excluded ids, …) so a
+    # redacted copy stays a faithful CaptureResult and later coordinate maths
+    # against ``origin`` and the excluded-window set still line up.
+    return replace(result, pixels=bytes(buf))
 
 
 def redact_bounds(
