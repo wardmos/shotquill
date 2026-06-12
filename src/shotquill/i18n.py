@@ -126,9 +126,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "把截图钉在屏幕最前",
     },
     "pin.tip": {
-        "en": "Drag to move · double-click or Esc to close",
-        "zh": "拖动移动 · 双击或 Esc 关闭",
+        "en": "Drag to move · right-click for actions · double-click or Esc to close",
+        "zh": "拖动移动 · 右键菜单 · 双击或 Esc 关闭",
     },
+    "pin.close": {"en": "Close", "zh": "关闭"},
     "toolbar.copy": {"en": "Copy", "zh": "复制"},
     "toolbar.copy_tip": {"en": "Copy to clipboard", "zh": "复制到剪贴板"},
     "toolbar.save": {"en": "Save", "zh": "保存"},

@@ -3,11 +3,13 @@
 """A "pinned" screenshot: a frameless, always-on-top window floating on the desktop.
 
 Pinning keeps an annotated shot visible above other windows for reference. The
-window is borderless, draggable anywhere on its surface, and dismissed with Esc
-or a double-click. The capture is at physical (Retina) resolution, so we set the
-pixmap's device-pixel-ratio to the screen's to show it at its on-screen size,
-and scale down anything larger than the available screen so a full-screen pin
-still fits.
+window is borderless and draggable anywhere on its surface. It stays chromeless
+on purpose — the pin reads as just the image, not a titled window — so closing
+and the other actions live on a right-click menu (Copy / Save / Close) instead
+of window buttons; Esc or a double-click also dismiss it. The capture is at
+physical (Retina) resolution, so we set the pixmap's device-pixel-ratio to the
+screen's to show it at its on-screen size, and scale down anything larger than
+the available screen so a full-screen pin still fits.
 """
 
 from __future__ import annotations
@@ -16,13 +18,15 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPixmap
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMenu, QMessageBox, QWidget
 
 from shotquill.i18n import t
 
 if TYPE_CHECKING:
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage, QScreen
+
+    from shotquill.config import Config
 
 _MAX_SCREEN_FRACTION = 0.8
 
@@ -58,13 +62,22 @@ def _fit_pixmap(image: QImage, screen: QScreen | None = None) -> QPixmap:
 class PinnedWindow(QWidget):
     """A draggable, always-on-top window showing a pinned screenshot."""
 
-    def __init__(self, image: QImage, origin: QRect | None = None) -> None:
+    def __init__(
+        self, image: QImage, origin: QRect | None = None, config: Config | None = None
+    ) -> None:
         super().__init__(
             None,
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
         )
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setToolTip(t("pin.tip"))
+
+        # Keep the source image at full (physical) resolution for Copy / Save —
+        # the display pixmap may be scaled down to fit the screen.
+        self._image = image
+        # ``config`` supplies the save folder / format for the menu's Save; the
+        # action is omitted when it's absent (e.g. a config-less unit test).
+        self._config = config
 
         # ``origin`` is the shot's on-screen rect (logical, global): use its
         # screen for DPR/size so a shot from a secondary display fits *that*
@@ -101,3 +114,34 @@ class PinnedWindow(QWidget):
             self.close()
         else:
             super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        # The chromeless pin has no window buttons, so right-click is the home
+        # for its actions.
+        self._build_menu().exec(event.globalPos())
+
+    def _build_menu(self) -> QMenu:
+        # Copy the shot, save it, or close. Save is only offered when a config
+        # (save folder / format) is available.
+        menu = QMenu(self)
+        menu.addAction(t("toolbar.copy"), self._copy)
+        if self._config is not None:
+            menu.addAction(t("toolbar.save"), self._save)
+        menu.addSeparator()
+        menu.addAction(t("pin.close"), self.close)
+        return menu
+
+    def _copy(self) -> None:
+        from shotquill.output.clipboard import copy_qimage
+
+        copy_qimage(self._image)
+
+    def _save(self) -> None:
+        # Mirror the editor's save: write to the configured folder, and on
+        # failure warn but keep the pin up so the shot isn't lost.
+        from shotquill.output.saver import save_qimage
+
+        try:
+            save_qimage(self._image, self._config.save_dir(), self._config.image_format())
+        except OSError as exc:
+            QMessageBox.warning(self, "ShotQuill", t("notify.save_failed").format(error=exc))
