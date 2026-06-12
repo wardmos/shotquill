@@ -32,10 +32,29 @@ def launch_arguments() -> list[str]:
     return [sys.executable, "-m", "shotquill"]
 
 
+# Characters the freedesktop .desktop spec reserves inside an Exec= line; any
+# of them forces the argument to be double-quoted.
+_EXEC_RESERVED = set(" \t\n\"'\\><~|&;$*?#()`")
+
+
+def _quote_exec_arg(arg: str) -> str:
+    """Quote one Exec= argument per the freedesktop Desktop Entry spec.
+
+    Args with no reserved char pass through bare (so a plain path stays
+    readable); otherwise the arg is double-quoted and the four chars that keep
+    meaning inside double quotes — ``\\ " ` $`` — are backslash-escaped, so a
+    path containing a quote or ``$`` can't break out of the field or be
+    interpreted by the launcher.
+    """
+    if not any(c in _EXEC_RESERVED for c in arg):
+        return arg
+    escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$")
+    return f'"{escaped}"'
+
+
 def _exec_line(arguments: list[str]) -> str:
-    """Render an Exec= command line, quoting args that contain spaces (the only
-    reserved char a path is likely to hit)."""
-    return " ".join(f'"{arg}"' if " " in arg else arg for arg in arguments)
+    """Render an Exec= command line with each argument spec-quoted."""
+    return " ".join(_quote_exec_arg(arg) for arg in arguments)
 
 
 def build_autostart_desktop(arguments: list[str]) -> str:

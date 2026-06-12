@@ -20,9 +20,17 @@ from typing import TYPE_CHECKING
 from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
 
 if TYPE_CHECKING:
+    from typing import BinaryIO
+
     from PySide6.QtGui import QImage
 
     from shotquill.ocr.base import TextRecognizer
+
+# Largest image the headless surface will load into memory. Any real screenshot
+# is far smaller; the cap stops a path to an enormous or unbounded file (e.g.
+# ``/dev/zero``) from exhausting memory when an agent — the MCP surface's whole
+# threat model — points OCR at it.
+MAX_IMAGE_BYTES = 256 * 1024 * 1024
 
 EXIT_PERMISSION = 3
 EXIT_UNSUPPORTED = 4
@@ -71,6 +79,20 @@ class CaptureBlocked(HeadlessError):
     privacy feature working, not an error to retry."""
 
     exit_code = EXIT_BLOCKED
+
+
+def read_image_bytes(stream: BinaryIO, *, label: str) -> bytes:
+    """Read an image from ``stream``, refusing inputs past ``MAX_IMAGE_BYTES``.
+
+    Reading one byte past the cap distinguishes "exactly at the limit" from
+    "over it" without trusting a stat (a pipe or ``/dev/zero`` reports no size),
+    so an unbounded source can't OOM the process before the check fires.
+    """
+    data = stream.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        limit_mib = MAX_IMAGE_BYTES // (1024 * 1024)
+        raise OSError(f"{label} is larger than the {limit_mib} MiB image limit")
+    return data
 
 
 def get_capturer(include_cursor: bool = False) -> ScreenCapturer:

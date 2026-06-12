@@ -16,6 +16,7 @@ the modifiers held — exactly how reliable Option-friendly hotkey apps behave.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -158,6 +159,9 @@ class MacHotkeyManager(HotkeyManager):
         self._compiled: list[_Binding] = []
         self._active_mods: set[str] = set()
         self._pressed: set[object] = set()  # non-modifier keys currently held
+        # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
+        # and cleared from the main thread in ``stop()``; this serialises both.
+        self._state_lock = threading.Lock()
 
     def register(self, combo: str, callback: Callable[[], None]) -> None:
         self._bindings[combo] = callback
@@ -194,8 +198,9 @@ class MacHotkeyManager(HotkeyManager):
             self._listener.stop()
             self._listener = None
         # Drop any held-key state so a missed release can't wedge later matches.
-        self._active_mods.clear()
-        self._pressed.clear()
+        with self._state_lock:
+            self._active_mods.clear()
+            self._pressed.clear()
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
@@ -207,29 +212,35 @@ class MacHotkeyManager(HotkeyManager):
     def _on_press(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
         if name is not None:
-            self._active_mods.add(name)
+            with self._state_lock:
+                self._active_mods.add(name)
             return
         vk = _vk_of(key)
         char = getattr(key, "char", None)
         ident = vk if vk is not None else char
-        if ident in self._pressed:  # ignore auto-repeat while the key is held
-            return
-        self._pressed.add(ident)
+        with self._state_lock:
+            if ident in self._pressed:  # ignore auto-repeat while the key is held
+                return
+            self._pressed.add(ident)
         self._dispatch(vk, char)
 
     def _on_release(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
         if name is not None:
-            self._active_mods.discard(name)
+            with self._state_lock:
+                self._active_mods.discard(name)
             return
         vk = _vk_of(key)
         char = getattr(key, "char", None)
-        self._pressed.discard(vk if vk is not None else char)
+        with self._state_lock:
+            self._pressed.discard(vk if vk is not None else char)
 
     def _dispatch(self, vk: int | None, char: object) -> None:
         char_l = char.lower() if isinstance(char, str) else None
+        with self._state_lock:
+            active = frozenset(self._active_mods)
         for binding in self._compiled:
-            if binding.mods != self._active_mods:
+            if binding.mods != active:
                 continue
             if binding.vk is not None:
                 if vk == binding.vk:

@@ -65,7 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         import os
 
         try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull_fd, sys.stdout.fileno())
+            finally:
+                os.close(devnull_fd)
         except (OSError, ValueError):  # stdout without a real fd (tests, embeds)
             pass
         return 1
@@ -384,15 +388,17 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
 
     if args.path is not None:
         if args.path == "-":
-            data = sys.stdin.buffer.read()
+            data = headless.read_image_bytes(sys.stdin.buffer, label="stdin")
             source = "stdin"
         else:
+            path = Path(args.path).expanduser()
             try:
-                data = Path(args.path).expanduser().read_bytes()
+                with path.open("rb") as fh:
+                    data = headless.read_image_bytes(fh, label=str(path))
             except OSError as exc:
                 print(f"squill: cannot read {args.path}: {exc}", file=sys.stderr)
                 return 1
-            source = str(Path(args.path).expanduser().resolve())
+            source = str(path.resolve())
 
         from PySide6.QtGui import QImage
 

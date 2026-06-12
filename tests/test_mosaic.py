@@ -34,6 +34,13 @@ def test_pixelate_block_larger_than_image_is_safe(qapp):
     assert (out.width(), out.height()) == (4, 4)
 
 
+def test_pixelate_zero_block_does_not_divide_by_zero(qapp):
+    # A 0 (or negative) cell size is clamped to 1 instead of raising
+    # ZeroDivisionError on the ``width // block`` downscale.
+    out = pixelate(_pixmap(40, 30), 0)
+    assert (out.width(), out.height()) == (40, 30)
+
+
 def test_mosaic_item_sets_pixmap_within_background(qapp):
     item = MosaicItem(_pixmap(100, 80))
     item.update_rect(QRect(10, 10, 30, 20))

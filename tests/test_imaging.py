@@ -53,6 +53,20 @@ def test_result_to_qimage_pixel_positions_not_transposed():
     assert image.pixelColor(2, 0).blue() == 255
 
 
+def test_result_to_qimage_rejects_short_buffer():
+    # QImage would read height*width*4 bytes with no bounds check; a buffer
+    # short of that must be caught here rather than reading out of bounds.
+    short = CaptureResult(width=4, height=4, scale=1.0, pixels=b"\x00" * 16, premultiplied=False)
+    with pytest.raises(ValueError, match="buffer"):
+        result_to_qimage(short)
+
+
+def test_result_to_qimage_rejects_non_positive_size():
+    empty = CaptureResult(width=0, height=4, scale=1.0, pixels=b"", premultiplied=False)
+    with pytest.raises(ValueError, match="non-positive"):
+        result_to_qimage(empty)
+
+
 def test_result_to_qimage_is_detached_from_source_bytes():
     # The returned image must own its memory (a .copy()), so mutating/freeing the
     # source bytes can't corrupt it. We assert the buffer is independent.

@@ -20,6 +20,7 @@ def pixelate(source: QPixmap, block: int = _DEFAULT_BLOCK) -> QPixmap:
     """Return a blocky (mosaic) copy of ``source`` with ~``block``-pixel cells."""
     if source.isNull() or source.width() < 1 or source.height() < 1:
         return source
+    block = max(1, block)  # a 0/negative cell size would divide by zero below
     small = source.scaled(
         max(1, source.width() // block),
         max(1, source.height() // block),

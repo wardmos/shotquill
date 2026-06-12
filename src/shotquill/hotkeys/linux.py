@@ -24,6 +24,7 @@ user has visibly configured hotkeys in Settings.
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -96,6 +97,9 @@ class LinuxHotkeyManager(HotkeyManager):
         self._compiled: list[_Binding] = []
         self._active_mods: set[str] = set()
         self._pressed: set[str] = set()  # non-modifier key tokens currently held
+        # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
+        # and cleared from the main thread in ``stop()``; this serialises both.
+        self._state_lock = threading.Lock()
 
     def register(self, combo: str, callback: Callable[[], None]) -> None:
         self._bindings[combo] = callback
@@ -136,8 +140,9 @@ class LinuxHotkeyManager(HotkeyManager):
             self._listener.stop()
             self._listener = None
         # Drop held-key state so a missed release can't wedge later matches.
-        self._active_mods.clear()
-        self._pressed.clear()
+        with self._state_lock:
+            self._active_mods.clear()
+            self._pressed.clear()
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
@@ -148,24 +153,32 @@ class LinuxHotkeyManager(HotkeyManager):
     def _on_press(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
         if name is not None:
-            self._active_mods.add(name)
+            with self._state_lock:
+                self._active_mods.add(name)
             return
         token = _key_token(key)
-        if token is None or token in self._pressed:  # ignore auto-repeat while held
+        if token is None:
             return
-        self._pressed.add(token)
+        with self._state_lock:
+            if token in self._pressed:  # ignore auto-repeat while held
+                return
+            self._pressed.add(token)
         self._dispatch(token)
 
     def _on_release(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
         if name is not None:
-            self._active_mods.discard(name)
+            with self._state_lock:
+                self._active_mods.discard(name)
             return
         token = _key_token(key)
         if token is not None:
-            self._pressed.discard(token)
+            with self._state_lock:
+                self._pressed.discard(token)
 
     def _dispatch(self, token: str) -> None:
+        with self._state_lock:
+            active = frozenset(self._active_mods)
         for binding in self._compiled:
-            if binding.mods == self._active_mods and binding.key == token:
+            if binding.mods == active and binding.key == token:
                 binding.callback()

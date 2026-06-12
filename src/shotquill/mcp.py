@@ -300,7 +300,9 @@ def _tool_ocr(args: dict):
         from PySide6.QtGui import QImage
 
         file_path = Path(str(path)).expanduser()
-        image = QImage.fromData(file_path.read_bytes())
+        with file_path.open("rb") as fh:
+            data = headless.read_image_bytes(fh, label=str(file_path))
+        image = QImage.fromData(data)
         if image.isNull():
             raise ValueError(f"{file_path} is not a decodable image")
         source = str(file_path.resolve())

@@ -143,13 +143,14 @@ class Config:
         self._settings = QSettings("wardmos", "ShotQuill")
 
     def hotkey(self, action: str) -> str:
-        return str(self._settings.value(f"hotkeys/{action}", DEFAULT_HOTKEYS[action]))
+        return str(self._settings.value(f"hotkeys/{action}", DEFAULT_HOTKEYS.get(action, "")))
 
     def set_hotkey(self, action: str, combo: str) -> None:
         self._settings.setValue(f"hotkeys/{action}", combo)
 
     def editor_hotkey(self, action: str) -> str:
-        return str(self._settings.value(f"hotkeys/{action}", DEFAULT_EDITOR_HOTKEYS[action]))
+        default = DEFAULT_EDITOR_HOTKEYS.get(action, "")
+        return str(self._settings.value(f"hotkeys/{action}", default))
 
     def set_editor_hotkey(self, action: str, sequence: str) -> None:
         self._settings.setValue(f"hotkeys/{action}", sequence)
