@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QPointF, QRect, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent  # noqa: E402
+from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
 
 from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
 from shotquill.ui.smart_overlay import SmartOverlay  # noqa: E402
@@ -591,6 +591,45 @@ def test_nudge_ignores_app_shortcut_modifiers(qtbot, monkeypatch):
     _key(overlay, Qt.Key_W, Qt.AltModifier)
     assert (cursor.position.x(), cursor.position.y()) == (50, 25)
     assert overlay._cursor is None
+
+
+def test_overlay_hides_the_os_cursor_for_its_own_crosshair(qtbot):
+    # The visible marker is painted (see _paint_cursor), not the OS cursor, so
+    # it can track keys the OS won't let us warp the real pointer with.
+    overlay = _overlay(qtbot)
+    assert overlay.cursor().shape() == Qt.BlankCursor
+
+
+def test_painted_crosshair_follows_the_keyboard_nudge(qtbot, monkeypatch):
+    # On Wayland / macOS-without-Accessibility the real pointer can't be warped,
+    # so the painted crosshair is the only thing that moves — it must track the
+    # keys, not stay where the OS pointer is stuck.
+    _fake_cursor(monkeypatch, 60, 40)
+    # A roomy desktop on a black ground so the white crosshair reads cleanly.
+    overlay = _overlay(qtbot, native=(800, 400), logical=(400, 200))
+    overlay.resize(400, 200)
+    overlay._pixmap = QPixmap.fromImage(_screenshot(800, 400, "black"))
+    # Suppress the loupe so the only bright marks are the crosshair arms; its
+    # frame sits near the pointer and its placement vs. anti-aliasing differs
+    # across offscreen/Xvfb. The pointer and probes also stay well away from the
+    # centred hint text (~200, 100), whose glyphs render differently per backend.
+    monkeypatch.setattr(overlay, "_paint_loupe", lambda painter: None)
+
+    def left_arm_is_bright(cx):
+        # (cx - 6, 40) sits on the left arm (spans cx-11 .. cx-3) for any cx.
+        c = overlay.grab().toImage().pixelColor(cx - 6, 40)
+        return c.red() > 150 and c.green() > 150 and c.blue() > 150
+
+    _move(overlay, 60, 40)
+    assert left_arm_is_bright(60)  # crosshair painted at the pointer
+    assert not left_arm_is_bright(90)  # nothing there yet
+
+    # Three coarse nudges -> +30px, so the new crosshair clears the old (11px arms).
+    for _ in range(3):
+        _key(overlay, Qt.Key_Right, Qt.ShiftModifier)
+    assert (overlay._cursor.x(), overlay._cursor.y()) == (90, 40)
+    assert left_arm_is_bright(90)  # the crosshair has followed the keys
+    assert not left_arm_is_bright(60)  # and left the old spot
 
 
 def test_no_preview_fetch_after_close(qtbot):

@@ -9,10 +9,12 @@ capture mode from what the pointer does — no separate region/window hotkeys:
 * Hovering empty space lights the whole desktop; a click captures full screen.
 * Pressing and dragging draws a rectangle and selects that region.
 
-While the overlay is up, the arrow keys (or WASD) move the real pointer one
-point per press (Shift: ten) — the loupe magnifies, but the hand still has to
-hit the exact pixel, so the keyboard takes over the last few points before
-and during a drag.
+While the overlay is up, the arrow keys (or WASD) nudge the pointer one point
+per press (Shift: ten) — the loupe magnifies, but the hand still has to hit the
+exact pixel, so the keyboard takes over the last few points before and during a
+drag. The OS cursor is hidden and a crosshair is painted at the pointer state,
+so the marker tracks the keys even on platforms that won't let an app warp the
+real pointer (Wayland; macOS without Accessibility).
 
 Releasing a region drag captures immediately and hands off to the editor,
 which opens in place over the selection; hand-drawn edges are rarely
@@ -78,8 +80,11 @@ _PREVIEW_DELAY_MS = 120
 # an exact pixel — the loupe magnifies, but the hand still has to hit the
 # spot. The OS cursor is warped *and* the move is applied to the overlay's
 # own pointer state, so the loupe, hover highlight, and a held drag follow
-# even when the warp is swallowed (macOS without the Accessibility
-# permission) — see _nudge_cursor.
+# even when the warp is swallowed — and it routinely is: Wayland forbids an
+# app from warping the pointer outright, and macOS swallows it without the
+# Accessibility permission. So the *visible* marker can't be the OS cursor;
+# the overlay hides it (BlankCursor) and paints its own crosshair at the
+# pointer state, which always tracks the keys (see _nudge_cursor / _paint_cursor).
 _CURSOR_NUDGE_COARSE = 10
 _CURSOR_DELTAS = {
     Qt.Key_Left: (-1, 0),
@@ -171,7 +176,10 @@ class SmartOverlay(QWidget):
 
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setCursor(Qt.CrossCursor)
+        # Hide the OS cursor and draw our own crosshair (see _paint_cursor): the
+        # keyboard nudge can't move the real pointer on Wayland (or macOS without
+        # Accessibility), so a system cursor would desync from the loupe/selection.
+        self.setCursor(Qt.BlankCursor)
         self.setMouseTracking(True)
         self.setGeometry(geometry)
 
@@ -209,6 +217,7 @@ class SmartOverlay(QWidget):
             self._paint_fullscreen(painter)
 
         if self._cursor is not None:
+            self._paint_cursor(painter)
             self._paint_loupe(painter)
 
     def _paint_region(self, painter: QPainter) -> None:
@@ -288,6 +297,28 @@ class SmartOverlay(QWidget):
         painter.fillRect(box, QColor(0, 0, 0, 180))
         painter.setPen(Qt.white)
         painter.drawText(box.adjusted(8, 0, -8, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
+
+    def _paint_cursor(self, painter: QPainter) -> None:
+        # Stand-in for the (hidden) OS cursor, pinned to the overlay's own
+        # pointer state so it follows the arrow keys even where QCursor.setPos
+        # can't move the real pointer (Wayland; macOS without Accessibility).
+        # Drawn as a white crosshair over a darker, thicker underlay so it reads
+        # against both the dimmed desktop and a bright spotlit window. A gap at
+        # the centre leaves the exact target pixel uncovered.
+        cx, cy = self._cursor.x(), self._cursor.y()
+        arm, gap = 11.0, 3.0
+        segments = (
+            (cx - arm, cy, cx - gap, cy),
+            (cx + gap, cy, cx + arm, cy),
+            (cx, cy - arm, cx, cy - gap),
+            (cx, cy + gap, cx, cy + arm),
+        )
+        painter.save()
+        for pen in (QPen(QColor(0, 0, 0, 160), 3), QPen(QColor(255, 255, 255, 235), 1)):
+            painter.setPen(pen)
+            for x1, y1, x2, y2 in segments:
+                painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        painter.restore()
 
     def _paint_loupe(self, painter: QPainter) -> None:
         cx, cy = self._cursor.x(), self._cursor.y()
@@ -500,12 +531,14 @@ class SmartOverlay(QWidget):
         # Move the real pointer one logical point (Shift: ten) — before a drag
         # to line up its start, or mid-drag to land its edge exactly. The step
         # is based on the overlay's own pointer state, not QCursor.pos(), and
-        # the move is applied locally as well as warped: on macOS setPos posts
-        # a synthetic event that needs the Accessibility permission, so it can
-        # be swallowed or arrive late — the selection, loupe, and hover must
-        # follow the keys regardless, and repeated presses must accumulate.
-        # When the echo does arrive it lands on the same coordinates, so
-        # applying the move twice is harmless.
+        # the move is applied locally as well as warped: setPos is best-effort —
+        # Wayland refuses to warp the pointer at all, and macOS needs the
+        # Accessibility permission or it swallows the synthetic event — so the
+        # selection, loupe, hover, and the painted crosshair must follow the keys
+        # regardless, and repeated presses must accumulate. Where the warp does
+        # land its echo arrives on the same coordinates, so applying the move
+        # twice is harmless; where it doesn't, the painted crosshair is what the
+        # user sees move (the real pointer is hidden).
         dx, dy = _CURSOR_DELTAS[event.key()]
         step = _CURSOR_NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
         base = self._cursor
