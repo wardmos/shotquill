@@ -172,6 +172,14 @@ def test_exec_line_quotes_paths_with_spaces():
     assert line == '"/home/a b/ShotQuill.AppImage"'
 
 
+def test_exec_line_escapes_reserved_chars_inside_quotes():
+    # A path with a double-quote and a ``$`` must be quoted and the spec's
+    # in-quote special chars backslash-escaped, so it can't break out of the
+    # Exec= field or be reinterpreted by the launcher.
+    line = autostart_linux._exec_line(['/home/a b/We"ird$dir/app'])
+    assert line == '"/home/a b/We\\"ird\\$dir/app"'
+
+
 def test_hotkeys_factory_routes_by_platform(monkeypatch):
     monkeypatch.setattr(hotkeys.sys, "platform", "linux")
     from shotquill.hotkeys.linux import LinuxHotkeyManager

@@ -78,5 +78,7 @@ def audit_log_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local" / "state")
     directory = base / "shotquill"
-    directory.mkdir(parents=True, exist_ok=True)
+    # ``0o700``: the audit log records what was captured, when, and by which
+    # process — metadata other local users have no business reading.
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     return directory / "audit.log"

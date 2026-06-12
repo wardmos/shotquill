@@ -116,6 +116,12 @@ def _rule_from_dict(raw: object) -> BlockRule:
         raise BlocklistError("'bundle_id' must be a string")
     if name is not None and not isinstance(name, str):
         raise BlocklistError("'name' must be a string")
+    # An empty (or whitespace-only) value would match nothing, silently leaving
+    # the user unprotected against an app they thought they had blocked.
+    if bundle_id is not None and not bundle_id.strip():
+        raise BlocklistError("'bundle_id' must not be empty")
+    if name is not None and not name.strip():
+        raise BlocklistError("'name' must not be empty")
     return BlockRule(bundle_id=bundle_id, name=name)
 
 

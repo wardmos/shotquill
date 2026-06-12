@@ -124,3 +124,13 @@ def test_rule_field_must_be_string(tmp_path):
     path.write_text(json.dumps({"rules": [{"bundle_id": 42}]}), encoding="utf-8")
     with pytest.raises(bl.BlocklistError):
         bl.load(path)
+
+
+def test_empty_rule_value_raises(tmp_path):
+    # An empty/whitespace value would match nothing, silently leaving the user
+    # unprotected against an app they think they blocked — reject it on load.
+    path = tmp_path / "blocklist.json"
+    for bad in ([{"name": ""}], [{"name": "   "}], [{"bundle_id": ""}]):
+        path.write_text(json.dumps({"rules": bad}), encoding="utf-8")
+        with pytest.raises(bl.BlocklistError):
+            bl.load(path)

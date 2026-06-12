@@ -477,7 +477,11 @@ class ShotquillApp(QObject):
         opener = "open" if sys.platform == "darwin" else "xdg-open"
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            subprocess.run([opener, str(directory)], check=True)
+            # ``open``/``xdg-open`` normally fork the file manager and return at
+            # once; the timeout keeps a misconfigured opener from hanging this
+            # (main-thread) menu action forever. TimeoutExpired is a
+            # SubprocessError, so the existing handler reports it.
+            subprocess.run([opener, str(directory)], check=True, timeout=20)
         except (OSError, subprocess.SubprocessError) as exc:
             self._notify(t("notify.open_folder_failed").format(error=exc))
 
