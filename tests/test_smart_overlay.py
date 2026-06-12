@@ -645,3 +645,18 @@ def test_no_preview_fetch_after_close(qtbot):
     overlay._request_preview()  # a queued timer tick after close must no-op
     assert calls == []
     assert not overlay._preview_timer.isActive()
+
+
+def test_label_font_inherits_ui_font(qtbot):
+    # Regression: the overlay labels (size, window, loupe, hint) must render in
+    # the real UI font. They used to be built with QFont("", n) — an *empty*
+    # family, which doesn't mean "the default font": Qt's matcher is free to
+    # resolve it to some unrelated installed face (e.g. an Ethiopic one on bare
+    # Linux), giving oddly proportioned glyphs and uneven spacing. _label_font
+    # must instead inherit the widget's resolved family and only set the size.
+    from PySide6.QtGui import QFontInfo
+
+    overlay = _overlay(qtbot)
+    font = overlay._label_font(12)
+    assert font.pointSize() == 12
+    assert QFontInfo(font).family() == QFontInfo(overlay.font()).family()

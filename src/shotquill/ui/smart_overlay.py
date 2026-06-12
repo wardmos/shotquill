@@ -278,9 +278,19 @@ class SmartOverlay(QWidget):
         painter.drawRect(rect.adjusted(1, 1, -2, -2))
         self._draw_hint(painter)
 
+    def _label_font(self, point_size: int) -> QFont:
+        # Start from the widget's resolved UI font, not QFont("", n): an empty
+        # family name doesn't mean "the default font" — it sends Qt's matcher
+        # off to pick whatever it likes (on some Linux boxes an unrelated
+        # Ethiopic face), giving the labels oddly proportioned glyphs and
+        # uneven spacing. Inheriting self.font() keeps them on the real UI sans.
+        font = QFont(self.font())
+        font.setPointSize(point_size)
+        return font
+
     def _draw_size_label(self, painter: QPainter, sel: QRect, source: QRectF) -> None:
         label = f"{int(source.width())} × {int(source.height())}"
-        painter.setFont(QFont("", 12))
+        painter.setFont(self._label_font(12))
         text_w = painter.fontMetrics().horizontalAdvance(label) + 12
         box = QRect(sel.x(), max(sel.y() - 24, 2), text_w, 20)
         painter.fillRect(box, QColor(0, 0, 0, 160))
@@ -291,7 +301,7 @@ class SmartOverlay(QWidget):
         text = window.owner
         if window.title:
             text = f"{window.owner} · {window.title}"
-        painter.setFont(QFont("", 12))
+        painter.setFont(self._label_font(12))
         text_w = painter.fontMetrics().horizontalAdvance(text) + 16
         box = QRect(sel.x(), max(sel.y() - 26, 2), min(text_w, sel.width() or text_w), 22)
         painter.fillRect(box, QColor(0, 0, 0, 180))
@@ -362,13 +372,13 @@ class SmartOverlay(QWidget):
         label = f"({px}, {py})  {color.name().upper()}"
         box = QRectF(ax, ay + _LOUPE_H, _LOUPE_W, _LOUPE_LABEL_H)
         painter.fillRect(box, QColor(0, 0, 0, 200))
-        painter.setFont(QFont("", 10))
+        painter.setFont(self._label_font(10))
         painter.setPen(Qt.white)
         painter.drawText(box, Qt.AlignCenter, label)
 
     def _draw_hint(self, painter: QPainter) -> None:
         hint = t("smart.hint")
-        painter.setFont(QFont("", 14))
+        painter.setFont(self._label_font(14))
         metrics = painter.fontMetrics()
         box = QRect(0, 0, metrics.horizontalAdvance(hint) + 32, 40)
         box.moveCenter(self.rect().center())
