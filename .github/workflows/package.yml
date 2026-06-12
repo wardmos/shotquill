@@ -1,8 +1,18 @@
 name: Package smoke
 
 # Validates that the macOS bundle/DMG and the Linux AppImage still build,
-# without cutting a release. Runs on PRs that touch packaging, and on demand.
+# without cutting a release. Runs on PRs that touch packaging, on pushes to
+# main (so post-merge main always has a built-from-main smoke artifact, even
+# if a PR slipped through without triggering this), and on demand.
 on:
+  push:
+    branches: [main]
+    paths:
+      # Same packaging-relevant paths as the PR trigger below.
+      - "src/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - ".github/workflows/package.yml"
   pull_request:
     paths:
       # The PyInstaller bundle imports the application source, so src changes
