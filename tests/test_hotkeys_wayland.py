@@ -164,6 +164,7 @@ def test_stop_tears_down_and_clears_the_session():
     manager.stop()
     assert manager.deactivate_calls >= 1
     assert manager._session_handle is None
+    assert manager._ids == {}  # the id map must not outlive the session
 
 
 def test_start_propagates_hotkey_unavailable():

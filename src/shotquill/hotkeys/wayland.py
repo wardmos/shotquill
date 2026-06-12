@@ -86,6 +86,15 @@ class WaylandHotkeyManager(HotkeyManager):
         Raises :class:`HotkeyUnavailable` when the GlobalShortcuts portal is
         missing (no session bus, or a compositor/portal without the interface),
         so the app surfaces the reason once and keeps the tray menu working.
+
+        Unlike the base "non-blocking" contract the pynput backends meet with a
+        listener thread, this briefly drives a Qt event loop for the portal's
+        CreateSession/BindShortcuts round-trip (capped by ``_PORTAL_TIMEOUT_MS``).
+        That is fast on a healthy portal, the common "no portal" failure is
+        detected up front with no round-trip at all (a bare ``isValid`` check),
+        and the cap bounds a hung one — so a worker thread (with its own QtDBus
+        loop) would add fragility for a sub-second wait. Documented here so a
+        future maintainer keeps the trade rather than "fixing" it blindly.
         """
         if not self._bindings:
             self.stop()  # a prior set may have been cleared; drop any open session
@@ -100,6 +109,11 @@ class WaylandHotkeyManager(HotkeyManager):
     def stop(self) -> None:
         self._deactivate()
         self._session_handle = None
+        # Drop the id→combo map alongside the session. The _on_activated guard
+        # already rejects signals once _session_handle is None, but clearing the
+        # map keeps the invariant "ids exist only while a session is live", so a
+        # stale id can never resolve to a callback even if that guard regresses.
+        self._ids = {}
 
     def _dispatch(self, shortcut_id: str) -> None:
         """Invoke the callback an ``Activated`` shortcut id maps to (no-op if the
@@ -170,10 +184,13 @@ class WaylandHotkeyManager(HotkeyManager):
             "Activated",
             self._on_activated,
         )
-        # Close the session object so the compositor drops our shortcuts.
+        # Close the session object so the compositor drops our shortcuts. Use a
+        # fire-and-forget asyncCall: teardown runs on every re-bind and at app
+        # shutdown, and must not block on a slow or hung portal waiting for the
+        # Close reply (we have nothing to do with it anyway).
         session = QDBusInterface(_PORTAL_SERVICE, self._session_handle, _SESSION_IFACE, bus)
         if session.isValid():
-            session.call("Close")
+            session.asyncCall("Close")
         self._session_handle = None
 
     def _open_session(self, bus, iface) -> str:
