@@ -52,17 +52,14 @@ editor to annotate, redact, and extract text first.
 ## Highlights
 
 - **Two capture hotkeys**, both customizable:
-  - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: click an
-    app window to grab just that window (real pixels, even when partly
-    covered), click empty space to grab the whole screen, or drag a rectangle
-    for a region
-    with a live size readout. The window under the pointer is spotlit against
-    the dimmed desktop so the click target is always clear; hovering can also
-    fully highlight it before the click — with the window's own pixels lifted
-    out from under whatever overlaps it — after a configurable rest time
-    (Settings, "Highlight window after"; off by default). A pixel loupe follows the pointer — magnified
-    pixels, a crosshair, and the position/colour under the cursor — so region
-    boundaries land exactly where you want.
+  - **Capture** (`⌥A`) — one overlay, mode chosen by the pointer: click a
+    window to grab just it (real pixels, even when partly covered), click empty
+    space for the whole screen, or drag for a region with a live size readout.
+    The target window is spotlit against the dimmed desktop, and a pixel loupe
+    (magnified pixels + crosshair + position/colour) lands region edges
+    precisely. Resting on a window can also fully highlight it first — lifting
+    its pixels out from under any overlap — after a configurable delay
+    (Settings → *Highlight window after*; off by default).
   - **Full screen** (`⌥S`) — every display at once, instantly.
 - **Hands-free by default** — a capture is saved to your folder **and** copied to
   the clipboard automatically, no extra keypress. Fully configurable (see below).
@@ -224,8 +221,8 @@ with a timestamp — e.g. `ShotQuill 2026-06-04 14.30.00.png`. Choose **PNG** or
 ## Command line (scripts & agents)
 
 ShotQuill ships a CLI — `shotquill`, or the short alias `squill` — so shell
-scripts and AI agents can capture without the GUI. Run bare it launches the
-menu-bar app; with a subcommand it stays headless:
+scripts and AI agents can capture without the GUI. Run it bare and it launches
+the menu-bar app; with a subcommand it stays headless:
 
 ```bash
 squill capture                            # full screen → temp file, path on stdout
@@ -417,8 +414,8 @@ default. The `squill` CLI and MCP server still work even without a tray.
 design (no per-app keyboard listener can see another app's input). ShotQuill
 detects this at startup and shows a notification rather than spawning a
 silent dead listener. Workarounds: use the tray menu, or bind a
-compositor-level shortcut to `squill capture` / `squill capture --fullscreen`
-(or whichever subcommand fits) in your desktop's keyboard settings.
+compositor-level shortcut to `squill capture` (full screen → file) in your
+desktop's keyboard settings.
 
 **Captures fail with "Wayland blocks out-of-band grabs".** Install
 `xdg-desktop-portal` and a backend for your desktop:
@@ -430,8 +427,8 @@ Correct — there is no Linux OCR backend yet. The Apple Vision integration is
 macOS-only; a `tesseract` backend is a future item.
 
 **`squill windows` fails with "window enumeration is not implemented".** Also
-correct — X11 window enumeration is on the roadmap but not shipped. Full-
-screen and region capture work; smart-capture degrades to those modes.
+correct — X11 window enumeration is on the roadmap but not shipped.
+Full-screen and region capture work; smart-capture degrades to those modes.
 
 **Smart capture's window highlight never appears.** Same reason as above —
 without window enumeration the overlay can't outline a window. Drag for a
