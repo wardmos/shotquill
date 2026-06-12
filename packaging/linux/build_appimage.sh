@@ -64,6 +64,15 @@ pyinstaller --noconfirm --name squill \
   "${EXCLUDE_FLAGS[@]}" \
   packaging/linux/cli_entry.py
 
+# Prune the dead weight --exclude-module can't reach: it drops Python *modules*,
+# but PyInstaller's PySide6 hook still copies whole subtrees of shared libraries
+# and Qt plugins (the QML/Quick engine, QtPdf, the GTK platform theme and its
+# Pango/ATK/Cairo stack, …) that nothing on the CLI/MCP path loads — ~50 MB on a
+# 6.11 build. The pruner removes only libraries unreachable from the real entry
+# points, so it can't break a kept path; it fails loudly if the keep policy ever
+# prunes a required plugin (a Qt-layout-drift guard, like the macOS DMG's).
+python3 packaging/linux/prune_bundle.py build/appimage/dist/squill
+
 # Assemble the AppDir: the PyInstaller tree under usr/bin, a .desktop + icon,
 # and an AppRun that forwards every argument straight to the CLI.
 APPDIR="build/appimage/ShotQuill.AppDir"
