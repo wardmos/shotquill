@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 
-from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
+from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
 
 # ScreenCaptureKit calls are completion-handler based; we block the calling
 # thread until the handler fires. The timeout guards against a wedged capture
@@ -69,27 +69,61 @@ class MacScreenCapturer(ScreenCapturer):
         scale = result.width / region.width if region.width else 1.0
         return replace(result, scale=scale, origin_x=region.x, origin_y=region.y)
 
-    @staticmethod
-    def _virtual_desktop_bounds() -> tuple[int, int, int, int]:  # pragma: no cover - macOS only
-        """Logical bounds ``(x, y, width, height)`` of the whole virtual desktop
-        — the union of every active display's bounds, in the same coordinate
-        space as window bounds. Best-effort for redaction: any failure reading
-        the display list falls back to zeros rather than breaking the capture."""
-        try:
-            import Quartz
+    def list_displays(self) -> list[DisplayInfo]:
+        """Quartz display list (primary first) — overrides the Qt default so the
+        macOS CLI never has to construct a QGuiApplication just to enumerate."""
+        import Quartz
 
-            err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
-            if err or not count:
-                return (0, 0, 0, 0)
-            xs, ys, rights, bottoms = [], [], [], []
-            for did in ids[:count]:
-                b = Quartz.CGDisplayBounds(did)
-                xs.append(int(b.origin.x))
-                ys.append(int(b.origin.y))
-                rights.append(int(b.origin.x + b.size.width))
-                bottoms.append(int(b.origin.y + b.size.height))
-            x, y = min(xs), min(ys)
-            return (x, y, max(rights) - x, max(bottoms) - y)
+        # 128 is a hard cap, not an allocation: CG fills at most this many ids
+        # and reports how many it wrote. Anything beyond it is silently absent,
+        # so the cap is set far above any physically plumbable display count.
+        err, ids, count = Quartz.CGGetActiveDisplayList(128, None, None)
+        if err or not count:
+            from shotquill.headless import CapabilityUnsupported
+
+            raise CapabilityUnsupported("displays", "CGGetActiveDisplayList reported no displays")
+        main_id = Quartz.CGMainDisplayID()
+        ordered = sorted(ids[:count], key=lambda did: did != main_id)
+        displays = []
+        for i, did in enumerate(ordered):
+            b = Quartz.CGDisplayBounds(did)  # logical points, same space as windows
+            logical_w = int(b.size.width)
+            # Pixel ratio from the current display mode (2.0 on Retina); bounds
+            # stay logical so a display capture is a region capture of them.
+            try:
+                mode = Quartz.CGDisplayCopyDisplayMode(did)
+                scale = Quartz.CGDisplayModeGetPixelWidth(mode) / logical_w if logical_w else 1.0
+            except Exception:
+                scale = 1.0
+            displays.append(
+                DisplayInfo(
+                    index=i,
+                    name=f"display {did}",
+                    bounds=Rect(
+                        x=int(b.origin.x),
+                        y=int(b.origin.y),
+                        width=logical_w,
+                        height=int(b.size.height),
+                    ),
+                    scale=float(scale),
+                    primary=did == main_id,
+                )
+            )
+        return displays
+
+    def _virtual_desktop_bounds(self) -> tuple[int, int, int, int]:  # pragma: no cover - macOS only
+        """Logical bounds ``(x, y, width, height)`` of the whole virtual desktop
+        — the union of every active display's bounds (from ``list_displays``, so
+        the Quartz enumeration lives in one place), in the same coordinate space
+        as window bounds. Best-effort for redaction: any failure enumerating
+        falls back to zeros rather than breaking the capture."""
+        try:
+            bounds = [d.bounds for d in self.list_displays()]
+            x = min(b.x for b in bounds)
+            y = min(b.y for b in bounds)
+            right = max(b.x + b.width for b in bounds)
+            bottom = max(b.y + b.height for b in bounds)
+            return (x, y, right - x, bottom - y)
         except Exception:
             return (0, 0, 0, 0)
 

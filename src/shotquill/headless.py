@@ -9,7 +9,7 @@ instead of shelling out.
 
 Errors are typed and carry the documented CLI exit codes, because agents
 branch on them: 3 permission, 4 capability unavailable on this platform or
-session, 5 no window matched.
+session, 5 no window or display matched.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
+from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
@@ -54,6 +54,14 @@ class CapabilityUnsupported(HeadlessError):
 
 
 class WindowNotFound(HeadlessError):
+    exit_code = EXIT_NO_MATCH
+
+
+class DisplayNotFound(HeadlessError):
+    """The requested display index does not exist (monitors may have been
+    unplugged since the caller enumerated). Shares the no-match exit code:
+    agents treat both as "re-list, then re-pick"."""
+
     exit_code = EXIT_NO_MATCH
 
 
@@ -129,6 +137,19 @@ def select_window(
     return matches[0], len(matches)
 
 
+def select_display(displays: list[DisplayInfo], index: int) -> DisplayInfo:
+    """Pick a display by its enumeration index (primary is 0)."""
+    if index < 0:
+        raise DisplayNotFound(f"display index must be >= 0 — got {index}")
+    for display in displays:
+        if display.index == index:
+            return display
+    raise DisplayNotFound(
+        f"no display {index}: this machine has {len(displays)} "
+        f"(0..{len(displays) - 1}; see `squill displays`)"
+    )
+
+
 def active_blocklist():
     """Load the user's blocklist, failing closed when it cannot be read.
 
@@ -166,6 +187,7 @@ def perform_capture(
     app: str | None = None,
     title: str | None = None,
     region: Rect | None = None,
+    display: int | None = None,
     blocklist=None,
     via: str = "cli",
 ) -> tuple[CaptureResult, str, int]:
@@ -179,8 +201,8 @@ def perform_capture(
     A window or app capture that lands on the blocklist raises
     :class:`CaptureBlocked`. An empty blocklist (the default) takes the exact
     same path as before — no extra window enumeration, no new failure modes.
-    Full-screen and region captures are not refused here; the sensitive window
-    is one part of the frame and is redacted instead.
+    Full-screen, display and region captures are not refused here; the
+    sensitive window is one part of the frame and is redacted instead.
     """
     if blocklist is None:
         blocklist = active_blocklist()
@@ -195,6 +217,26 @@ def perform_capture(
             _refuse_if_blocked(window, blocklist, via=via)
         result = capturer.capture_window(window.window_id)
         return result, f"{window.owner} — {window.title}", matched
+    if display is not None:
+        # One display is a rectangle of the virtual desktop, so this rides the
+        # region path — including its blocklist redaction — instead of growing
+        # a parallel capture mode per backend.
+        picked = select_display(capturer.list_displays(), display)
+        bounds = picked.bounds
+        target = f"display {picked.index} ({bounds.width}x{bounds.height} at {bounds.x},{bounds.y})"
+        try:
+            result = capturer.capture_region(bounds)
+        except ValueError as exc:
+            # The index was valid at enumeration time, so bounds the backend now
+            # rejects mean the display changed under us (unplugged, or a Wayland
+            # frame that doesn't cover it). That is a re-list-and-re-pick signal
+            # for the caller, not invalid arguments and not a generic failure.
+            raise DisplayNotFound(f"{target} is no longer capturable: {exc}") from exc
+        if blocklist:
+            result = _redact_blocked(
+                result, capturer, blocklist, origin=(bounds.x, bounds.y), target=target, via=via
+            )
+        return result, target, 1
     if region is not None:
         target = f"region {region.x},{region.y},{region.width},{region.height}"
         result = capturer.capture_region(region)
@@ -311,6 +353,25 @@ def windows_payload(windows: list[WindowInfo]) -> list[dict]:
     ]
 
 
+def displays_payload(displays: list[DisplayInfo]) -> list[dict]:
+    """The machine-readable display list shared by ``--json`` and MCP."""
+    return [
+        {
+            "index": d.index,
+            "name": d.name,
+            "primary": d.primary,
+            "scale": d.scale,
+            "bounds": {
+                "x": d.bounds.x,
+                "y": d.bounds.y,
+                "width": d.bounds.width,
+                "height": d.bounds.height,
+            },
+        }
+        for d in displays
+    ]
+
+
 def parse_region(text: str) -> Rect:
     """Parse the ``x,y,w,h`` syntax (four integers, logical coordinates)."""
     parts = text.split(",")
@@ -416,6 +477,7 @@ def _capture_checks() -> tuple[list[dict], bool | None]:
 
     detail, available = _capture_detail(type(capturer).__name__)
     checks = [{"capability": "capture", "available": available, "detail": detail}]
+    checks.append(_check_displays(capturer))
     try:
         capturer.list_windows()
         checks.append(
@@ -425,6 +487,23 @@ def _capture_checks() -> tuple[list[dict], bool | None]:
     except CapabilityUnsupported as exc:
         checks.append({"capability": "list_windows", "available": False, "detail": exc.reason})
         return checks, False
+
+
+def _check_displays(capturer: ScreenCapturer) -> dict:
+    """How many monitors `capture --display N` can pick from, with geometry —
+    the doctor is where agents learn the valid indexes without a capture."""
+    try:
+        displays = capturer.list_displays()
+    except CapabilityUnsupported as exc:
+        return {"capability": "displays", "available": False, "detail": exc.reason}
+    except Exception as exc:  # noqa: BLE001 - the doctor reports problems, it must not crash on one
+        return {"capability": "displays", "available": False, "detail": f"probe: {exc}"}
+    described = ", ".join(
+        f"{d.index}: {d.bounds.width}x{d.bounds.height} at {d.bounds.x},{d.bounds.y}"
+        + (" (primary)" if d.primary else "")
+        for d in displays
+    )
+    return {"capability": "displays", "available": True, "detail": described}
 
 
 def _capture_detail(backend: str) -> tuple[str, bool]:

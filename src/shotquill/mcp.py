@@ -41,8 +41,9 @@ _SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 _INSTRUCTIONS = (
     "Screenshot & OCR tools for this machine. `capture` returns the image "
     "inline — pass max_width (e.g. 1024) to downscale and save context. "
-    "`list_windows` finds window ids for exact picks; `ocr` reads on-screen "
-    "text without spending image tokens; `doctor` explains any unavailable "
+    "`list_windows` finds window ids for exact picks; `list_displays` finds "
+    "monitor indexes for one-monitor shots; `ocr` reads on-screen text "
+    "without spending image tokens; `doctor` explains any unavailable "
     "capability or missing permission."
 )
 
@@ -168,7 +169,7 @@ def _tools_call(msg_id, params: dict) -> dict:
 def _error_type(exc: Exception) -> str:
     if isinstance(exc, headless.CapabilityUnsupported):
         return "unsupported"
-    if isinstance(exc, headless.WindowNotFound):
+    if isinstance(exc, (headless.WindowNotFound, headless.DisplayNotFound)):
         return "no_match"
     if isinstance(exc, (headless.CapturePermissionError, PermissionError)):
         return "permission"
@@ -183,7 +184,7 @@ def _error_type(exc: Exception) -> str:
 # reliably than on a bare failure message.
 _ERROR_HINTS = {
     "unsupported": "call the doctor tool to see what this host supports",
-    "no_match": "call list_windows to see what is actually on screen",
+    "no_match": "call list_windows (or list_displays) to see what is actually available",
     "permission": "call the doctor tool for the missing grant and how to fix it",
     "blocked": "the target app is on the user's blocklist and will not be captured; do not retry",
 }
@@ -195,8 +196,11 @@ _ERROR_HINTS = {
 def _validate_target(args: dict) -> Rect | None:
     """Shared target validation; returns the parsed region (or None)."""
     window_id, app, region = args.get("window_id"), args.get("app"), args.get("region")
-    if sum(value is not None for value in (window_id, app, region)) > 1:
-        raise ValueError("window_id, app and region are mutually exclusive")
+    display = args.get("display")
+    if sum(value is not None for value in (window_id, app, region, display)) > 1:
+        raise ValueError("window_id, app, region and display are mutually exclusive")
+    if display is not None and (not isinstance(display, int) or isinstance(display, bool)):
+        raise ValueError("display must be an integer index (see list_displays)")
     if app is not None and not str(app).strip():
         # An empty app would silently fall through to a full-screen grab;
         # capturing what the caller did not ask for is worse than failing.
@@ -231,6 +235,7 @@ def _capture_image(args: dict):
         app=args.get("app"),
         title=args.get("title"),
         region=region,
+        display=args.get("display"),
         via="mcp",
     )
     from shotquill.imaging import result_to_qimage
@@ -274,6 +279,13 @@ def _tool_list_windows(args: dict):
     windows = headless.get_capturer().list_windows()
     audit.record("windows", via="mcp", target=f"{len(windows)} windows")
     payload = {"windows": headless.windows_payload(windows)}
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_list_displays(args: dict):
+    displays = headless.get_capturer().list_displays()
+    audit.record("displays", via="mcp", target=f"{len(displays)} displays")
+    payload = {"displays": headless.displays_payload(displays)}
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
@@ -338,6 +350,13 @@ _TARGET_PROPERTIES = {
         },
         "required": ["x", "y", "width", "height"],
     },
+    "display": {
+        "type": "integer",
+        "description": (
+            "Capture one monitor by index from list_displays (0 = primary). "
+            "Mutually exclusive with window_id/app/region."
+        ),
+    },
 }
 
 _WINDOW_SCHEMA = {
@@ -347,6 +366,26 @@ _WINDOW_SCHEMA = {
         "owner": {"type": "string"},
         "title": {"type": "string"},
         "bundle_id": {"type": ["string", "null"]},
+        "bounds": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
+            },
+        },
+    },
+}
+
+
+_DISPLAY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "index": {"type": "integer"},
+        "name": {"type": "string"},
+        "primary": {"type": "boolean"},
+        "scale": {"type": "number"},
         "bounds": {
             "type": "object",
             "properties": {
@@ -373,9 +412,10 @@ _TOOLS = {
             "name": "capture",
             "description": (
                 "Take a screenshot of the full screen (default), one window "
-                "(by window_id, or by app/title match), or a region. Returns "
-                "the image plus a JSON metadata text block. Use max_width "
-                "(e.g. 1024) to downscale large screens and save context."
+                "(by window_id, or by app/title match), one monitor (by "
+                "display index), or a region. Returns the image plus a JSON "
+                "metadata text block. Use max_width (e.g. 1024) to downscale "
+                "large screens and save context."
             ),
             # Not readOnlyHint: save_path can write (and overwrite) a file.
             "annotations": {"title": "Take a screenshot", "openWorldHint": False},
@@ -427,6 +467,24 @@ _TOOLS = {
                 "type": "object",
                 "properties": {"windows": {"type": "array", "items": _WINDOW_SCHEMA}},
                 "required": ["windows"],
+            },
+        },
+    },
+    "list_displays": {
+        "handler": _tool_list_displays,
+        "descriptor": {
+            "name": "list_displays",
+            "description": (
+                "List the monitors of this machine: index (primary first), "
+                "name, logical bounds on the virtual desktop, pixel scale. "
+                "Indexes feed capture/ocr `display` for a one-monitor shot."
+            ),
+            "annotations": _read_only("List monitors"),
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "outputSchema": {
+                "type": "object",
+                "properties": {"displays": {"type": "array", "items": _DISPLAY_SCHEMA}},
+                "required": ["displays"],
             },
         },
     },
