@@ -81,10 +81,13 @@ class QtGrabCapturer(ScreenCapturer):
 
     def list_windows(self) -> list[WindowInfo]:
         # EWMH enumeration over python-xlib; raises CapabilityUnsupported when
-        # there is no window manager / server / library to read it from.
+        # there is no window manager / server / library to read it from. X11
+        # geometry is physical pixels; rescale to the logical points the
+        # overlay and blocklist redaction expect, using the same device-pixel
+        # ratio the capture path applies so the two stay in lockstep.
         from shotquill.capture import x11
 
-        return x11.list_windows()
+        return x11.to_logical_bounds(x11.list_windows(), self._capture_dpr())
 
     def capture_window(self, window_id: int) -> CaptureResult:
         # Find the window in the live list so an unknown/closed id fails clearly
@@ -126,6 +129,18 @@ class QtGrabCapturer(ScreenCapturer):
         return _qimage_to_result(pixmap.toImage(), dpr, origin=(bounds.x, bounds.y))
 
     @staticmethod
+    def _capture_dpr() -> float:
+        """The device-pixel ratio the capture canvas uses — the single source of
+        truth shared with ``list_windows`` so window bounds rescale to exactly
+        the logical space the captured pixels are addressed in."""
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            raise CapabilityUnsupported("capture", "Qt reports no screens")
+        return max(s.devicePixelRatio() for s in screens)
+
+    @staticmethod
     def _grab_virtual_desktop():
         """Composite every screen onto one canvas in virtual-desktop space."""
         from PySide6.QtCore import QRect
@@ -135,7 +150,7 @@ class QtGrabCapturer(ScreenCapturer):
         if not screens:
             raise CapabilityUnsupported("capture", "Qt reports no screens")
         virtual = screens[0].virtualGeometry()
-        dpr = max(s.devicePixelRatio() for s in screens)
+        dpr = QtGrabCapturer._capture_dpr()
         canvas = QImage(
             int(virtual.width() * dpr),
             int(virtual.height() * dpr),

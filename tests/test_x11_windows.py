@@ -16,7 +16,7 @@ import pytest
 
 from shotquill import headless
 from shotquill.capture.base import Rect, WindowInfo
-from shotquill.capture.x11 import RawWindow, windows_from_raw
+from shotquill.capture.x11 import RawWindow, to_logical_bounds, windows_from_raw
 
 OWN_PID = 4242
 
@@ -121,6 +121,32 @@ def test_reversal_happens_after_filtering():
     assert order == [3, 1]
 
 
+# --- to_logical_bounds: physical -> logical rescale ---------------------------
+
+
+def test_logical_bounds_are_unchanged_at_dpr_1():
+    windows = [WindowInfo(window_id=1, owner="A", title="t", bounds=Rect(10, 20, 30, 40))]
+    assert to_logical_bounds(windows, 1.0) == windows
+
+
+def test_logical_bounds_divide_by_dpr():
+    # A 4K-scaled (dpr 2) window at physical 1000,600 sized 800x400 maps to the
+    # logical 500,300 / 400x200 that the capture origin and scale assume — so
+    # the redaction block lands on the window instead of past it.
+    windows = [WindowInfo(window_id=1, owner="A", title="t", bounds=Rect(1000, 600, 800, 400))]
+    (win,) = to_logical_bounds(windows, 2.0)
+    assert win.bounds == Rect(500, 300, 400, 200)
+
+
+def test_logical_bounds_round_outward_to_never_undercover():
+    # Odd physical extents must not shrink inside the real window when halved —
+    # a blocklist block that under-covers would leak the uncovered strip.
+    windows = [WindowInfo(window_id=1, owner="A", title="t", bounds=Rect(1, 1, 3, 3))]
+    (win,) = to_logical_bounds(windows, 2.0)
+    # x: floor(1/2)=0, right: ceil(4/2)=2 -> covers logical 0..2 (>= the window)
+    assert win.bounds == Rect(0, 0, 2, 2)
+
+
 # --- backend wiring -----------------------------------------------------------
 
 
@@ -134,7 +160,17 @@ def capturer(qapp):
 def test_list_windows_delegates_to_x11(capturer, monkeypatch):
     sentinel = [WindowInfo(window_id=1, owner="A", title="t", bounds=Rect(0, 0, 1, 1))]
     monkeypatch.setattr("shotquill.capture.x11.list_windows", lambda: sentinel)
-    assert capturer.list_windows() is sentinel
+    # Pin dpr=1 so the rescale is a no-op and the list passes through unchanged.
+    monkeypatch.setattr(type(capturer), "_capture_dpr", staticmethod(lambda: 1.0))
+    assert capturer.list_windows() == sentinel
+
+
+def test_list_windows_rescales_physical_bounds_to_logical(capturer, monkeypatch):
+    raw = [WindowInfo(window_id=1, owner="A", title="t", bounds=Rect(1000, 600, 800, 400))]
+    monkeypatch.setattr("shotquill.capture.x11.list_windows", lambda: raw)
+    monkeypatch.setattr(type(capturer), "_capture_dpr", staticmethod(lambda: 2.0))
+    (win,) = capturer.list_windows()
+    assert win.bounds == Rect(500, 300, 400, 200)
 
 
 def test_list_windows_propagates_unsupported(capturer, monkeypatch):

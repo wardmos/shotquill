@@ -15,17 +15,18 @@ under the offscreen/Xvfb test platforms); the decisions — what to skip, how to
 order, how raw X properties become a :class:`WindowInfo` — live in the pure
 :func:`windows_from_raw` and are unit-tested with plain data.
 
-Coordinates are X11 pixels with a top-left origin, which equal Qt's logical
-virtual-desktop coordinates on a standard-DPI display. On a fractionally scaled
-X11 desktop the two can diverge; window picking still works, but redaction
-geometry is best-effort there. Wayland is handled separately — the compositor
-forbids an app from enumerating other apps' windows at all (see ``wayland.py``).
+The X protocol reports geometry in *physical* pixels with a top-left origin;
+:func:`to_logical_bounds` rescales it to the *logical* points the rest of the
+app (and ``WindowInfo.bounds``) speaks, so blocklist redaction and the overlay
+stay aligned under display scaling. Wayland is handled separately — the
+compositor forbids an app from enumerating other apps' windows at all (see
+``wayland.py``).
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from shotquill.capture.base import Rect, WindowInfo
 from shotquill.headless import CapabilityUnsupported
@@ -100,8 +101,44 @@ def windows_from_raw(
     return out
 
 
+def to_logical_bounds(windows: list[WindowInfo], dpr: float) -> list[WindowInfo]:
+    """Rescale X11 *physical*-pixel bounds to the *logical* points the rest of
+    the app speaks (Qt's virtual-desktop geometry, what ``WindowInfo.bounds`` is
+    contractually in).
+
+    The X protocol reports geometry in device pixels, but the capture origin,
+    the overlay, and — critically — blocklist redaction all work in logical
+    points scaled by the capture's device-pixel ratio. On a standard-DPI desktop
+    ``dpr`` is 1.0 and this is a no-op; under display scaling it is what keeps a
+    blocklist redaction block aligned with the window it must cover (a misplaced
+    block would leave the sensitive pixels in the saved image). Edges round
+    outward so the logical rect never shrinks back inside the real window.
+
+    Best-effort under a *mixed*-DPI multi-monitor desktop: like the capture
+    itself it assumes one ratio, so a window on a differently scaled monitor can
+    be off — the dominant single-ratio case (including plain 1.0) is exact.
+    """
+    if dpr == 1.0:
+        return windows
+    import math
+
+    rescaled = []
+    for w in windows:
+        b = w.bounds
+        x0 = math.floor(b.x / dpr)
+        y0 = math.floor(b.y / dpr)
+        x1 = math.ceil((b.x + b.width) / dpr)
+        y1 = math.ceil((b.y + b.height) / dpr)
+        rescaled.append(replace(w, bounds=Rect(x0, y0, x1 - x0, y1 - y0)))
+    return rescaled
+
+
 def list_windows() -> list[WindowInfo]:
-    """On-screen application windows, front-most first (the X11 backend path).
+    """On-screen application windows, front-most first, in *physical* X11 pixels.
+
+    The Qt backend wraps this to rescale bounds to logical points (see
+    :func:`to_logical_bounds`) — callers that need the documented logical
+    geometry should go through the backend, not here directly.
 
     Raises :class:`CapabilityUnsupported` when the platform can't answer —
     ``python-xlib`` not installed, no reachable X server, or no EWMH-compliant
