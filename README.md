@@ -309,6 +309,11 @@ squill record end --session "$DIR"                                # prints the H
 - `--json` on any of the three prints a machine-readable object; every step is
   audit-logged with `via: "record"`.
 
+The MCP server exposes the same loop as `record_start` / `record_frame` /
+`record_end` (below). For agents,
+[`skills/flight-recorder/SKILL.md`](skills/flight-recorder/SKILL.md) is the
+recipe for *when* to capture and *how* to label, layered on top of those tools.
+
 ### MCP server
 
 `squill mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io)

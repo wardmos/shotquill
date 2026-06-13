@@ -141,3 +141,4 @@ tmp/
 # ── Markdown — ignored by default. Whitelist files to commit below with `!`.
 *.md
 !/README.md
+!/skills/**/*.md
