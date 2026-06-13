@@ -154,13 +154,16 @@ class WaylandHotkeyManager(HotkeyManager):
         session = self._open_session(bus, iface)
 
         # Subscribe before binding so an immediate activation can't be missed.
-        bus.connect(
+        # A failed connect leaves a bound session whose activations never reach
+        # us — a silently dead hotkey — so surface it instead of swallowing it.
+        if not bus.connect(
             _PORTAL_SERVICE,
             _PORTAL_PATH,
             _GLOBALSHORTCUTS_IFACE,
             "Activated",
             self._on_activated,
-        )
+        ):
+            raise HotkeyUnavailable("could not subscribe to the GlobalShortcuts Activated signal")
         self._session_handle = session
         try:
             self._bind_shortcuts(bus, iface, session, specs)
