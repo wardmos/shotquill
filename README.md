@@ -242,6 +242,7 @@ squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
+squill ocr --window-id 42 --contains Login # assert text is on screen (exit 20 if not)
 squill doctor                             # capability & permission report
 ```
 
@@ -260,11 +261,22 @@ The parts agents rely on:
   `--window-id`, `--region`, or nothing for the full screen) captures and
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
   `squill ocr -` still read a file or stdin.
-- **Exit codes are the contract**: `0` ok · `2` usage · `3` permission denied ·
-  `4` capability unavailable on this platform/session · `5` no window or
-  display matched · `6` blocked by the app blocklist. Every `--help` prints
-  them, so the contract is discoverable without this README;
-  `python -m shotquill` accepts the same subcommands.
+- **OCR can assert, not just read.** AI-generated apps have no golden image to
+  pixel-diff — every build is new — so the useful check is semantic: did the
+  right text render? `squill ocr --window-id 42 --contains "Login"` exits `0` if
+  the text is on screen and `20` if it isn't, so CI can tell a failed assertion
+  from a broken tool. `--matches REGEX` asserts a pattern, both are repeatable
+  (all must hold), and `-i` ignores case (OCR case is noisy). The recognized
+  text still prints on stdout; the per-check result goes to stderr. The MCP
+  `ocr` tool takes the same `contains`/`matches` and returns a structured
+  `passed`.
+- **Exit codes are the contract**, in two bands so a caller can always tell a
+  broken run from a negative result. **Errors `1`–`19`**: `1` error · `2` usage ·
+  `3` permission denied · `4` capability unavailable on this platform/session ·
+  `5` no window or display matched · `6` blocked by the app blocklist.
+  **Assertion results `20`+**: `20` OCR assertion failed. So `rc == 0` passed,
+  `0 < rc < 20` the tool failed, `rc >= 20` an assertion was false. Every
+  `--help` prints them; `python -m shotquill` accepts the same subcommands.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.

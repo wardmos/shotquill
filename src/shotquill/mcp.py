@@ -319,6 +319,23 @@ def _tool_ocr(args: dict):
     lines = recognizer.recognize(image)
     audit.record("ocr", via="mcp", target=source)
     structured = {"lines": lines, "source": source}
+
+    # Optional assertions: turn "read the screen" into "check the screen". The
+    # agent branches on structured `passed`, the way the CLI branches on its
+    # exit code; a broken regex raises ValueError (-> invalid_arguments).
+    contains = tuple(args.get("contains") or ())
+    matches = tuple(args.get("matches") or ())
+    if contains or matches:
+        from shotquill import textassert
+
+        checks = textassert.evaluate(
+            lines, contains=contains, matches=matches, ignore_case=bool(args.get("ignore_case"))
+        )
+        structured["assertions"] = [
+            {"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks
+        ]
+        structured["passed"] = textassert.all_passed(checks)
+
     return [{"type": "text", "text": "\n".join(lines)}], structured
 
 
@@ -601,12 +618,14 @@ _TOOLS = {
         "descriptor": {
             "name": "ocr",
             "description": (
-                "Extract text with on-device OCR. Pass path for an existing "
-                "image file, or the capture target arguments (none = full "
-                "screen) to capture-and-recognize in memory — only text is "
-                "returned, costing no image tokens."
+                "Extract text with on-device OCR, and optionally assert on it. "
+                "Pass path for an existing image file, or the capture target "
+                "arguments (none = full screen) to capture-and-recognize in "
+                "memory — only text is returned, costing no image tokens. Add "
+                "contains/matches to check the screen (e.g. did 'Login' render) "
+                "and read `passed` in the result."
             ),
-            "annotations": _read_only("Read text off the screen or an image"),
+            "annotations": _read_only("Read or assert on text on the screen"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -615,6 +634,21 @@ _TOOLS = {
                         "description": (
                             "Image file to recognize. Exclusive with the capture targets."
                         ),
+                    },
+                    "contains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Assert the text contains each string (all must hold).",
+                    },
+                    "matches": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Assert the text matches each regex (all must hold).",
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Make contains/matches case-insensitive.",
                     },
                     **_TARGET_PROPERTIES,
                 },
@@ -627,6 +661,22 @@ _TOOLS = {
                     "source": {
                         "type": "string",
                         "description": "The file or capture target the text came from.",
+                    },
+                    "passed": {
+                        "type": "boolean",
+                        "description": "Present when contains/matches were given: did all hold.",
+                    },
+                    "assertions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["contains", "matches"]},
+                                "pattern": {"type": "string"},
+                                "passed": {"type": "boolean"},
+                            },
+                            "required": ["kind", "pattern", "passed"],
+                        },
                     },
                 },
                 "required": ["lines", "source"],
