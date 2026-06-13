@@ -29,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from shotquill import __version__, audit, headless
+from shotquill import __version__, audit, headless, record
 from shotquill.capture.base import Rect
 
 # Newest first: initialize echoes the client's version when we actually
@@ -44,7 +44,10 @@ _INSTRUCTIONS = (
     "`list_windows` finds window ids for exact picks; `list_displays` finds "
     "monitor indexes for one-monitor shots; `ocr` reads on-screen text "
     "without spending image tokens; `doctor` explains any unavailable "
-    "capability or missing permission."
+    "capability or missing permission. To leave a reviewable trail of what "
+    "you did on screen, call `record_start` once, `record_frame` before/after "
+    "each key action (it captures to disk, not into your context), then "
+    "`record_end` to write an HTML filmstrip."
 )
 
 
@@ -175,7 +178,9 @@ def _error_type(exc: Exception) -> str:
         return "permission"
     if isinstance(exc, headless.CaptureBlocked):
         return "blocked"
-    if isinstance(exc, ValueError):
+    if isinstance(exc, record.SessionNotFound):
+        return "no_session"
+    if isinstance(exc, (record.RecordError, ValueError)):
         return "invalid_arguments"
     return "error"
 
@@ -187,6 +192,7 @@ _ERROR_HINTS = {
     "no_match": "call list_windows (or list_displays) to see what is actually available",
     "permission": "call the doctor tool for the missing grant and how to fix it",
     "blocked": "the target app is on the user's blocklist and will not be captured; do not retry",
+    "no_session": "call record_start first, then pass the conversation_id it returns as `session`",
 }
 
 
@@ -318,6 +324,96 @@ def _tool_ocr(args: dict):
 
 def _tool_doctor(args: dict):
     payload = {"checks": headless.doctor_checks()}
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_record_start(args: dict):
+    directory = args.get("dir")
+    session = record.start_session(
+        session_id=args.get("id"),
+        directory=Path(str(directory)).expanduser() if directory else None,
+        agent_name=args.get("agent"),
+        agent_id=args.get("agent_id"),
+        label=args.get("label"),
+    )
+    audit.record("record_start", via="record", target=session.id, dest=str(session.dir))
+    payload = {
+        "conversation_id": session.id,
+        "dir": str(session.dir.resolve()),
+        "manifest": str(session.manifest_path.resolve()),
+    }
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _require_session(args: dict) -> record.Session:
+    """Resolve the required ``session`` handle (id or directory)."""
+    handle = args.get("session")
+    if not handle or not str(handle).strip():
+        raise ValueError("session is required (the conversation_id from record_start)")
+    return record.resolve_session(str(handle))
+
+
+def _tool_record_frame(args: dict):
+    session = _require_session(args)
+    tool = args.get("tool")
+    if not tool or not str(tool).strip():
+        raise ValueError("tool is required (the action this frame documents)")
+
+    # Mirror the CLI record path: load the blocklist once, keep redaction on, and
+    # record `redacted` as whether protection was in force (see record.py).
+    region = _validate_target(args)
+    blocklist = headless.active_blocklist()
+    capturer = headless.get_capturer()
+    result, target, matched = headless.perform_capture(
+        capturer,
+        window_id=args.get("window_id"),
+        app=args.get("app"),
+        title=args.get("title"),
+        region=region,
+        display=args.get("display"),
+        blocklist=blocklist,
+        via="record",
+    )
+    from shotquill.imaging import result_to_qimage
+
+    image_bytes = headless.encode_qimage(result_to_qimage(result), "png")
+    frame = record.record_frame(
+        session,
+        image_bytes=image_bytes,
+        tool=str(tool),
+        target=target,
+        label=args.get("label"),
+        redacted=bool(blocklist),
+    )
+    dest = str((session.dir / frame.image).resolve())
+    audit.record("record_frame", via="record", target=target, dest=dest)
+    payload = {
+        "conversation_id": session.id,
+        "index": frame.index,
+        "image": dest,
+        "tool": frame.tool,
+        "target": target,
+        "redacted": frame.redacted,
+    }
+    if matched > 1:
+        payload["matched_windows"] = matched
+        payload["note"] = "captured the front-most match; use window_id for an exact pick"
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_record_end(args: dict):
+    session = _require_session(args)
+    filmstrip = record.end_session(session)
+    manifest = record.load_manifest(session)
+    html_path = str(filmstrip.resolve())
+    audit.record("record_end", via="record", target=session.id, dest=html_path)
+    payload = {
+        "conversation_id": session.id,
+        "dir": str(session.dir.resolve()),
+        "manifest": str(session.manifest_path.resolve()),
+        "filmstrip": html_path,
+        "frames": len(manifest.get("frames", [])),
+    }
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
@@ -533,6 +629,137 @@ _TOOLS = {
                     },
                 },
                 "required": ["lines", "source"],
+            },
+        },
+    },
+    "record_start": {
+        "handler": _tool_record_start,
+        "descriptor": {
+            "name": "record_start",
+            "description": (
+                "Open a flight-recorder session: a trace of frames you leave "
+                "behind as you operate the screen, for a human or a reviewing "
+                "AI to replay later. Returns conversation_id — pass it as "
+                "`session` to record_frame and record_end. Frames go to disk, "
+                "not into your context."
+            ),
+            "annotations": {"title": "Start a recording session", "openWorldHint": False},
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "description": "Note for the whole session."},
+                    "agent": {
+                        "type": "string",
+                        "description": "Name of the agent (gen_ai.agent.name).",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Stable agent id (gen_ai.agent.id).",
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Set the conversation id (default: generated).",
+                    },
+                    "dir": {
+                        "type": "string",
+                        "description": "Pin the session directory (default: data folder).",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {"type": "string"},
+                    "dir": {"type": "string"},
+                    "manifest": {"type": "string"},
+                },
+                "required": ["conversation_id", "dir", "manifest"],
+            },
+        },
+    },
+    "record_frame": {
+        "handler": _tool_record_frame,
+        "descriptor": {
+            "name": "record_frame",
+            "description": (
+                "Capture one frame into a session (full screen by default, or a "
+                "window/region/monitor via the target args). Blocklist redaction "
+                "stays on. The image is written to the session on disk and is NOT "
+                "returned to you — use `capture` when you want to see the pixels."
+            ),
+            "annotations": {"title": "Record one frame", "openWorldHint": False},
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "conversation_id (or directory) from record_start.",
+                    },
+                    "tool": {
+                        "type": "string",
+                        "description": "The action this frame documents (gen_ai.tool.name).",
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Human-readable note for this frame.",
+                    },
+                    **_TARGET_PROPERTIES,
+                },
+                "required": ["session", "tool"],
+                "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {"type": "string"},
+                    "index": {"type": "integer"},
+                    "image": {"type": "string", "description": "Path the frame was written to."},
+                    "tool": {"type": "string"},
+                    "target": {"type": "string"},
+                    "redacted": {
+                        "type": "boolean",
+                        "description": (
+                            "Blocklist protection was in force (not a no-user-content guarantee)."
+                        ),
+                    },
+                    "matched_windows": {"type": "integer"},
+                    "note": {"type": "string"},
+                },
+                "required": ["conversation_id", "index", "image", "tool", "target", "redacted"],
+            },
+        },
+    },
+    "record_end": {
+        "handler": _tool_record_end,
+        "descriptor": {
+            "name": "record_end",
+            "description": (
+                "Close a session and render its static HTML filmstrip. Returns "
+                "the manifest and filmstrip paths plus the frame count."
+            ),
+            "annotations": {"title": "End a recording session", "openWorldHint": False},
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "conversation_id (or directory) from record_start.",
+                    },
+                },
+                "required": ["session"],
+                "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {"type": "string"},
+                    "dir": {"type": "string"},
+                    "manifest": {"type": "string"},
+                    "filmstrip": {"type": "string"},
+                    "frames": {"type": "integer"},
+                },
+                "required": ["conversation_id", "dir", "manifest", "filmstrip", "frames"],
             },
         },
     },

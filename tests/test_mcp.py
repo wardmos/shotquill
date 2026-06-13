@@ -156,7 +156,16 @@ def test_ping():
 def test_tools_list_descriptors():
     (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     tools = {tool["name"]: tool for tool in response["result"]["tools"]}
-    assert set(tools) == {"capture", "list_windows", "list_displays", "ocr", "doctor"}
+    assert set(tools) == {
+        "capture",
+        "list_windows",
+        "list_displays",
+        "ocr",
+        "doctor",
+        "record_start",
+        "record_frame",
+        "record_end",
+    }
     capture_schema = tools["capture"]["inputSchema"]
     assert "window_id" in capture_schema["properties"]
     assert "display" in capture_schema["properties"]
@@ -453,3 +462,76 @@ def test_doctor_matrix(fake_capturer):
     capabilities = {item["capability"] for item in payload["checks"]}
     assert {"platform", "capture", "list_windows", "ocr"} <= capabilities
     assert result["structuredContent"] == payload
+
+
+# --- record_* ----------------------------------------------------------------
+
+
+@pytest.fixture
+def record_root(monkeypatch, tmp_path):
+    """Point flight-recorder sessions at tmp and keep the blocklist empty."""
+    from shotquill import blocklist as bl
+
+    root = tmp_path / "records"
+    monkeypatch.setattr(paths, "records_dir", lambda: root)
+    monkeypatch.setattr(headless, "active_blocklist", lambda: bl.Blocklist(()))
+    return root
+
+
+def test_record_round_trip(fake_capturer, record_root):
+    start = call("record_start", {"id": "conv-mcp", "agent": "builder"})["result"]
+    sid = start["structuredContent"]["conversation_id"]
+    assert sid == "conv-mcp"
+
+    frame = call("record_frame", {"session": sid, "tool": "click", "label": "submit"})["result"]
+    fdata = frame["structuredContent"]
+    assert fdata["index"] == 1
+    assert fdata["redacted"] is False  # empty blocklist
+    assert fdata["image"].endswith("frames/0001.png")
+    with open(fdata["image"], "rb") as fh:
+        assert fh.read(4) == PNG_MAGIC
+
+    end = call("record_end", {"session": sid})["result"]
+    edata = end["structuredContent"]
+    assert edata["frames"] == 1
+    assert edata["filmstrip"].endswith("index.html")
+    manifest = json.loads((record_root / "conv-mcp" / "manifest.json").read_text())
+    assert manifest["status"] == "complete"
+
+
+def test_record_frame_unknown_session_is_no_session(fake_capturer, record_root):
+    result = call("record_frame", {"session": "ghost", "tool": "click"})["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "no_session"
+    assert "record_start" in payload["hint"]
+    assert fake_capturer.calls == []  # no capture before the session check
+
+
+def test_record_frame_requires_tool(fake_capturer, record_root):
+    call("record_start", {"id": "conv-notool"})
+    result = call("record_frame", {"session": "conv-notool"})["result"]
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
+
+
+def test_record_frame_redacted_flag_tracks_blocklist(fake_capturer, monkeypatch, tmp_path):
+    from shotquill import blocklist as bl
+
+    monkeypatch.setattr(paths, "records_dir", lambda: tmp_path / "records")
+    monkeypatch.setattr(
+        headless, "active_blocklist", lambda: bl.Blocklist((bl.BlockRule(name="1Password"),))
+    )
+    call("record_start", {"id": "conv-r"})
+    frame = call("record_frame", {"session": "conv-r", "tool": "click"})["result"]
+    assert frame["structuredContent"]["redacted"] is True
+
+
+def test_record_audits_via_record(fake_capturer, record_root, isolated_audit):
+    call("record_start", {"id": "conv-a"})
+    call("record_frame", {"session": "conv-a", "tool": "click"})
+    call("record_end", {"session": "conv-a"})
+    entries = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
+    actions = {e["action"] for e in entries}
+    assert {"record_start", "record_frame", "record_end"} <= actions
+    assert all(e["via"] == "record" for e in entries if e["action"].startswith("record_"))
