@@ -129,6 +129,12 @@ class Session:
     def filmstrip_path(self) -> Path:
         return self.dir / FILMSTRIP_NAME
 
+    @property
+    def otlp_path(self) -> Path:
+        from shotquill import otlp
+
+        return self.dir / otlp.OTLP_NAME
+
 
 def start_session(
     *,
@@ -240,17 +246,31 @@ def record_frame(
 
 
 def end_session(session: Session, *, now: dt.datetime | None = None) -> Path:
-    """Close the session: mark the manifest complete and render the filmstrip.
+    """Close the session: mark the manifest complete and write its projections.
 
-    Returns the path to the static HTML filmstrip. Idempotent enough to re-run:
-    closing an already-closed session just refreshes ``ended_at`` and the HTML.
+    Produces two views of the same trace next to the session: the static HTML
+    filmstrip (for a human) and ``trace.otlp.json`` (OTLP/JSON, for an OTel
+    backend — written to disk, never sent anywhere). Returns the filmstrip path.
+    Idempotent enough to re-run: closing an already-closed session just refreshes
+    ``ended_at`` and both projections.
     """
     manifest = _read_manifest(session.manifest_path)
     manifest["status"] = STATUS_COMPLETE
     manifest["ended_at"] = now_iso(now)
     _write_manifest(session.manifest_path, manifest)
     session.filmstrip_path.write_text(render_filmstrip(manifest), encoding="utf-8")
+    _write_otlp(session, manifest)
     return session.filmstrip_path
+
+
+def _write_otlp(session: Session, manifest: dict) -> None:
+    """Write the OTLP/JSON projection of the trace next to the session."""
+    from shotquill import __version__, otlp
+
+    document = otlp.manifest_to_otlp(manifest, service_version=__version__)
+    session.otlp_path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 # --- manifest I/O -----------------------------------------------------------

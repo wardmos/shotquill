@@ -412,6 +412,7 @@ def _tool_record_end(args: dict):
         "dir": str(session.dir.resolve()),
         "manifest": str(session.manifest_path.resolve()),
         "filmstrip": html_path,
+        "otlp": str(session.otlp_path.resolve()),
         "frames": len(manifest.get("frames", [])),
     }
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
@@ -757,9 +758,13 @@ _TOOLS = {
                     "dir": {"type": "string"},
                     "manifest": {"type": "string"},
                     "filmstrip": {"type": "string"},
+                    "otlp": {
+                        "type": "string",
+                        "description": "OTLP/JSON trace projection (written to disk, not sent).",
+                    },
                     "frames": {"type": "integer"},
                 },
-                "required": ["conversation_id", "dir", "manifest", "filmstrip", "frames"],
+                "required": ["conversation_id", "dir", "manifest", "filmstrip", "otlp", "frames"],
             },
         },
     },

@@ -539,6 +539,7 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
                     "dir": str(session.dir.resolve()),
                     "manifest": str(session.manifest_path.resolve()),
                     "filmstrip": html_path,
+                    "otlp": str(session.otlp_path.resolve()),
                     "frames": len(manifest.get("frames", [])),
                 },
                 ensure_ascii=False,

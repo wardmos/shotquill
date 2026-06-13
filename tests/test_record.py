@@ -113,6 +113,11 @@ def test_end_marks_complete_and_renders_filmstrip(tmp_path):
     assert "frames/0001.png" in html
     assert "1 frame(s)" in html
 
+    # end also drops the OTLP/JSON projection next to the filmstrip.
+    otlp_doc = json.loads(session.otlp_path.read_text(encoding="utf-8"))
+    spans = otlp_doc["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    assert [s["name"] for s in spans] == ["invoke_agent", "execute_tool open"]
+
 
 def test_resolve_by_id_and_by_path(tmp_path):
     record.start_session(records_root=tmp_path, session_id="conv-5", now=_FIXED)

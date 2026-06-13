@@ -295,12 +295,19 @@ squill record end --session "$DIR"                                # prints the H
   what makes concurrent agents and CI runs safe — `--session` also accepts the
   bare conversation id. Pin a location with `--dir` (e.g. a CI artifact path).
 - **Each session is a directory**: `manifest.json` (the trace), `frames/NNNN.png`
-  (one file per frame), and `index.html` (a static filmstrip, written at `end`).
-  The manifest is a local projection of an [OpenTelemetry GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
-  trace — a session is an `invoke_agent` span (`gen_ai.conversation.id`), each
-  frame an `execute_tool` span carrying the screenshot as a `shotquill.frame.*`
-  event — so an OTLP exporter can be added later without reshaping what is on
-  disk.
+  (one file per frame), and — written at `end` — `index.html` (a static
+  filmstrip for a human) plus `trace.otlp.json` (the same trace as
+  [OpenTelemetry GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/),
+  for a machine). A session is an `invoke_agent` span (`gen_ai.conversation.id`),
+  each frame an `execute_tool` span carrying the screenshot as a
+  `shotquill.frame.*` event.
+- **OTLP export is a file, not a network call.** `trace.otlp.json` is OTLP/JSON
+  on disk; ShotQuill never sends it anywhere (it makes no network requests at
+  all). To ship a trace to an observability backend, point your own OpenTelemetry
+  Collector at the file (the `otlpjson` / `filelog` receivers read it directly) —
+  so the egress decision, and the credentials for it, stay yours. The GenAI
+  semantic conventions are still experimental; the version the fields track is
+  recorded on the trace's resource.
 - **Redaction is on by default and cannot be turned off mid-trace**, so a
   blocklisted app cannot be filed into an archive by an agent that "forgot" to
   mask it. The manifest's `redacted` flag means *blocklist protection was in
