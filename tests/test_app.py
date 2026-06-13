@@ -542,6 +542,47 @@ def test_capture_window_image_refuses_blocklisted_window(qapp, config, fakes, mo
     app.shutdown()
 
 
+def test_capture_window_image_redacts_blocked_overlap_on_framebuffer_backend(
+    qapp, config, fakes, monkeypatch
+):
+    # No-compositor X11: grabbing the allowed target also reads a blocklisted
+    # window stacked over it. The overlapping pixels must be painted out before
+    # the capture is delivered.
+    from PySide6.QtCore import QRect
+
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(capturer, "window_capture_includes_overlaps", lambda: True, raising=False)
+    app._blocked_windows = {
+        99: WindowInfo(99, "1Password", "", Rect(10, 20, 4, 3), bundle_id="com.1password.1password")
+    }
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    app._capture_window_image(42, QRect(10, 20, 4, 3))  # allowed target, blocked overlap
+    assert len(delivered) == 1
+    assert delivered[0].pixelColor(0, 0).red() == 0  # redacted to black
+    app.shutdown()
+
+
+def test_capture_window_image_keeps_capture_on_surface_backend(qapp, config, fakes, monkeypatch):
+    # Surface-accurate backend: no overlap can leak, so nothing is redacted even
+    # with a blocklisted window nominally overlapping the target's bounds.
+    from PySide6.QtCore import QRect
+
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(capturer, "window_capture_includes_overlaps", lambda: False, raising=False)
+    app._blocked_windows = {
+        99: WindowInfo(99, "1Password", "", Rect(10, 20, 4, 3), bundle_id="com.1password.1password")
+    }
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    app._capture_window_image(42, QRect(10, 20, 4, 3))
+    assert len(delivered) == 1
+    assert delivered[0].pixelColor(0, 0).red() == 255  # untouched
+    app.shutdown()
+
+
 def test_window_preview_skips_blocklisted_window(qapp, config, fakes):
     app = _build_app(qapp, fakes)
     app._blocked_windows = {7: WindowInfo(7, "1Password", "", Rect(0, 0, 2, 2))}

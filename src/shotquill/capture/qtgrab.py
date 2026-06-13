@@ -97,6 +97,16 @@ class QtGrabCapturer(ScreenCapturer):
 
         return x11.to_logical_bounds(x11.list_windows(), self._capture_dpr())
 
+    def window_capture_includes_overlaps(self) -> bool:
+        # Qt's grabWindow reads the window's own backing pixmap under a compositor
+        # but the bare root framebuffer without one — where a window stacked above
+        # the target bleeds into the grab. Fail closed: treat an undetermined
+        # compositor state as "no compositor" so the headless layer redacts
+        # overlapping blocklisted windows rather than risk leaking them.
+        from shotquill.capture import x11
+
+        return not x11.has_compositor()
+
     def capture_window(self, window_id: int) -> CaptureResult:
         # Find the window in the live list so an unknown/closed id fails clearly
         # and we have its absolute bounds for the result's origin; then let Qt
@@ -112,11 +122,16 @@ class QtGrabCapturer(ScreenCapturer):
     def _grab_window_id(window_id: int, bounds: Rect) -> CaptureResult:
         """Grab one X window's pixels by id, tagged with its absolute origin.
 
-        Best-effort on X11: without a compositor the server has no off-screen
-        copy of an obscured window, so a covered region may read stale — the
-        common case (a visible window) is exact. ``bounds`` is the window's
-        root-space rectangle, so the result's origin lines up with full-screen
-        and region grabs for redaction maths.
+        Best-effort on X11. *With* a compositor the server hands back the
+        window's own backing pixmap, so the grab is exactly the target. *Without*
+        one there is no off-screen copy, so this reads that rectangle straight off
+        the root framebuffer: wherever another window is stacked on top, the grab
+        captures *that* window's pixels — which may be a blocklisted app the user
+        never meant to expose, not merely "stale" content. The headless layer
+        compensates by redacting blocklisted windows that overlap the target when
+        :meth:`window_capture_includes_overlaps` reports this no-compositor case.
+        ``bounds`` is the window's root-space rectangle, so the result's origin
+        lines up with full-screen and region grabs for redaction maths.
 
         Unlike the macOS backend (which talks to the window server directly and
         is thread-safe), this goes through Qt, so it must run on the GUI thread.
@@ -135,18 +150,6 @@ class QtGrabCapturer(ScreenCapturer):
             raise RuntimeError(f"window {window_id} could not be captured")
         dpr = pixmap.devicePixelRatio() or 1.0
         return _qimage_to_result(pixmap.toImage(), dpr, origin=(bounds.x, bounds.y))
-
-    @staticmethod
-    def _capture_dpr() -> float:
-        """The device-pixel ratio the capture canvas uses — the single source of
-        truth shared with ``list_windows`` so window bounds rescale to exactly
-        the logical space the captured pixels are addressed in."""
-        from PySide6.QtGui import QGuiApplication
-
-        screens = QGuiApplication.screens()
-        if not screens:
-            raise CapabilityUnsupported("capture", "Qt reports no screens")
-        return max(s.devicePixelRatio() for s in screens)
 
     @staticmethod
     def _capture_dpr() -> float:

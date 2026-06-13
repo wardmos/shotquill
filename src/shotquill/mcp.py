@@ -180,7 +180,7 @@ def _error_type(exc: Exception) -> str:
         return "blocked"
     if isinstance(exc, record.SessionNotFound):
         return "no_session"
-    if isinstance(exc, (record.RecordError, ValueError)):
+    if isinstance(exc, (record.RecordError, ValueError, headless.ImageInputTooLarge)):
         return "invalid_arguments"
     return "error"
 
@@ -257,7 +257,14 @@ def _tool_capture(args: dict):
 
     max_width = args.get("max_width")
     if max_width is not None:
-        image = headless.downscale_to_width(image, int(max_width))
+        # Mirror the CLI's `--max-width` check. `bool` is an `int` subclass, so
+        # without the explicit guard `True` would slip through as width 1 and
+        # silently emit a 1px-wide image instead of erroring.
+        if isinstance(max_width, bool) or not isinstance(max_width, int):
+            raise ValueError("max_width must be a positive integer")
+        if max_width <= 0:
+            raise ValueError("max_width must be positive")
+        image = headless.downscale_to_width(image, max_width)
 
     data = headless.encode_qimage(image, fmt, deterministic=bool(args.get("deterministic")))
     meta = {"target": target, "width": image.width(), "height": image.height()}

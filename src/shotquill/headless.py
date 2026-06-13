@@ -9,7 +9,8 @@ instead of shelling out.
 
 Errors are typed and carry the documented CLI exit codes, because agents
 branch on them: 3 permission, 4 capability unavailable on this platform or
-session, 5 no window or display matched.
+session, 5 no window or display matched, 7 input the caller supplied is
+invalid (e.g. an image past the size cap).
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ EXIT_PERMISSION = 3
 EXIT_UNSUPPORTED = 4
 EXIT_NO_MATCH = 5
 EXIT_BLOCKED = 6
+EXIT_INVALID_INPUT = 7
 
 
 class HeadlessError(Exception):
@@ -81,6 +83,17 @@ class CaptureBlocked(HeadlessError):
     exit_code = EXIT_BLOCKED
 
 
+class ImageInputTooLarge(HeadlessError):
+    """The image the caller handed in (file or stdin) is past ``MAX_IMAGE_BYTES``.
+
+    Typed so it carries the documented invalid-input exit code instead of
+    falling through to the generic catch-all — the size cap is a threat-model
+    control (an agent pointing OCR at an unbounded source), so its breach gets a
+    stable code agents can branch on."""
+
+    exit_code = EXIT_INVALID_INPUT
+
+
 def read_image_bytes(stream: BinaryIO, *, label: str) -> bytes:
     """Read an image from ``stream``, refusing inputs past ``MAX_IMAGE_BYTES``.
 
@@ -91,7 +104,7 @@ def read_image_bytes(stream: BinaryIO, *, label: str) -> bytes:
     data = stream.read(MAX_IMAGE_BYTES + 1)
     if len(data) > MAX_IMAGE_BYTES:
         limit_mib = MAX_IMAGE_BYTES // (1024 * 1024)
-        raise OSError(f"{label} is larger than the {limit_mib} MiB image limit")
+        raise ImageInputTooLarge(f"{label} is larger than the {limit_mib} MiB image limit")
     return data
 
 
@@ -256,14 +269,21 @@ def perform_capture(
         blocklist = active_blocklist()
 
     if window_id is not None:
-        if blocklist:
-            _refuse_blocked_window_id(capturer, window_id, blocklist, via=via)
-        return capturer.capture_window(window_id), f"window {window_id}", 1
+        target, windows = _lookup_window(capturer, window_id, blocklist)
+        if target is not None:
+            _refuse_if_blocked(target, blocklist, via=via)
+        result = capturer.capture_window(window_id)
+        if target is not None:
+            result = _redact_window_overlaps(result, capturer, target, windows, blocklist, via=via)
+        return result, f"window {window_id}", 1
     if app:
-        window, matched = select_window(capturer.list_windows(), app, title)
+        windows = capturer.list_windows()
+        window, matched = select_window(windows, app, title)
         if blocklist:
             _refuse_if_blocked(window, blocklist, via=via)
         result = capturer.capture_window(window.window_id)
+        if blocklist:
+            result = _redact_window_overlaps(result, capturer, window, windows, blocklist, via=via)
         return result, f"{window.owner} — {window.title}", matched
     if display is not None:
         # One display is a rectangle of the virtual desktop, so this rides the
@@ -367,19 +387,69 @@ def _redact_blocked(
     return redacted
 
 
-def _refuse_blocked_window_id(
-    capturer: ScreenCapturer, window_id: int, blocklist, *, via: str
-) -> None:
-    """Refuse a by-id capture of a blocked window. Needs the window's identity,
-    so it looks the id up in the window list; if enumeration is unavailable the
-    capture proceeds (nothing to match against)."""
+def _lookup_window(
+    capturer: ScreenCapturer, window_id: int, blocklist
+) -> tuple[WindowInfo | None, list[WindowInfo] | None]:
+    """Enumerate windows to find the by-id target, for the blocklist checks.
+
+    Returns ``(target, windows)`` — ``(None, None)`` when there is no blocklist to
+    enforce or enumeration is unavailable, so the capture proceeds unprotected
+    exactly as before (nothing to match against)."""
+    if not blocklist:
+        return None, None
     try:
         windows = capturer.list_windows()
     except CapabilityUnsupported:
-        return
-    match = next((w for w in windows if w.window_id == window_id), None)
-    if match is not None:
-        _refuse_if_blocked(match, blocklist, via=via)
+        return None, None
+    target = next((w for w in windows if w.window_id == window_id), None)
+    return target, windows
+
+
+def _redact_window_overlaps(
+    result: CaptureResult,
+    capturer: ScreenCapturer,
+    target: WindowInfo,
+    windows: list[WindowInfo] | None,
+    blocklist,
+    *,
+    via: str,
+) -> CaptureResult:
+    """Solid-block any blocklisted window overlapping ``target`` when this
+    backend's window grab may include pixels stacked *above* it.
+
+    Only the no-compositor X11 framebuffer read captures an overlapping window's
+    pixels; surface-accurate backends (macOS ScreenCaptureKit, Windows, X11 with
+    a compositor) grab the target's own surface, so this is a no-op for them and
+    never paints a false block over the legitimate capture. The capability is
+    read defensively so a duck-typed capturer that predates it counts as
+    surface-accurate.
+
+    X11 stacking order is not always available (the EWMH client-list fallback
+    carries none), so *every* overlapping blocklisted window is redacted rather
+    than only those provably above the target — over-covering a sliver is the
+    safe direction; leaking a password manager is not. ``target.bounds`` (logical
+    points) is the redaction origin, matching the region path, and
+    ``result.scale`` maps those points onto the captured pixels.
+    """
+    if windows is None:
+        return result
+    includes_overlaps = getattr(capturer, "window_capture_includes_overlaps", None)
+    if includes_overlaps is None or not includes_overlaps():
+        return result
+    from shotquill import audit, redact
+
+    overlaps = [
+        w.bounds
+        for w in windows
+        if w.window_id != target.window_id
+        and blocklist.match(w) is not None
+        and redact.rect_intersects(target.bounds, w.bounds)
+    ]
+    if not overlaps:
+        return result
+    result, _ = redact.redact_bounds(result, (target.bounds.x, target.bounds.y), overlaps)
+    audit.record("capture_redacted", via=via, target=f"window {target.window_id} [overlap hidden]")
+    return result
 
 
 def windows_payload(windows: list[WindowInfo]) -> list[dict]:
