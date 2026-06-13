@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import types
 
@@ -128,7 +129,7 @@ def test_capture_default_is_fullscreen_and_prints_path(fake_capturer, capsys, is
     out = capsys.readouterr().out.strip()
     assert out  # exactly one absolute path on stdout
     assert "\n" not in out
-    assert out.startswith("/")
+    assert os.path.isabs(out)  # absolute (``/...`` on POSIX, ``C:\...`` on Windows)
     with open(out, "rb") as fh:
         assert fh.read(4) == PNG_MAGIC
     assert fake_capturer.calls == [("fullscreen",)]

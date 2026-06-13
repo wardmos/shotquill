@@ -13,6 +13,7 @@ import pytest
 from shotquill import paths
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX file-mode semantics")
 def test_capture_tmp_dir_is_private_and_under_tempdir(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
 
@@ -31,6 +32,7 @@ def test_capture_tmp_dir_is_idempotent(tmp_path, monkeypatch):
     assert paths.capture_tmp_dir() == first
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX file-mode semantics")
 def test_capture_tmp_dir_retightens_drifted_permissions(tmp_path, monkeypatch):
     # mkdir's mode= only applies at creation; a directory that already exists
     # with looser permissions must be tightened back to owner-only.

@@ -6,8 +6,18 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sys
+
+import pytest
 
 from shotquill import audit, paths
+
+# The process-name and caller-chain walks read /proc (Linux) or shell out to
+# ``ps`` (macOS); Windows has neither, so audit degrades to empty there by
+# design. These tests assert the populated POSIX behaviour.
+_posix_only = pytest.mark.skipif(
+    sys.platform.startswith("win"), reason="POSIX /proc or ps process introspection"
+)
 
 
 def test_record_entry_shape(tmp_path, monkeypatch):
@@ -105,12 +115,14 @@ def test_parent_of_nonexistent_pid_returns_zero():
     assert audit._parent_of(2**22 + 1) == 0
 
 
+@_posix_only
 def test_process_name_resolves_own_process():
     name = audit._process_name(audit.os.getpid())
     assert name is not None
     assert "python" in name.lower() or "pytest" in name.lower()
 
 
+@_posix_only
 def test_caller_chain_walks_real_processes():
     chain = audit._caller_chain()
     # At minimum the immediate parent (pytest's interpreter or a shell).

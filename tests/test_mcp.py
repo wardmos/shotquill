@@ -246,7 +246,9 @@ def test_capture_returns_image_and_metadata(fake_capturer, isolated_audit):
     assert meta["target"] == "fullscreen"
     assert (meta["width"], meta["height"]) == (2, 2)
     assert result["structuredContent"] == meta  # typed mirror of the text block
-    (entry,) = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
+    (entry,) = [
+        json.loads(line) for line in isolated_audit.read_text(encoding="utf-8").splitlines()
+    ]
     assert entry["via"] == "mcp"
     assert entry["dest"] == "inline"
 
@@ -402,7 +404,9 @@ def test_ocr_capture_and_recognize_in_memory(fake_recognizer, fake_capturer, iso
     assert result["content"] == [{"type": "text", "text": "hello\nworld"}]
     assert result["structuredContent"]["source"] == "Notes — Scratch"
     assert fake_capturer.calls == [("window", 33)]
-    (entry,) = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
+    (entry,) = [
+        json.loads(line) for line in isolated_audit.read_text(encoding="utf-8").splitlines()
+    ]
     assert entry["action"] == "ocr"
     assert entry["target"] == "Notes — Scratch"
 

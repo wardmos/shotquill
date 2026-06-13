@@ -107,6 +107,11 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
     assert found_white, "expected the 'S' glyph to be painted white somewhere on the tile"
 
 
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="Qt offscreen glyph rasterization on Windows doesn't punch the template hole; "
+    "the macOS template path is exercised on macOS/Linux",
+)
 def test_render_tray_pixmap_macos_knocks_glyph_out_of_mask(qapp):
     # macOS reads the icon as a *template*: every opaque pixel is tinted by
     # AppKit, every transparent pixel passes through. The "S" is rendered
@@ -886,18 +891,22 @@ def test_failed_smart_grab_restores_shelved_settings(qapp, config, fakes, monkey
 def test_open_save_folder_reveals_configured_dir(qapp, config, fakes, monkeypatch, tmp_path):
     # The menu item creates the save dir if needed (so it works before the
     # first capture) and hands it to the system file manager — `open` on macOS,
-    # `xdg-open` on Linux.
+    # `xdg-open` on Linux, and ``os.startfile`` (Explorer) on Windows.
     target = tmp_path / "shots"  # does not exist yet
     config.set_save_dir(str(target))
     app = _build_app(qapp, fakes)
 
     calls = []
-    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **k: calls.append(a[0]))
-    app._open_save_folder()
-
-    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    if sys.platform.startswith("win"):
+        monkeypatch.setattr(app_module.os, "startfile", lambda p: calls.append(p), raising=False)
+        app._open_save_folder()
+        assert calls == [str(target)]
+    else:
+        monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **k: calls.append(a[0]))
+        app._open_save_folder()
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        assert calls == [[opener, str(target)]]
     assert target.is_dir()  # created on demand
-    assert calls == [[opener, str(target)]]
     app.shutdown()
 
 
@@ -908,7 +917,10 @@ def test_open_save_folder_notifies_on_failure(qapp, config, fakes, monkeypatch, 
     def _boom(*args, **kwargs):
         raise OSError("no such volume")
 
-    monkeypatch.setattr(app_module.subprocess, "run", _boom)
+    if sys.platform.startswith("win"):
+        monkeypatch.setattr(app_module.os, "startfile", _boom, raising=False)
+    else:
+        monkeypatch.setattr(app_module.subprocess, "run", _boom)
     notes = []
     monkeypatch.setattr(app, "_notify", lambda msg: notes.append(msg))
     app._open_save_folder()
