@@ -258,7 +258,9 @@ def test_cli_round_trip(fake_capturer, monkeypatch, capsys, tmp_path):
         == 0
     )
     image_path = capsys.readouterr().out.strip()
-    assert image_path.endswith("frames/0001.png")
+    # The returned path is absolute and uses native separators (backslashes on
+    # Windows); the stored relative field stays forward-slashed.
+    assert image_path.replace("\\", "/").endswith("frames/0001.png")
     with open(image_path, "rb") as fh:
         assert fh.read(4) == b"\x89PNG"
 

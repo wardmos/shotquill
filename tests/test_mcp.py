@@ -487,7 +487,8 @@ def test_record_round_trip(fake_capturer, record_root):
     fdata = frame["structuredContent"]
     assert fdata["index"] == 1
     assert fdata["redacted"] is False  # empty blocklist
-    assert fdata["image"].endswith("frames/0001.png")
+    # Absolute path with native separators (backslashes on Windows).
+    assert fdata["image"].replace("\\", "/").endswith("frames/0001.png")
     with open(fdata["image"], "rb") as fh:
         assert fh.read(4) == PNG_MAGIC
 
