@@ -496,8 +496,13 @@ def test_record_round_trip(fake_capturer, record_root):
     edata = end["structuredContent"]
     assert edata["frames"] == 1
     assert edata["filmstrip"].endswith("index.html")
+    assert edata["otlp"].endswith("trace.otlp.json")
     manifest = json.loads((record_root / "conv-mcp" / "manifest.json").read_text())
     assert manifest["status"] == "complete"
+    otlp_doc = json.loads((record_root / "conv-mcp" / "trace.otlp.json").read_text())
+    assert otlp_doc["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"].startswith(
+        "invoke_agent"
+    )
 
 
 def test_record_frame_unknown_session_is_no_session(fake_capturer, record_root):
