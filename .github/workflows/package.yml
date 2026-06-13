@@ -125,9 +125,9 @@ jobs:
           retention-days: 7
 
   build-windows:
-    # Builds the windowed GUI exe and the console CLI exe, then smoke-tests the
-    # CLI so a broken PyInstaller invocation (missing hidden import, Qt prune
-    # gone wrong) fails the PR instead of a release.
+    # Builds the windowed GUI exe and the console CLI exe (sharing one payload),
+    # then smoke-tests the CLI so a broken PyInstaller invocation (missing hidden
+    # import, Qt prune gone wrong, UPX corruption) fails the PR instead of a release.
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -143,6 +143,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -c packaging/constraints-release.txt -e . pyinstaller pillow
+      - name: Install UPX
+        # PyInstaller picks UPX up off PATH automatically (the spec excludes the
+        # C runtime / Python core DLLs it would corrupt). Pre-installed on the
+        # GitHub Windows image via Chocolatey.
+        run: choco install upx -y --no-progress
       - name: Record build dependency versions
         shell: pwsh
         run: |
@@ -160,14 +165,12 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          .\dist\squill\squill.exe --version
-          .\dist\squill\squill.exe doctor
+          .\dist\shotquill\squill.exe --version
+          .\dist\shotquill\squill.exe doctor
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
         with:
           name: shotquill-windows-smoke
-          path: |
-            dist/ShotQuill/**
-            dist/squill/**
+          path: dist/shotquill/**
           if-no-files-found: error
           retention-days: 7

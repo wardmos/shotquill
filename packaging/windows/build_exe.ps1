@@ -1,18 +1,20 @@
-# Build ShotQuill for Windows: a windowed GUI exe and a console CLI exe.
+# Build ShotQuill for Windows: a windowed GUI exe and a console CLI exe, sharing
+# one payload.
 #
 # Usage (from the repo root, on Windows, in PowerShell):
 #   pip install pyinstaller pillow
 #   pip install .                       # or: pip install .[windows-ocr]
 #   .\packaging\windows\build_exe.ps1 <version>
 #
-# Produces, under dist\:
-#   ShotQuill\ShotQuill.exe   - the menu-bar GUI (no console window). A bare
-#                               launch opens the tray app; with arguments it
-#                               runs the CLI, same dual-mode entry as macOS.
-#   squill\squill.exe         - a console build of the same entry, so the CLI /
-#                               MCP surface can write to stdout and be driven by
-#                               scripts and agents (a --windowed exe has no
-#                               console to print to).
+# Produces, under dist\shotquill\:
+#   ShotQuill.exe   - the menu-bar GUI (no console window). A bare launch opens
+#                     the tray app; with arguments it runs the CLI, same
+#                     dual-mode entry as macOS.
+#   squill.exe      - a console build of the same entry, so the CLI / MCP surface
+#                     can write to stdout and be driven by scripts and agents (a
+#                     --windowed exe has no console to print to).
+#   _internal\      - the shared Python + Qt payload. Both exes load it, so the
+#                     bundle ships ONE copy instead of two (see shotquill.spec).
 #
 # NOTE: this script has not been validated on a real Windows runner yet — it
 # mirrors the macOS DMG build's PyInstaller invocation and Qt-module pruning.
@@ -22,6 +24,10 @@
 # On-device OCR is NOT bundled by default (the WinRT projection is a large,
 # optional dependency). Install `shotquill[windows-ocr]` into the build
 # environment before running this to fold it in.
+#
+# UPX (optional) shrinks the Qt DLLs noticeably if it is on PATH; PyInstaller
+# uses it automatically and skips it (with a warning) when absent. The C
+# runtime / Python core DLLs are excluded from UPX in shotquill.spec.
 
 $ErrorActionPreference = 'Stop'
 
@@ -34,75 +40,68 @@ Set-Location $Root
 if (Test-Path build) { Remove-Item -Recurse -Force build }
 if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
 
-# ShotQuill only uses QtCore / QtGui / QtWidgets. PyInstaller's PySide6 hook
-# would otherwise pull in the whole Qt stack (WebEngine, QML, 3D, Charts,
-# Multimedia, …) — hundreds of MB the app never touches. Drop the unused Qt
-# modules, the macOS-only backends/pyobjc, and the Unix-only DBus/Network bits.
-# Mirrors the macOS DMG excludes.
-$QtExcludes = @(
-  'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick',
-  'PySide6.QtWebChannel', 'PySide6.QtWebSockets', 'PySide6.QtNetworkAuth', 'PySide6.QtHttpServer',
-  'PySide6.QtQml', 'PySide6.QtQmlModels', 'PySide6.QtQuick', 'PySide6.QtQuick3D',
-  'PySide6.QtQuickWidgets', 'PySide6.QtQuickControls2',
-  'PySide6.Qt3DCore', 'PySide6.Qt3DRender', 'PySide6.Qt3DInput', 'PySide6.Qt3DLogic',
-  'PySide6.Qt3DAnimation', 'PySide6.Qt3DExtras',
-  'PySide6.QtCharts', 'PySide6.QtDataVisualization', 'PySide6.QtGraphs',
-  'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets', 'PySide6.QtSpatialAudio',
-  'PySide6.QtPdf', 'PySide6.QtPdfWidgets', 'PySide6.QtSql', 'PySide6.QtSvg', 'PySide6.QtSvgWidgets',
-  'PySide6.QtBluetooth', 'PySide6.QtNfc', 'PySide6.QtPositioning', 'PySide6.QtLocation',
-  'PySide6.QtSensors', 'PySide6.QtSerialPort', 'PySide6.QtSerialBus',
-  'PySide6.QtRemoteObjects', 'PySide6.QtScxml', 'PySide6.QtStateMachine',
-  'PySide6.QtTextToSpeech', 'PySide6.QtHelp', 'PySide6.QtDesigner', 'PySide6.QtUiTools',
-  'PySide6.QtTest', 'PySide6.QtXml', 'PySide6.QtDBus', 'PySide6.QtNetwork',
-  'shotquill.app', 'shotquill.capture.macos', 'shotquill.capture.wayland',
-  'shotquill.hotkeys.macos', 'shotquill.autostart.macos', 'shotquill.ocr.macos',
-  'tkinter'
-)
-
-# The platform backends are imported lazily by string inside the factories, so
-# PyInstaller's static analysis can't see them — name them explicitly or the
-# frozen app would fail at runtime with ModuleNotFoundError.
-$HiddenImports = @(
-  'shotquill.capture.windows', 'shotquill.capture.qtgrab',
-  'shotquill.hotkeys.windows', 'shotquill.autostart.windows', 'shotquill.ocr.windows'
-)
-
-# Best-effort icon: convert the committed master PNG to .ico (needs Pillow).
-# Build without --icon if conversion isn't available rather than failing.
-$IconArgs = @()
+# Best-effort icon: convert the committed master PNG to .ico (needs Pillow). The
+# spec builds without an icon if conversion isn't available rather than failing.
 $Ico = Join-Path $PSScriptRoot 'icon.ico'
 try {
   python (Join-Path $PSScriptRoot 'make_icon.py') $Ico
-  if (Test-Path $Ico) { $IconArgs = @('--icon', $Ico) }
 } catch {
   Write-Warning "icon.ico not generated ($_); building without a custom icon"
 }
 
-$Common = @(
-  '--noconfirm', '--clean', '--optimize', '2', '--paths', 'src'
-) + ($QtExcludes | ForEach-Object { '--exclude-module', $_ }) `
-  + ($HiddenImports | ForEach-Object { '--hidden-import', $_ }) `
-  + $IconArgs
+# One Analysis, two bootloaders (GUI + CLI), one shared _internal — see the spec.
+# The module excludes, hidden imports, --optimize 2 and UPX policy all live there
+# so a local build and the CI build stay byte-for-byte aligned.
+Write-Host "Building ShotQuill.exe (GUI) + squill.exe (CLI) $Version ..."
+pyinstaller --noconfirm --clean packaging\windows\shotquill.spec
 
-Write-Host "Building ShotQuill.exe (GUI) $Version ..."
-pyinstaller @Common --windowed --name ShotQuill packaging\entry.py
+# Trim payload --exclude-module can't reach (it works per-module, not per-file).
+# PyInstaller's PySide6 hook copies whole plugin subtrees and Qt translations
+# regardless of which Qt modules survive; nothing on ShotQuill's path loads them.
+# Mirrors the macOS DMG prune and the Linux prune_bundle.py keep policy.
+$qt = Join-Path 'dist\shotquill' '_internal\PySide6\Qt'
+if (-not (Test-Path $qt)) { $qt = Join-Path 'dist\shotquill' 'PySide6\Qt' }  # layout varies by PyInstaller
 
-Write-Host "Building squill.exe (CLI) $Version ..."
-pyinstaller @Common --console --name squill packaging\entry.py
+# Qt UI translations: the build is English-only.
+$tr = Join-Path $qt 'translations'
+if (Test-Path $tr) { Remove-Item -Recurse -Force $tr }
 
-# Trim payload --exclude-module can't reach (it works per-module, not per-file):
-# the English-only build needs no Qt translations, and ShotQuill writes only PNG
-# (built into QtGui) and JPEG (qjpeg plugin), so the other imageformat plugins
-# are dead weight.
-foreach ($app in @('dist\ShotQuill', 'dist\squill')) {
-  $qt = Join-Path $app '_internal\PySide6\Qt'
-  if (-not (Test-Path $qt)) { $qt = Join-Path $app 'PySide6\Qt' }  # layout varies by PyInstaller
-  $tr = Join-Path $qt 'translations'
-  if (Test-Path $tr) { Remove-Item -Recurse -Force $tr }
-  $imgfmt = Join-Path $qt 'plugins\imageformats'
+# Plugins are dlopen-ed by name, so --exclude-module never reaches them; prune by
+# an explicit keep policy. A dropped plugin is never a dependency of a kept DLL,
+# so dropping it can't break a kept path.
+$plugins = Join-Path $qt 'plugins'
+if (Test-Path $plugins) {
+  # imageformats: ShotQuill writes only PNG (built into QtGui) and JPEG (qjpeg).
+  $imgfmt = Join-Path $plugins 'imageformats'
   if (Test-Path $imgfmt) {
     Get-ChildItem $imgfmt -File | Where-Object { $_.Name -notlike 'qjpeg*' } | Remove-Item -Force
   }
+  # platforms: keep only what can construct a QGuiApplication here — qwindows for
+  # the real session, qoffscreen for headless/tests, qminimal as a fallback.
+  # Drop qdirect2d / qminimalegl / qwebgl (opt-in / embedded targets).
+  $platforms = Join-Path $plugins 'platforms'
+  if (Test-Path $platforms) {
+    $keep = @('qwindows.dll', 'qoffscreen.dll', 'qminimal.dll')
+    Get-ChildItem $platforms -File | Where-Object { $keep -notcontains $_.Name } | Remove-Item -Force
+  }
+  # iconengines: QtSvg is excluded, so the SVG icon engine is dead weight.
+  $svgicon = Join-Path $plugins 'iconengines\qsvgicon.dll'
+  if (Test-Path $svgicon) { Remove-Item -Force $svgicon }
+  # platforminputcontexts: the virtual keyboard pulls in QtQuick (also excluded).
+  $inputctx = Join-Path $plugins 'platforminputcontexts'
+  if (Test-Path $inputctx) {
+    Get-ChildItem $inputctx -File | Where-Object { $_.Name -like '*virtualkeyboard*' } | Remove-Item -Force
+  }
 }
 
-Write-Host "Done. GUI: dist\ShotQuill\ShotQuill.exe   CLI: dist\squill\squill.exe"
+# Layout-drift guard: if a Qt/PyInstaller bump relocates these, the prunes above
+# silently no-op and could drop something load-bearing. The bundle is useless
+# without the Windows platform plugin and the JPEG codec — fail the build.
+foreach ($must in @('qwindows.dll', 'qjpeg.dll')) {
+  if (-not (Get-ChildItem 'dist\shotquill' -Recurse -File -Filter $must)) {
+    Write-Error "prune removed a required plugin ($must); aborting"
+    exit 1
+  }
+}
+
+Write-Host "Done. GUI: dist\shotquill\ShotQuill.exe   CLI: dist\shotquill\squill.exe"
