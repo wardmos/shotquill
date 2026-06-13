@@ -13,11 +13,22 @@ if TYPE_CHECKING:
     from PySide6.QtGui import QImage
 
 
-def copy_qimage(image: QImage) -> None:
-    """Place a QImage on the clipboard. Requires a running QApplication."""
+def _clipboard():
+    """The system clipboard, or a clear error when there's no QApplication.
+
+    ``QGuiApplication.clipboard()`` returns ``None`` without a running app, which
+    would otherwise surface as an opaque ``AttributeError`` on the next call."""
     from PySide6.QtGui import QGuiApplication
 
-    QGuiApplication.clipboard().setImage(image)
+    clipboard = QGuiApplication.clipboard()
+    if clipboard is None:
+        raise RuntimeError("clipboard requires a running QApplication")
+    return clipboard
+
+
+def copy_qimage(image: QImage) -> None:
+    """Place a QImage on the clipboard. Requires a running QApplication."""
+    _clipboard().setImage(image)
 
 
 def copy_image(result: CaptureResult) -> None:
@@ -27,6 +38,4 @@ def copy_image(result: CaptureResult) -> None:
 
 def copy_text(text: str) -> None:
     """Place plain text on the clipboard (used for OCR results)."""
-    from PySide6.QtGui import QGuiApplication
-
-    QGuiApplication.clipboard().setText(text)
+    _clipboard().setText(text)
