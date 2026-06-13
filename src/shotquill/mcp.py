@@ -253,7 +253,7 @@ def _tool_capture(args: dict):
     if max_width is not None:
         image = headless.downscale_to_width(image, int(max_width))
 
-    data = headless.encode_qimage(image, fmt)
+    data = headless.encode_qimage(image, fmt, deterministic=bool(args.get("deterministic")))
     meta = {"target": target, "width": image.width(), "height": image.height()}
     if matched > 1:
         meta["matched_windows"] = matched
@@ -433,6 +433,15 @@ _TOOLS = {
                     "save_path": {
                         "type": "string",
                         "description": "Also write the image to this file path.",
+                    },
+                    "deterministic": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Byte-stable output for golden-image/diff tests: pin "
+                            "the embedded DPI and strip PNG timestamp/text chunks "
+                            "so identical pixels always encode to identical bytes."
+                        ),
                     },
                 },
                 "additionalProperties": False,
