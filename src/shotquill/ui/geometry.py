@@ -74,3 +74,19 @@ def window_at_point(
         if bx <= x < bx + bw and by <= y < by + bh:
             return index
     return None
+
+
+def rect_containing(
+    rects: Sequence[tuple[float, float, float, float]], x: float, y: float
+) -> tuple[float, float, float, float] | None:
+    """The first rect ``(x, y, w, h)`` containing ``(x, y)``, or None.
+
+    Used to clip the full-span crosshair guide lines to the monitor the pointer
+    is on: on a multi-monitor virtual desktop, the lines should stop at that
+    screen's edges rather than stripe across every output. Right/bottom edges
+    are exclusive, matching :func:`window_at_point`.
+    """
+    for rx, ry, rw, rh in rects:
+        if rx <= x < rx + rw and ry <= y < ry + rh:
+            return (rx, ry, rw, rh)
+    return None

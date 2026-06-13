@@ -42,13 +42,23 @@ import threading
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFont,
+    QGuiApplication,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import QWidget
 
 from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
 from shotquill.i18n import t
 from shotquill.ui.geometry import (
     loupe_anchor,
+    rect_containing,
     scale_rect,
     scale_rect_edges,
     selection_rect,
@@ -114,8 +124,6 @@ def _compositor_prefers_fullscreen() -> bool:
     job. Keyed off the live platform name (``wayland`` / ``wayland-egl``), not an
     env var, so the offscreen test platform and X11/macOS keep the geometry path.
     """
-    from PySide6.QtGui import QGuiApplication
-
     return QGuiApplication.platformName().lower().startswith("wayland")
 
 
@@ -152,6 +160,18 @@ class SmartOverlay(QWidget):
         # Ratio between native screenshot pixels and logical overlay points.
         self._sx = screenshot.width() / max(geometry.width(), 1)
         self._sy = screenshot.height() / max(geometry.height(), 1)
+        # Per-monitor rects in overlay-local coords, used to clip the full-span
+        # crosshair guide lines to whichever screen the pointer is on (their
+        # geometry is in the same logical points as the overlay; shift to local).
+        self._monitors = [
+            (
+                s.geometry().x() - geometry.x(),
+                s.geometry().y() - geometry.y(),
+                s.geometry().width(),
+                s.geometry().height(),
+            )
+            for s in QGuiApplication.screens()
+        ]
 
         self._hover: int | None = None  # window under the pointer, or None for full screen
         # Debounced highlight switching: ``_pending_hover`` tracks the target
@@ -257,6 +277,7 @@ class SmartOverlay(QWidget):
             self._paint_fullscreen(painter)
 
         if self._cursor is not None:
+            self._paint_guides(painter)
             self._paint_cursor(painter)
             self._paint_loupe(painter)
 
@@ -347,6 +368,30 @@ class SmartOverlay(QWidget):
         painter.fillRect(box, QColor(0, 0, 0, 180))
         painter.setPen(Qt.white)
         painter.drawText(box.adjusted(8, 0, -8, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
+
+    def _paint_guides(self, painter: QPainter) -> None:
+        # Full-span blue guide lines that cross at the pointer, so its position
+        # is easy to locate against the dimmed desktop. Clipped to the monitor
+        # the pointer is on — on a multi-monitor virtual desktop, striping the
+        # lines across every screen would just be noise. Each line is split by a
+        # small gap at the centre so the exact target pixel stays uncovered (the
+        # loupe and the white crosshair drawn on top read it precisely).
+        cx, cy = self._cursor.x(), self._cursor.y()
+        bounds = rect_containing(self._monitors, cx, cy)
+        if bounds is None:  # pointer outside every reported screen — span overlay
+            rect = self.rect()
+            left, top, right, bottom = rect.left(), rect.top(), rect.right(), rect.bottom()
+        else:
+            bx, by, bw, bh = bounds
+            left, top, right, bottom = bx, by, bx + bw, by + bh
+        gap = 3.0
+        painter.save()
+        painter.setPen(QPen(_ACCENT, 1))
+        painter.drawLine(QPointF(left, cy), QPointF(cx - gap, cy))
+        painter.drawLine(QPointF(cx + gap, cy), QPointF(right, cy))
+        painter.drawLine(QPointF(cx, top), QPointF(cx, cy - gap))
+        painter.drawLine(QPointF(cx, cy + gap), QPointF(cx, bottom))
+        painter.restore()
 
     def _paint_cursor(self, painter: QPainter) -> None:
         # Stand-in for the (hidden) OS cursor, pinned to the overlay's own
