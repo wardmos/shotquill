@@ -80,19 +80,27 @@ def manifest_to_otlp(manifest: dict, *, service_version: str = "") -> dict:
     if manifest.get("label"):
         root_attrs.append(_str_attr("shotquill.session.label", manifest["label"]))
 
-    spans = [
-        {
-            "traceId": trace_id,
-            "spanId": root_span_id,
-            "name": _agent_span_name(agent.get("name")),
-            "kind": _SPAN_KIND_INTERNAL,
-            "startTimeUnixNano": start_nanos,
-            "endTimeUnixNano": end_nanos,
-            "attributes": root_attrs,
-        }
-    ]
+    root_span = {
+        "traceId": trace_id,
+        "spanId": root_span_id,
+        "name": _agent_span_name(agent.get("name")),
+        "kind": _SPAN_KIND_INTERNAL,
+        "startTimeUnixNano": start_nanos,
+        "endTimeUnixNano": end_nanos,
+        "attributes": root_attrs,
+    }
+    spans = [root_span]
+    # An action frame is a deliberate step -> its own execute_tool child span. An
+    # observation frame is a passive glance -> an event on the root agent span,
+    # so it never masquerades as a tool call in the trace (see record.py kinds).
+    observation_events = []
     for entry in frames:
-        spans.append(_frame_span(entry, trace_id=trace_id, parent_span_id=root_span_id))
+        if entry.get("kind") == "observation":
+            observation_events.append(_frame_event(entry, _iso_to_unix_nano(entry.get("at"))))
+        else:
+            spans.append(_frame_span(entry, trace_id=trace_id, parent_span_id=root_span_id))
+    if observation_events:
+        root_span["events"] = observation_events
 
     resource_attrs = [_str_attr("service.name", "shotquill")]
     if service_version:
@@ -114,11 +122,33 @@ def manifest_to_otlp(manifest: dict, *, service_version: str = "") -> dict:
     }
 
 
+def _frame_event(entry: dict, at_nanos: str) -> dict:
+    """The ``shotquill.frame`` event carrying the screenshot reference.
+
+    The screenshot is an event, not a span attribute: OTel does not inline
+    binaries, so only the on-disk reference travels. Shared by action frames
+    (on their execute_tool span) and observation frames (on the root span).
+    """
+    event_attrs = [_bool_attr("shotquill.frame.redacted", bool(entry.get("redacted")))]
+    if entry.get("image"):
+        event_attrs.append(_str_attr("shotquill.frame.image_ref", entry["image"]))
+    if entry.get("kind"):
+        event_attrs.append(_str_attr("shotquill.frame.kind", entry["kind"]))
+    if entry.get("label"):
+        event_attrs.append(_str_attr("shotquill.frame.label", entry["label"]))
+    if entry.get("target"):
+        event_attrs.append(_str_attr("shotquill.frame.target", entry["target"]))
+    assertion_passed = entry.get("assertion_passed")
+    if assertion_passed is not None:
+        event_attrs.append(_bool_attr("shotquill.frame.assertion.passed", assertion_passed))
+    return {"timeUnixNano": at_nanos, "name": "shotquill.frame", "attributes": event_attrs}
+
+
 def _frame_span(entry: dict, *, trace_id: str, parent_span_id: str) -> dict:
-    """Build the ``execute_tool`` span (with its frame event) for one frame."""
-    span = entry.get("span") or {}
-    tool_name = str(span.get("tool_name", ""))
-    tool_call_id = str(span.get("tool_call_id", ""))
+    """Build the ``execute_tool`` span (with its frame event) for an action frame."""
+    span_meta = entry.get("span") or {}
+    tool_name = str(span_meta.get("tool_name", ""))
+    tool_call_id = str(span_meta.get("tool_call_id", ""))
     at_nanos = _iso_to_unix_nano(entry.get("at"))
 
     attrs = [_str_attr("gen_ai.operation.name", "execute_tool")]
@@ -127,20 +157,9 @@ def _frame_span(entry: dict, *, trace_id: str, parent_span_id: str) -> dict:
     if tool_call_id:
         attrs.append(_str_attr("gen_ai.tool.call.id", tool_call_id))
 
-    # The screenshot is an event, not a span attribute: OTel does not inline
-    # binaries, so only the on-disk reference travels.
-    event_attrs = [_bool_attr("shotquill.frame.redacted", bool(entry.get("redacted")))]
-    if entry.get("image"):
-        event_attrs.append(_str_attr("shotquill.frame.image_ref", entry["image"]))
-    if entry.get("label"):
-        event_attrs.append(_str_attr("shotquill.frame.label", entry["label"]))
-    if entry.get("target"):
-        event_attrs.append(_str_attr("shotquill.frame.target", entry["target"]))
-
     assertion_passed = entry.get("assertion_passed")
     if assertion_passed is not None:
         attrs.append(_bool_attr("shotquill.frame.assertion.passed", assertion_passed))
-        event_attrs.append(_bool_attr("shotquill.frame.assertion.passed", assertion_passed))
 
     span = {
         "traceId": trace_id,
@@ -151,13 +170,7 @@ def _frame_span(entry: dict, *, trace_id: str, parent_span_id: str) -> dict:
         "startTimeUnixNano": at_nanos,
         "endTimeUnixNano": at_nanos,
         "attributes": attrs,
-        "events": [
-            {
-                "timeUnixNano": at_nanos,
-                "name": "shotquill.frame",
-                "attributes": event_attrs,
-            }
-        ],
+        "events": [_frame_event(entry, at_nanos)],
     }
     # A failed assertion sets the span status to ERROR so the failing step of a
     # recorded test stands out in any OTel backend; a passed one is left UNSET

@@ -50,6 +50,12 @@ record_start  →  record_frame (before/after each key action)  →  record_end
    (what you were looking at) and/or just after (the result). You do not need a
    frame for every mouse move — one per decision or outcome is the right grain.
 
+   > While a session is active, any `capture` you do to *see* the screen is also
+   > logged automatically as an **observation** frame (pass `record: false` to
+   > skip one). Those are kept separate from the `record_frame` *action* frames
+   > you file deliberately — so you don't need to re-record what you looked at,
+   > just the actions you take and the checkpoints you assert.
+
 3. **End once, when the task is done (or has failed).**
    Call `record_end` with the `session`. It writes a static `index.html`
    filmstrip and returns its path; point the user at it. **Always end the

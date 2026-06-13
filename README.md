@@ -326,6 +326,13 @@ squill record end --session "$DIR"                                # prints the H
   mask it. The manifest's `redacted` flag means *blocklist protection was in
   force* — not that the frame is free of user content. Agent actions and user
   pixels are the same pixels; redaction only covers the apps you listed.
+- **Captures the agent takes to *see* the screen are logged too.** While a
+  session is recording, the MCP `capture` tool also files what it grabbed as an
+  *observation* frame (pass `record: false` to skip a one-off); on the CLI,
+  `squill capture --session <id>` does the same explicitly. Observation frames
+  are kept distinct from deliberate `record frame` *action* frames — dimmed in
+  the filmstrip, and attached to the trace's root span rather than masquerading
+  as a tool call — so a passive glance never reads as a step.
 - **A frame can assert, so a failed test is a replayable trace.** Add
   `--contains TEXT` / `--matches REGEX` (`-i` to ignore case) to `record frame`
   and it OCRs the frame it just captured and records the verdict: a failed
