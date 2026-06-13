@@ -109,6 +109,15 @@ def get_capturer(include_cursor: bool = False) -> ScreenCapturer:
         from shotquill.capture.qtgrab import QtGrabCapturer
 
         return QtGrabCapturer(include_cursor=include_cursor)
+    if sys.platform.startswith("win"):
+        # Windows places no out-of-band grab restriction (unlike Wayland), so
+        # the PySide6 ``QScreen.grabWindow`` path covers full-screen / region
+        # capture with no extra dependency. Window enumeration / per-window
+        # capture is deferred — the backend raises ``CapabilityUnsupported``,
+        # the same shape X11 reports today.
+        from shotquill.capture.qtgrab import QtGrabCapturer
+
+        return QtGrabCapturer(include_cursor=include_cursor)
     raise CapabilityUnsupported("capture", f"no backend for platform {sys.platform!r}")
 
 

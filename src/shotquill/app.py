@@ -11,6 +11,7 @@ format, and UI language are editable in Settings.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -475,16 +476,23 @@ class ShotquillApp(QObject):
         The folder is created on demand the same way the saver does it, so the
         menu item works even before the first capture has written anything —
         otherwise the opener would fail on a path that doesn't exist yet. macOS
-        uses ``open``; Linux uses ``xdg-open`` (the freedesktop opener).
+        uses ``open``; Linux uses ``xdg-open`` (the freedesktop opener); Windows
+        uses ``os.startfile``, which hands the path to Explorer directly.
         """
         directory = Path(self._config.save_dir()).expanduser()
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
         try:
             directory.mkdir(parents=True, exist_ok=True)
+            if sys.platform.startswith("win"):
+                # ``os.startfile`` is Windows-only and returns immediately once
+                # Explorer has been asked to open the folder — there is no
+                # equivalent ``xdg-open``/``open`` binary to shell out to.
+                os.startfile(str(directory))  # noqa: S606 - opening a user dir in Explorer
+                return
             # ``open``/``xdg-open`` normally fork the file manager and return at
             # once; the timeout keeps a misconfigured opener from hanging this
             # (main-thread) menu action forever. TimeoutExpired is a
             # SubprocessError, so the existing handler reports it.
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
             subprocess.run([opener, str(directory)], check=True, timeout=20)
         except (OSError, subprocess.SubprocessError) as exc:
             self._notify(t("notify.open_folder_failed").format(error=exc))
