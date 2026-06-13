@@ -89,6 +89,23 @@ def test_width_control_is_a_captioned_two_row_widget(qtbot):
     assert spin.maximumWidth() < 16777215  # QWIDGETSIZE_MAX (the unset value)
 
 
+def test_width_caption_is_dropped_in_icon_only_mode(qtbot):
+    # Icon-only strips every button's label, so the width control must not show a
+    # lone "Width" caption among them; it keeps its name through a tooltip.
+    _canvas_, toolbar = _toolbar(qtbot, style="icon")
+    spin = toolbar.width_spin
+    container = spin.parentWidget()
+    assert container.findChildren(QLabel) == []
+    assert spin.toolTip() == "Width"
+
+
+def test_width_caption_shown_in_text_mode(qtbot):
+    # Text-only buttons show their labels, so the captioned "Width" stays.
+    _canvas_, toolbar = _toolbar(qtbot, style="text")
+    container = toolbar.width_spin.parentWidget()
+    assert [label.text() for label in container.findChildren(QLabel)] == ["Width"]
+
+
 def test_toolbar_exposes_copy_and_save_actions(qtbot):
     # EditorWindow grabs these to keep tooltips in sync with the finish keys.
     _canvas_, toolbar = _toolbar(qtbot)

@@ -165,17 +165,24 @@ def create_toolbar(
     # icon-over-label buttons. Pin the container to a tool button's height and
     # the caption to its own line at the bottom, so the caption lands on the
     # same line as the buttons' labels (and the number on the icons' line).
-    width_caption = QLabel(t("toolbar.width").strip())
-    width_caption.setAlignment(Qt.AlignHCenter)
+    # Icon-only mode strips every button's label, so the caption is dropped to
+    # match (otherwise a lone "Width" text sits among label-less buttons); the
+    # field carries its name through a tooltip there, as the icon buttons do.
+    width_caption_label = t("toolbar.width").strip()
     width_control = QWidget()
     width_box = QVBoxLayout(width_control)
     width_box.setContentsMargins(0, 0, 0, 0)
     width_box.setSpacing(0)
     width_box.addWidget(width)
-    width_box.addWidget(width_caption)
+    if style == "icon":
+        width.setToolTip(width_caption_label)
+    else:
+        width_caption = QLabel(width_caption_label)
+        width_caption.setAlignment(Qt.AlignHCenter)
+        width_box.addWidget(width_caption)
+        width_caption.setFixedHeight(width_caption.sizeHint().height())
     sample_button = toolbar.widgetForAction(toolbar.actions()[0])
     width_control.setFixedHeight(sample_button.sizeHint().height())
-    width_caption.setFixedHeight(width_caption.sizeHint().height())
     toolbar.addWidget(width_control)
     # Exposed so tests (and any later sync) can reach the nested spin box.
     toolbar.width_spin = width
