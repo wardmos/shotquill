@@ -12,7 +12,14 @@
 import os
 import sys
 
-_ico = os.path.join("packaging", "windows", "icon.ico")
+# PyInstaller resolves relative paths in a spec against the spec's own directory,
+# not the invoking CWD, so anchor everything on the repo root (two levels up from
+# packaging/windows/). SPECPATH is injected by PyInstaller.
+_root = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
+_entry = os.path.join(_root, "packaging", "entry.py")
+_src = os.path.join(_root, "src")
+
+_ico = os.path.join(_root, "packaging", "windows", "icon.ico")
 _icon = _ico if os.path.exists(_ico) else None
 
 # ShotQuill only uses QtCore / QtGui / QtWidgets. PyInstaller's PySide6 hook
@@ -58,8 +65,8 @@ upx_exclude = [
 ]
 
 a = Analysis(
-    ["packaging/entry.py"],
-    pathex=["src"],
+    [_entry],
+    pathex=[_src],
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,

@@ -107,8 +107,9 @@ fi
 
 mkdir -p dist
 OUTPUT="dist/ShotQuill-$VERSION-$ARCH.AppImage"
-# --comp zstd: smaller and faster to decompress than the default gzip squashfs.
-# The AppImageKit 13 runtime baked into the output mounts zstd images, so the
-# glibc floor (set by the build host, above) is what still gates launch.
-ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --comp zstd "$APPDIR" "$OUTPUT"
+# --comp xz: smaller files than the default gzip squashfs. AppImageKit 13's
+# appimagetool only offers gzip and xz (no zstd); xz is the classic AppImage
+# default and its runtime mounts it, so the glibc floor (set by the build host,
+# above) is what still gates launch.
+ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --comp xz "$APPDIR" "$OUTPUT"
 echo "Built $OUTPUT"
