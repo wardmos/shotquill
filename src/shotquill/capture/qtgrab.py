@@ -11,10 +11,14 @@ manager's EWMH properties), so the enumeration lives in ``x11.py`` and is
 delegated to from here. Where it can't be answered — no EWMH window manager,
 no reachable server, or ``python-xlib`` absent — it raises
 ``CapabilityUnsupported`` so agents get a typed signal (exit code 4) instead
-of an empty list they would misread as "no windows on screen". Wayland is
-different again: the compositor refuses out-of-band grabs *and* window
-enumeration by design, so that path goes through the xdg-desktop-portal
-backend (``wayland.py``) instead.
+of an empty list they would misread as "no windows on screen".
+
+Wayland is different again: the compositor refuses out-of-band grabs *and*
+window enumeration by design, so that path is served by the xdg-desktop-portal
+backend (:mod:`shotquill.capture.wayland`), which the capturer factory selects
+on a Wayland session. This X11 slice is not chosen there, and refuses up front
+if constructed directly so the failure points at the portal path rather than
+handing back a blank frame.
 """
 
 from __future__ import annotations
@@ -40,7 +44,9 @@ def _ensure_gui_session() -> None:
         session = os.environ.get("XDG_SESSION_TYPE", "")
         if session == "wayland":
             raise CapabilityUnsupported(
-                "capture", "Wayland blocks out-of-band grabs; portal backend not implemented yet"
+                "capture",
+                "Wayland blocks out-of-band grabs; use the xdg-desktop-portal backend "
+                "(shotquill.capture.wayland.PortalScreenCapturer)",
             )
         if not os.environ.get("DISPLAY"):
             raise CapabilityUnsupported("capture", "no display session (DISPLAY is unset)")

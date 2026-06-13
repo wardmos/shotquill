@@ -195,13 +195,17 @@ class ShotquillApp(QObject):
         # crashes the process (SIGTRAP on the listener thread), so the manager
         # keeps one listener alive and start() just swaps in the new bindings.
         self._hotkeys.clear()
+        # The description is shown in the compositor's own shortcuts settings on
+        # the Wayland (GlobalShortcuts portal) backend; the pynput backends ignore
+        # it. Use the same labels the tray menu shows so the action reads the same
+        # in both places.
         actions = (
-            ("smart_capture", self._bridge.smart_requested.emit),
-            ("fullscreen_capture", self._bridge.fullscreen_requested.emit),
+            ("smart_capture", self._bridge.smart_requested.emit, t("menu.smart")),
+            ("fullscreen_capture", self._bridge.fullscreen_requested.emit, t("menu.fullscreen")),
         )
-        for action, emit in actions:
+        for action, emit, label in actions:
             if self._config.hotkey_enabled(action):
-                self._hotkeys.register(self._config.hotkey(action), emit)
+                self._hotkeys.register(self._config.hotkey(action), emit, description=label)
         try:
             self._hotkeys.start()
         except HotkeyUnavailable as exc:
@@ -298,10 +302,10 @@ class ShotquillApp(QObject):
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
         overlay.destroyed.connect(self._unshelve_settings_dialog)
-        overlay.show()
-        overlay.raise_()
-        overlay.activateWindow()
-        overlay.setFocus()
+        # present() shows the overlay the way the running compositor needs —
+        # fullscreen on Wayland (where stay-on-top + geometry are ignored), a
+        # stay-on-top top-level on X11/macOS — then raises, activates, and focuses.
+        overlay.present()
 
     def _window_preview_image(self, window_id: int) -> QImage | None:
         """One window's un-occluded pixels for the overlay's hover preview.

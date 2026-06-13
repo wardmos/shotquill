@@ -660,3 +660,47 @@ def test_label_font_inherits_ui_font(qtbot):
     font = overlay._label_font(12)
     assert font.pointSize() == 12
     assert QFontInfo(font).family() == QFontInfo(overlay.font()).family()
+
+
+# --- presentation (X11/macOS vs Wayland) ----------------------------------
+
+
+def test_compositor_prefers_fullscreen_follows_platform(monkeypatch):
+    from PySide6.QtGui import QGuiApplication
+
+    from shotquill.ui import smart_overlay
+
+    monkeypatch.setattr(QGuiApplication, "platformName", staticmethod(lambda: "wayland"))
+    assert smart_overlay._compositor_prefers_fullscreen() is True
+    monkeypatch.setattr(QGuiApplication, "platformName", staticmethod(lambda: "xcb"))
+    assert smart_overlay._compositor_prefers_fullscreen() is False
+    monkeypatch.setattr(QGuiApplication, "platformName", staticmethod(lambda: "offscreen"))
+    assert smart_overlay._compositor_prefers_fullscreen() is False
+
+
+def test_present_uses_plain_show_off_wayland(qtbot, monkeypatch):
+    # The default test platform is offscreen -> not Wayland -> normal show path,
+    # which must leave the stay-on-top top-level visible (and not fullscreen).
+    from shotquill.ui import smart_overlay
+
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: False)
+    overlay = _overlay(qtbot)
+    calls = []
+    monkeypatch.setattr(overlay, "show", lambda: calls.append("show"))
+    monkeypatch.setattr(overlay, "showFullScreen", lambda: calls.append("fullscreen"))
+    overlay.present()
+    assert calls == ["show"]
+
+
+def test_present_goes_fullscreen_on_wayland(qtbot, monkeypatch):
+    # On Wayland the compositor ignores stay-on-top + geometry, so present()
+    # must ask for fullscreen instead so the dim layer owns the output.
+    from shotquill.ui import smart_overlay
+
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: True)
+    overlay = _overlay(qtbot)
+    calls = []
+    monkeypatch.setattr(overlay, "show", lambda: calls.append("show"))
+    monkeypatch.setattr(overlay, "showFullScreen", lambda: calls.append("fullscreen"))
+    overlay.present()
+    assert calls == ["fullscreen"]

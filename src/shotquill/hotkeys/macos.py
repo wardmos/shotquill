@@ -163,7 +163,11 @@ class MacHotkeyManager(HotkeyManager):
         # and cleared from the main thread in ``stop()``; this serialises both.
         self._state_lock = threading.Lock()
 
-    def register(self, combo: str, callback: Callable[[], None]) -> None:
+    def register(
+        self, combo: str, callback: Callable[[], None], description: str | None = None
+    ) -> None:
+        # ``description`` is only meaningful to the Wayland portal backend; this
+        # raw pynput listener grabs by key, so it is accepted and ignored here.
         self._bindings[combo] = callback
 
     def unregister(self, combo: str) -> None:

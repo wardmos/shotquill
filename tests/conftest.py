@@ -117,7 +117,9 @@ class _FakeHotkeys:
         # macOS Input Monitoring grant prompt).
         self.raise_unavailable: str | None = None
 
-    def register(self, combo, callback):
+    def register(self, combo, callback, description=None):
+        # ``description`` is the Wayland portal label; the fake just records the
+        # binding, mirroring the pynput backends that ignore it.
         self.bindings[combo] = callback
 
     def unregister(self, combo):
