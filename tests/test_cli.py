@@ -257,6 +257,41 @@ def test_capture_max_width_must_be_positive(fake_capturer, capsys):
     assert fake_capturer.calls == []
 
 
+# --- capture: deterministic -------------------------------------------------
+
+
+def test_capture_deterministic_conflicts_with_include_cursor(fake_capturer, capsys):
+    assert cli.main(["capture", "--deterministic", "--include-cursor"]) == 2
+    assert fake_capturer.calls == []  # rejected before any capture
+    assert "conflict" in capsys.readouterr().err
+
+
+def test_capture_deterministic_file_matches_stdout(fake_capturer, capsysbinary, tmp_path):
+    # A saved file and a piped capture of the same scene must be byte-identical:
+    # both go through the deterministic encode path, not just the stream.
+    dest = tmp_path / "shot.png"
+    assert cli.main(["capture", "--deterministic", "-o", str(dest)]) == 0
+    capsysbinary.readouterr()  # discard the printed path before streaming bytes
+    assert cli.main(["capture", "--deterministic", "-o", "-"]) == 0
+    streamed = capsysbinary.readouterr().out
+    assert streamed.startswith(PNG_MAGIC)
+    assert dest.read_bytes() == streamed
+
+
+def test_capture_deterministic_forces_cursor_off(monkeypatch, capsys, tmp_path):
+    pytest.importorskip("PySide6")
+    seen = {}
+
+    def _record(include_cursor=False):
+        seen["include_cursor"] = include_cursor
+        return FakeCapturer()
+
+    monkeypatch.setattr(headless, "get_capturer", _record)
+    monkeypatch.setattr(paths, "capture_tmp_dir", lambda: tmp_path)
+    assert cli.main(["capture", "--deterministic"]) == 0
+    assert seen["include_cursor"] is False
+
+
 # --- capture: failures ------------------------------------------------------
 
 

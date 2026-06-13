@@ -278,6 +278,24 @@ def test_capture_max_width_downscales(fake_capturer):
     assert meta["height"] == 20
 
 
+def test_capture_deterministic_routes_through_stable_encode(fake_capturer, monkeypatch):
+    from shotquill import headless, mcp
+
+    seen = {}
+
+    def _record(image, fmt="png", *, deterministic=False):
+        seen["deterministic"] = deterministic
+        return b"\x89PNG\r\n\x1a\n"
+
+    monkeypatch.setattr(mcp.headless, "encode_qimage", _record)
+    call("capture", {"deterministic": True})
+    assert seen["deterministic"] is True
+    call("capture")
+    assert seen["deterministic"] is False
+    # signature stays compatible with the real encoder the tool calls
+    assert "deterministic" in headless.encode_qimage.__kwdefaults__
+
+
 def test_capture_conflicting_targets_is_invalid_arguments(fake_capturer):
     result = call("capture", {"window_id": 11, "app": "safari"})["result"]
     assert result["isError"] is True

@@ -238,6 +238,7 @@ squill capture --app safari -o shot.png   # front-most matching window
 squill capture --region 0,0,800,600 -o -  # stream PNG bytes to a pipe
 squill capture --display 1 -o second.png  # one monitor (`squill displays` lists them)
 squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
+squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
@@ -251,6 +252,10 @@ The parts agents rely on:
   defaults to a private temp dir — pass `-o` to keep a shot. `--json` swaps
   the bare path for one JSON object (path, target, size, ambiguity count),
   and `--max-width` downscales before the image reaches a vision model.
+- **Byte-stable captures for tests.** `--deterministic` pins the embedded DPI
+  and strips PNG timestamp/text chunks (and forces the cursor off), so identical
+  pixels always encode to identical bytes — what a golden-image diff or content
+  hash needs across machines. The MCP `capture` tool takes the same flag.
 - **OCR reads the screen directly.** `squill ocr --app safari` (or
   `--window-id`, `--region`, or nothing for the full screen) captures and
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
