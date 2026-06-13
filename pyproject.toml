@@ -53,6 +53,16 @@ dev = [
     "pytest-qt>=4.4",
     "ruff==0.15.15",
 ]
+# On-device OCR on Windows via the WinRT Windows.Media.Ocr engine. Optional and
+# Windows-only — the engine itself ships with Windows, these are just the Python
+# projections that call it. Off Windows the markers make this an empty install.
+windows-ocr = [
+    "winrt-Windows.Media.Ocr>=2.0 ; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging>=2.0 ; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=2.0 ; sys_platform == 'win32'",
+    "winrt-Windows.Globalization>=2.0 ; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=2.0 ; sys_platform == 'win32'",
+]
 
 [project.scripts]
 shotquill = "shotquill.cli:main"

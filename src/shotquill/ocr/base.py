@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 class TextRecognizer(ABC):
     """Extracts text from an image, fully on-device (no network)."""
 
+    #: Human-readable name of the underlying engine, surfaced by ``squill
+    #: doctor`` so users know *which* on-device OCR answered (Apple Vision,
+    #: Windows OCR, …). Subclasses override.
+    backend_name: str = "on-device OCR"
+
     @abstractmethod
     def recognize(self, image: QImage) -> list[str]:
         """Return recognized text lines, ordered roughly top-to-bottom."""

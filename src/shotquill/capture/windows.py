@@ -227,9 +227,7 @@ def _enumerate_raw() -> list[RawWindow]:  # pragma: no cover - needs a real Wind
         # ERROR_SUCCESS (0) can accompany an early-stopped enumeration; only a
         # real error code is a failure worth surfacing.
         if err:
-            raise CapabilityUnsupported(
-                "list_windows", f"EnumWindows failed (error {err})"
-            )
+            raise CapabilityUnsupported("list_windows", f"EnumWindows failed (error {err})")
     return raws
 
 

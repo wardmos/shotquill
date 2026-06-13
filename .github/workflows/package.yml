@@ -123,3 +123,51 @@ jobs:
           path: dist/ShotQuill-*.AppImage
           if-no-files-found: error
           retention-days: 7
+
+  build-windows:
+    # Builds the windowed GUI exe and the console CLI exe, then smoke-tests the
+    # CLI so a broken PyInstaller invocation (missing hidden import, Qt prune
+    # gone wrong) fails the PR instead of a release.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # ``pillow`` is only needed to render the .ico; the build degrades to no
+        # custom icon without it, but the smoke build folds it in to exercise
+        # that path too.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c packaging/constraints-release.txt -e . pyinstaller pillow
+      - name: Record build dependency versions
+        shell: pwsh
+        run: |
+          "### Build dependency versions" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          pip freeze | Select-String -Pattern '^(pyinstaller|pyside6|shiboken6|pillow)' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Build GUI + CLI exes (smoke)
+        shell: pwsh
+        run: .\packaging\windows\build_exe.ps1 v0.0.0-smoke
+      - name: Smoke-test the CLI exe
+        # Proves the frozen bundle launches (Python + Qt load) and the lazily
+        # imported Windows backends resolve under PyInstaller.
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .\dist\squill\squill.exe --version
+          .\dist\squill\squill.exe doctor
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: shotquill-windows-smoke
+          path: |
+            dist/ShotQuill/**
+            dist/squill/**
+          if-no-files-found: error
+          retention-days: 7

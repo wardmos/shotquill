@@ -641,8 +641,10 @@ pipx uninstall shotquill               # pipx install
       highlight, and full-screen blocklist redaction, via EWMH over `python-xlib`
       (Wayland forbids enumerating other apps' windows, so it stays unsupported
       there by design)
-- [ ] **Windows backend** — `capture/windows.py` + hotkeys + autostart; the
-      platform seams are in place
+- [x] **Windows backend** — capture (`QScreen.grabWindow`), window enumeration
+      (`capture/windows.py`, user32 `EnumWindows`), global hotkeys, and
+      launch-at-login (the per-user `Run` key); on-device OCR via the WinRT
+      engine ships behind the optional `windows-ocr` extra
 - [ ] Scrolling / long-page capture
 
 ---

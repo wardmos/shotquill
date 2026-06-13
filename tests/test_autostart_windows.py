@@ -22,15 +22,13 @@ from shotquill.autostart import windows as autostart_windows
 def test_build_run_command_quotes_paths_with_spaces():
     # A Run value is one command-line string CreateProcess parses back, so an
     # interpreter under "Program Files" must round-trip to a single argv entry.
-    command = autostart_windows.build_run_command(
-        [r"C:\Program Files\ShotQuill\shotquill.exe"]
-    )
+    command = autostart_windows.build_run_command([r"C:\Program Files\ShotQuill\shotquill.exe"])
     assert command == r'"C:\Program Files\ShotQuill\shotquill.exe"'
 
 
 def test_build_run_command_renders_all_arguments():
     command = autostart_windows.build_run_command([r"C:\Py\python.exe", "-m", "shotquill"])
-    assert command == r'C:\Py\python.exe -m shotquill'
+    assert command == r"C:\Py\python.exe -m shotquill"
 
 
 def test_launch_arguments_dev_runs_module(monkeypatch):

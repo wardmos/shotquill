@@ -354,7 +354,6 @@ def _printable(text: str) -> str:
     return "".join(c for c in text if c.isprintable())
 
 
-
 def _cmd_windows(args: argparse.Namespace) -> int:
     capturer = headless.get_capturer()
     windows = capturer.list_windows()

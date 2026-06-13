@@ -19,6 +19,8 @@ _DEFAULT_LANGUAGES = ("zh-Hans", "en")
 
 
 class VisionTextRecognizer(TextRecognizer):
+    backend_name = "Apple Vision"
+
     def recognize(
         self, image: QImage, languages: tuple[str, ...] = _DEFAULT_LANGUAGES
     ) -> list[str]:
