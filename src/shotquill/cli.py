@@ -296,6 +296,24 @@ def _add_record_parser(sub) -> None:
     )
     frame.add_argument("--label", help="human-readable note for this frame")
     _add_target_options(frame)
+    frame.add_argument(
+        "--contains",
+        action="append",
+        metavar="TEXT",
+        help="OCR the frame and assert it contains TEXT (repeatable; all must hold)",
+    )
+    frame.add_argument(
+        "--matches",
+        action="append",
+        metavar="REGEX",
+        help="OCR the frame and assert it matches REGEX (repeatable; all must hold)",
+    )
+    frame.add_argument(
+        "-i",
+        "--ignore-case",
+        action="store_true",
+        help="make --contains / --matches case-insensitive",
+    )
     frame.add_argument("--json", action="store_true", help="machine-readable output")
     frame.set_defaults(func=_cmd_record_frame)
 
@@ -487,7 +505,7 @@ def _cmd_record_start(args: argparse.Namespace) -> int:
 
 
 def _cmd_record_frame(args: argparse.Namespace) -> int:
-    from shotquill import record
+    from shotquill import record, textassert
 
     try:
         session = record.resolve_session(args.session)
@@ -497,6 +515,12 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         return 1
     except _UsageError as exc:
         return _usage_error(str(exc))
+
+    # An asserting frame OCRs itself and records the verdict, so a failed test
+    # becomes a frame in the trace. Resolve the recognizer first, so a host
+    # without OCR fails before the capture rather than after.
+    asserting = bool(args.contains or args.matches)
+    recognizer = headless.get_recognizer() if asserting else None
 
     # Redaction stays on for the record path: the blocklist is loaded and applied
     # by perform_capture, and a non-empty list means protection was in force for
@@ -522,7 +546,25 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
 
     from shotquill.imaging import result_to_qimage
 
-    image_bytes = headless.encode_qimage(result_to_qimage(result), "png")
+    image = result_to_qimage(result)
+    image_bytes = headless.encode_qimage(image, "png")
+
+    # Assert on the very pixels being filed (post-redaction), so the recorded
+    # frame and its verdict always agree.
+    checks: list[textassert.Check] = []
+    assertions = None
+    if asserting:
+        try:
+            checks = textassert.evaluate(
+                recognizer.recognize(image),
+                contains=tuple(args.contains or ()),
+                matches=tuple(args.matches or ()),
+                ignore_case=args.ignore_case,
+            )
+        except ValueError as exc:
+            return _usage_error(str(exc))  # a broken regex is the caller's bug
+        assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
+
     frame = record.record_frame(
         session,
         image_bytes=image_bytes,
@@ -530,25 +572,32 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         target=target,
         label=args.label,
         redacted=bool(blocklist),
+        assertions=assertions,
     )
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_frame", via="record", target=target, dest=dest)
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "conversation_id": session.id,
-                    "index": frame.index,
-                    "image": dest,
-                    "tool": frame.tool,
-                    "target": target,
-                    "redacted": frame.redacted,
-                },
-                ensure_ascii=False,
-            )
-        )
+        payload = {
+            "conversation_id": session.id,
+            "index": frame.index,
+            "image": dest,
+            "tool": frame.tool,
+            "target": target,
+            "redacted": frame.redacted,
+        }
+        if assertions is not None:
+            payload["assertions"] = assertions
+            payload["assertion_passed"] = frame.assertion_passed
+        print(json.dumps(payload, ensure_ascii=False))
     else:
         print(dest)
+        for check in checks:
+            print(textassert.describe(check), file=sys.stderr)
+
+    # A failed assertion is a result, not an error: the frame is still recorded
+    # (capturing the failure is the point); the exit code carries the verdict.
+    if frame.assertion_passed is False:
+        return _EXIT_ASSERTION_FAILED
     return 0
 
 

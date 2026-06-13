@@ -45,6 +45,10 @@ SEMCONV_VERSION = "1.34.0"
 # is the protobuf number, which OTLP/JSON carries as a bare integer.
 _SPAN_KIND_INTERNAL = 1
 
+# Span status code (OTLP): 2 == ERROR. Set on a frame whose assertion failed so
+# the broken step surfaces; UNSET (omitted) otherwise.
+_STATUS_ERROR = 2
+
 OTLP_NAME = "trace.otlp.json"
 
 
@@ -133,7 +137,12 @@ def _frame_span(entry: dict, *, trace_id: str, parent_span_id: str) -> dict:
     if entry.get("target"):
         event_attrs.append(_str_attr("shotquill.frame.target", entry["target"]))
 
-    return {
+    assertion_passed = entry.get("assertion_passed")
+    if assertion_passed is not None:
+        attrs.append(_bool_attr("shotquill.frame.assertion.passed", assertion_passed))
+        event_attrs.append(_bool_attr("shotquill.frame.assertion.passed", assertion_passed))
+
+    span = {
         "traceId": trace_id,
         "spanId": _span_id(tool_call_id or f"{trace_id}/{at_nanos}"),
         "parentSpanId": parent_span_id,
@@ -150,6 +159,12 @@ def _frame_span(entry: dict, *, trace_id: str, parent_span_id: str) -> dict:
             }
         ],
     }
+    # A failed assertion sets the span status to ERROR so the failing step of a
+    # recorded test stands out in any OTel backend; a passed one is left UNSET
+    # (the default), since "no assertion" and "assertion held" are both fine.
+    if assertion_passed is False:
+        span["status"] = {"code": _STATUS_ERROR, "message": "assertion failed"}
+    return span
 
 
 def _agent_span_name(agent_name: str | None) -> str:

@@ -383,6 +383,14 @@ def _tool_record_frame(args: dict):
     if not tool or not str(tool).strip():
         raise ValueError("tool is required (the action this frame documents)")
 
+    # An asserting frame OCRs itself and records the verdict, so a failed check
+    # becomes a frame in the trace. Resolve the recognizer first, so a host
+    # without OCR fails before the capture rather than after.
+    contains = tuple(args.get("contains") or ())
+    matches = tuple(args.get("matches") or ())
+    asserting = bool(contains or matches)
+    recognizer = headless.get_recognizer() if asserting else None
+
     # Mirror the CLI record path: load the blocklist once, keep redaction on, and
     # record `redacted` as whether protection was in force (see record.py).
     region = _validate_target(args)
@@ -400,7 +408,21 @@ def _tool_record_frame(args: dict):
     )
     from shotquill.imaging import result_to_qimage
 
-    image_bytes = headless.encode_qimage(result_to_qimage(result), "png")
+    image = result_to_qimage(result)
+    image_bytes = headless.encode_qimage(image, "png")
+
+    assertions = None
+    if asserting:
+        from shotquill import textassert
+
+        checks = textassert.evaluate(
+            recognizer.recognize(image),
+            contains=contains,
+            matches=matches,
+            ignore_case=bool(args.get("ignore_case")),
+        )
+        assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
+
     frame = record.record_frame(
         session,
         image_bytes=image_bytes,
@@ -408,6 +430,7 @@ def _tool_record_frame(args: dict):
         target=target,
         label=args.get("label"),
         redacted=bool(blocklist),
+        assertions=assertions,
     )
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_frame", via="record", target=target, dest=dest)
@@ -419,6 +442,9 @@ def _tool_record_frame(args: dict):
         "target": target,
         "redacted": frame.redacted,
     }
+    if assertions is not None:
+        payload["assertions"] = assertions
+        payload["assertion_passed"] = frame.assertion_passed
     if matched > 1:
         payload["matched_windows"] = matched
         payload["note"] = "captured the front-most match; use window_id for an exact pick"
@@ -744,7 +770,10 @@ _TOOLS = {
                 "Capture one frame into a session (full screen by default, or a "
                 "window/region/monitor via the target args). Blocklist redaction "
                 "stays on. The image is written to the session on disk and is NOT "
-                "returned to you — use `capture` when you want to see the pixels."
+                "returned to you — use `capture` when you want to see the pixels. "
+                "Add contains/matches to OCR the frame and record the assertion "
+                "in the trace (a failed check marks the step in the filmstrip and "
+                "sets the OTLP span to error); read `assertion_passed` to branch."
             ),
             "annotations": {"title": "Record one frame", "openWorldHint": False},
             "inputSchema": {
@@ -761,6 +790,21 @@ _TOOLS = {
                     "label": {
                         "type": "string",
                         "description": "Human-readable note for this frame.",
+                    },
+                    "contains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "OCR the frame and assert it contains each string.",
+                    },
+                    "matches": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "OCR the frame and assert it matches each regex.",
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Make contains/matches case-insensitive.",
                     },
                     **_TARGET_PROPERTIES,
                 },
@@ -780,6 +824,22 @@ _TOOLS = {
                         "description": (
                             "Blocklist protection was in force (not a no-user-content guarantee)."
                         ),
+                    },
+                    "assertion_passed": {
+                        "type": "boolean",
+                        "description": "Present when contains/matches were given: did all hold.",
+                    },
+                    "assertions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["contains", "matches"]},
+                                "pattern": {"type": "string"},
+                                "passed": {"type": "boolean"},
+                            },
+                            "required": ["kind", "pattern", "passed"],
+                        },
                     },
                     "matched_windows": {"type": "integer"},
                     "note": {"type": "string"},
