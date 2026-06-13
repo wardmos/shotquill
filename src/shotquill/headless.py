@@ -449,12 +449,24 @@ def downscale_to_width(image: QImage, max_width: int) -> QImage:
     return image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
 
 
-def encode_qimage(image: QImage, image_format: str = "png") -> bytes:
-    """Serialize a QImage to PNG/JPEG bytes (for ``-o -`` and MCP payloads)."""
+def encode_qimage(
+    image: QImage, image_format: str = "png", *, deterministic: bool = False
+) -> bytes:
+    """Serialize a QImage to PNG/JPEG bytes (for ``-o -`` and MCP payloads).
+
+    With ``deterministic`` the embedded resolution is pinned and PNG timestamp /
+    text chunks are stripped, so the same pixels always encode to the same bytes
+    regardless of the capturing display — what a golden-image or content-hash
+    assertion needs. See :mod:`shotquill.deterministic`.
+    """
     from PySide6.QtCore import QBuffer, QByteArray, QIODevice
     from PySide6.QtGui import QImage as _QImage
 
     fmt = "jpg" if image_format.lower() in ("jpg", "jpeg") else "png"
+    if deterministic:
+        from shotquill import deterministic as det
+
+        image = det.normalize_image(image)
     if fmt == "jpg":
         # JPEG has no alpha; convert explicitly so the result is deterministic.
         image = image.convertToFormat(_QImage.Format.Format_RGB888)
@@ -463,7 +475,12 @@ def encode_qimage(image: QImage, image_format: str = "png") -> bytes:
     buffer.open(QIODevice.OpenModeFlag.WriteOnly)
     if not image.save(buffer, fmt.upper()):
         raise OSError(f"failed to encode image as {fmt}")
-    return bytes(data)
+    encoded = bytes(data)
+    if deterministic:
+        from shotquill import deterministic as det
+
+        encoded = det.strip_volatile_png_chunks(encoded)
+    return encoded
 
 
 def doctor_checks() -> list[dict]:

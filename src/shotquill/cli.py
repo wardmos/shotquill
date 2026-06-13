@@ -115,6 +115,14 @@ def _build_parser() -> argparse.ArgumentParser:
     capture.add_argument(
         "--include-cursor", action="store_true", help="composite the pointer (best effort)"
     )
+    capture.add_argument(
+        "--deterministic",
+        action="store_true",
+        help=(
+            "byte-stable output for golden-image/diff tests: pin the embedded DPI "
+            "and strip PNG timestamp/text chunks (forces the cursor off)"
+        ),
+    )
     capture.set_defaults(func=_cmd_capture)
 
     windows = sub.add_parser(
@@ -285,10 +293,17 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         return _usage_error("--json owns stdout; it cannot be combined with `-o -`")
     if args.max_width is not None and args.max_width <= 0:
         return _usage_error("--max-width must be positive")
+    if args.deterministic and args.include_cursor:
+        # The pointer moves between frames, so compositing it is the opposite of
+        # byte-stable; refusing is clearer than silently dropping one of them.
+        return _usage_error("--deterministic and --include-cursor conflict; the cursor must be off")
 
+    # --deterministic forces the cursor off so the same scene always encodes the
+    # same way; --include-cursor is rejected above, so this just stays the default.
+    include_cursor = args.include_cursor and not args.deterministic
     try:
         region = _validate_target(args)
-        image, target, matched = _capture_image(args, region, include_cursor=args.include_cursor)
+        image, target, matched = _capture_image(args, region, include_cursor=include_cursor)
     except _UsageError as exc:
         return _usage_error(str(exc))
 
@@ -296,7 +311,9 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         image = headless.downscale_to_width(image, args.max_width)
 
     if args.output == "-":
-        sys.stdout.buffer.write(headless.encode_qimage(image, args.format))
+        sys.stdout.buffer.write(
+            headless.encode_qimage(image, args.format, deterministic=args.deterministic)
+        )
         sys.stdout.buffer.flush()
         dest = "-"
     else:
@@ -307,7 +324,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             from shotquill.output.saver import build_output_path
 
             path = build_output_path(str(paths.capture_tmp_dir()), args.format)
-        _save_image(image, path, args.format)
+        _save_image(image, path, args.format, deterministic=args.deterministic)
         dest = str(path.resolve())
         if args.json:
             meta = {
@@ -327,11 +344,17 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
-def _save_image(image, path: Path, format_hint: str) -> None:
+def _save_image(image, path: Path, format_hint: str, *, deterministic: bool = False) -> None:
     suffix = path.suffix.lower().lstrip(".")
     fmt = suffix if suffix in ("png", "jpg", "jpeg") else format_hint
     if suffix and suffix not in ("png", "jpg", "jpeg"):
         print(f"squill: unknown extension .{suffix}; writing {fmt} data", file=sys.stderr)
+    if deterministic:
+        # Encode to bytes through the same deterministic path as ``-o -`` (pinned
+        # DPI, stripped timestamp/text chunks) and write those, so a file and a
+        # piped capture of the same scene are byte-for-byte identical.
+        path.write_bytes(headless.encode_qimage(image, fmt, deterministic=True))
+        return
     if fmt in ("jpg", "jpeg"):
         from PySide6.QtGui import QImage
 
