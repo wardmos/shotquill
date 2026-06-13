@@ -17,7 +17,7 @@ from shotquill.capture.base import CaptureResult, Rect, WindowInfo
 
 
 class FakeCapturer:
-    def __init__(self, windows=None, list_raises=None, can_exclude=False):
+    def __init__(self, windows=None, list_raises=None, can_exclude=False, includes_overlaps=False):
         self.include_cursor = False
         self._windows = windows or []
         self._list_raises = list_raises
@@ -25,8 +25,14 @@ class FakeCapturer:
         # ScreenCaptureKit); otherwise model the legacy path that cannot, so the
         # caller falls back to a solid block.
         self._can_exclude = can_exclude
+        # When True, model a no-compositor X11 grab whose window capture reads the
+        # framebuffer (overlapping windows bleed in); False models a surface grab.
+        self._includes_overlaps = includes_overlaps
         self.captured = []
         self.excluded = frozenset()
+
+    def window_capture_includes_overlaps(self):
+        return self._includes_overlaps
 
     def _result(self, excluded=frozenset()):
         # Non-black fill so redaction (which paints opaque black) is observable.
@@ -105,6 +111,41 @@ def test_window_id_capture_when_enumeration_unavailable_proceeds():
     cap = FakeCapturer(list_raises=headless.CapabilityUnsupported("list_windows", "wayland"))
     result, _, _ = headless.perform_capture(cap, window_id=22, blocklist=ONEPW_LIST)
     assert cap.captured == [("window", 22)]
+
+
+def test_window_capture_redacts_blocked_overlap_on_framebuffer_backend():
+    # No-compositor X11: grabbing Safari also reads a 1Password window stacked
+    # over it. Safari itself is allowed, so the capture proceeds — but the
+    # overlapping blocked window must be painted out, not leaked.
+    cap = FakeCapturer(windows=[SAFARI, ONEPW], includes_overlaps=True)
+    result, target, _ = headless.perform_capture(cap, window_id=11, blocklist=ONEPW_LIST)
+    assert cap.captured == [("window", 11)]  # the allowed target was captured
+    assert _all_black(result)  # the overlapping 1Password pixels are gone
+
+
+def test_window_capture_keeps_overlap_on_surface_backend():
+    # Surface-accurate backend (macOS SCK / Windows / X11 with a compositor):
+    # the grab only sees Safari's own pixels, so nothing is redacted (no false
+    # black box over the legitimate capture).
+    cap = FakeCapturer(windows=[SAFARI, ONEPW], includes_overlaps=False)
+    result, _, _ = headless.perform_capture(cap, window_id=11, blocklist=ONEPW_LIST)
+    assert not _all_black(result)
+
+
+def test_window_capture_ignores_non_overlapping_blocked_window():
+    # A blocked window that doesn't intersect the target leaves the capture
+    # untouched even on a framebuffer backend.
+    far = WindowInfo(22, "1Password", "Vault", Rect(500, 500, 80, 60), bundle_id=ONEPW.bundle_id)
+    cap = FakeCapturer(windows=[SAFARI, far], includes_overlaps=True)
+    result, _, _ = headless.perform_capture(cap, window_id=11, blocklist=ONEPW_LIST)
+    assert not _all_black(result)
+
+
+def test_app_capture_redacts_blocked_overlap_on_framebuffer_backend():
+    cap = FakeCapturer(windows=[SAFARI, ONEPW], includes_overlaps=True)
+    result, target, _ = headless.perform_capture(cap, app="safari", blocklist=ONEPW_LIST)
+    assert "Safari" in target
+    assert _all_black(result)
 
 
 def test_fullscreen_is_not_refused_even_with_blocked_app_present():

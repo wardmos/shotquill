@@ -287,6 +287,16 @@ def test_capture_max_width_downscales(fake_capturer):
     assert meta["height"] == 20
 
 
+@pytest.mark.parametrize("bad", [0, -10, True, 1.5, "50"])
+def test_capture_invalid_max_width_is_invalid_arguments(fake_capturer, bad):
+    # Mirror the CLI's positive-integer check; notably bool (an int subclass)
+    # must not slip through as width 1 and silently emit a 1px image.
+    result = call("capture", {"max_width": bad})["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "invalid_arguments"
+
+
 def test_capture_deterministic_routes_through_stable_encode(fake_capturer, monkeypatch):
     from shotquill import headless, mcp
 

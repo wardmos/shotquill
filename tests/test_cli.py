@@ -171,6 +171,14 @@ def test_capture_bad_region_is_usage_error(fake_capturer, capsys, bad):
     assert capsys.readouterr().err
 
 
+def test_capture_empty_region_is_usage_error_not_fullscreen(fake_capturer, capsys):
+    # An explicit empty --region is falsy and must not silently fall through to
+    # a full-screen grab (same hazard guarded for --app).
+    assert cli.main(["capture", "--region", ""]) == 2
+    assert fake_capturer.calls == []
+    assert capsys.readouterr().err
+
+
 def test_capture_title_without_app_is_usage_error(fake_capturer, capsys):
     assert cli.main(["capture", "--title", "x"]) == 2
     assert "--app" in capsys.readouterr().err
@@ -553,6 +561,22 @@ def test_ocr_file(fake_recognizer, capsys, tmp_path):
     image.write_bytes(_png_bytes())
     assert cli.main(["ocr", str(image)]) == 0
     assert capsys.readouterr().out == "hello\nworld\n"
+
+
+def test_ocr_strips_control_chars_from_app_text(monkeypatch, capsys, tmp_path):
+    # OCR text is app-controlled (pixels off the screen); terminal control
+    # sequences must be stripped before printing, like the windows table does.
+    class _Recognizer:
+        def recognize(self, image):
+            return ["safe\x1b[31mline", "tab\there"]
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _Recognizer())
+    image = tmp_path / "shot.png"
+    image.write_bytes(_png_bytes())
+    assert cli.main(["ocr", str(image)]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\t" not in out
+    assert out == "safe[31mline\ntabhere\n"
 
 
 def test_ocr_stdin(fake_recognizer, capsys, monkeypatch):

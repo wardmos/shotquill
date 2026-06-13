@@ -40,22 +40,23 @@ class MacScreenCapturer(ScreenCapturer):
     def capture_fullscreen(self, exclude_window_ids: frozenset[int] = frozenset()) -> CaptureResult:
         import Quartz
 
-        # Logical bounds of the whole virtual desktop: the top-left is the origin
-        # (not (0, 0) when a monitor sits left of / above the primary), and the
-        # logical width lets the legacy path recover its physical pixel scale.
-        ox, oy, logical_w, _ = self._virtual_desktop_bounds()
         result = self._sck_capture_fullscreen(exclude_window_ids)
-        if result is None:
-            # CGRectInfinite spans every display; the image is physical (Retina)
-            # pixels but carries no scale of its own, so derive it from the
-            # physical-to-logical width ratio. The legacy path cannot omit
-            # windows, so it excludes none (the caller redacts them instead).
-            result = self._grab_rect(Quartz.CGRectInfinite)
-            scale = result.width / logical_w if logical_w else 1.0
-            result = replace(result, scale=scale)
-        # Tag the origin so blocklist redaction maps window bounds (logical) onto
-        # the right pixels; the SCK path already reports the correct scale.
-        return replace(result, origin_x=ox, origin_y=oy)
+        if result is not None:
+            # The SCK path already tagged the origin from the very SCDisplay
+            # frames it laid the pixels out from — one source of truth. Deriving
+            # the origin a second way here (Quartz CGDisplayBounds) could differ
+            # by a point and shift every redaction block off its window.
+            return result
+        # Legacy fallback: one CGRectInfinite grab spanning every display, with
+        # no origin of its own. Derive the whole virtual desktop's logical bounds
+        # — the top-left is the origin (not (0, 0) when a monitor sits left of /
+        # above the primary), and the logical width recovers the physical pixel
+        # scale. The legacy path cannot omit windows, so it excludes none (the
+        # caller redacts them instead).
+        ox, oy, logical_w, _ = self._virtual_desktop_bounds()
+        result = self._grab_rect(Quartz.CGRectInfinite)
+        scale = result.width / logical_w if logical_w else 1.0
+        return replace(result, scale=scale, origin_x=ox, origin_y=oy)
 
     def capture_region(self, region: Rect) -> CaptureResult:
         # Unused at runtime (the app crops regions out of the full-screen grab),
@@ -312,7 +313,16 @@ class MacScreenCapturer(ScreenCapturer):
                 scale = float(content_filter.pointPixelScale())
                 shots.append((display.frame(), scale, self._sck_screenshot(sck, content_filter)))
             if len(shots) == 1:
+                frame = shots[0][0]
                 result = self._cgimage_to_result(shots[0][2], scale=shots[0][1])
+                # Tag the single display's own frame origin (same point space as
+                # window bounds), so redaction maps onto the right pixels without
+                # a second, independently-derived origin to drift from.
+                result = replace(
+                    result,
+                    origin_x=int(round(frame.origin.x)),
+                    origin_y=int(round(frame.origin.y)),
+                )
             else:
                 result = self._composite_displays(shots)
             return replace(result, excluded_window_ids=excluded_ids)
@@ -365,8 +375,16 @@ class MacScreenCapturer(ScreenCapturer):
                 frame.size.height * scale,
             )
             Quartz.CGContextDrawImage(context, dest, image)
+        # Carry the composited canvas origin (the same ``left``/``top`` the pixels
+        # were laid out against) so redaction maps onto the exact pixels.
         return CaptureResult(
-            width=width, height=height, scale=scale, pixels=bytes(buffer), premultiplied=True
+            width=width,
+            height=height,
+            scale=scale,
+            pixels=bytes(buffer),
+            premultiplied=True,
+            origin_x=int(round(left)),
+            origin_y=int(round(top)),
         )
 
     # --- pixel plumbing -----------------------------------------------------

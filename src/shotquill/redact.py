@@ -50,6 +50,12 @@ def fill_rects(result: CaptureResult, rects: list[tuple[int, int, int, int]]) ->
     buf = bytearray(result.pixels)
     stride = result.width * 4
     for x0, y0, x1, y1 in rects:
+        # Clamp against this result's own dimensions rather than trusting the
+        # caller. This is a security-critical path: a rect built against a
+        # different width would otherwise let a row-spanning write bleed fill
+        # bytes into the wrong scanline — redaction landing in the wrong place.
+        x0, x1 = max(0, min(result.width, x0)), max(0, min(result.width, x1))
+        y0, y1 = max(0, min(result.height, y0)), max(0, min(result.height, y1))
         row = _FILL * (x1 - x0)
         for y in range(y0, y1):
             start = y * stride + x0 * 4
@@ -58,6 +64,16 @@ def fill_rects(result: CaptureResult, rects: list[tuple[int, int, int, int]]) ->
     # redacted copy stays a faithful CaptureResult and later coordinate maths
     # against ``origin`` and the excluded-window set still line up.
     return replace(result, pixels=bytes(buf))
+
+
+def rect_intersects(a: Rect, b: Rect) -> bool:
+    """Whether two logical rectangles overlap (touching edges don't count)."""
+    return (
+        a.x < b.x + b.width
+        and b.x < a.x + a.width
+        and a.y < b.y + b.height
+        and b.y < a.y + a.height
+    )
 
 
 def redact_bounds(

@@ -30,6 +30,16 @@ def test_copy_text_round_trips(qapp):
     assert QGuiApplication.clipboard().text() == "hello 世界"
 
 
+def test_copy_raises_clear_error_without_a_clipboard(qapp, monkeypatch):
+    # Without a running QApplication, clipboard() returns None; guard it so the
+    # caller gets a clear message instead of an opaque AttributeError.
+    monkeypatch.setattr(QGuiApplication, "clipboard", staticmethod(lambda: None))
+    with pytest.raises(RuntimeError, match="QApplication"):
+        copy_text("x")
+    with pytest.raises(RuntimeError, match="QApplication"):
+        copy_qimage(_image())
+
+
 def test_copy_image_from_capture_result(qapp):
     pixels = bytes([255, 0, 0, 255] * 4)
     result = CaptureResult(width=2, height=2, scale=1.0, pixels=pixels)

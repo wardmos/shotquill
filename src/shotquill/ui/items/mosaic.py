@@ -2,9 +2,12 @@
 # Copyright (C) 2026 wardmos
 """Mosaic (pixelation) redaction item.
 
-Samples a region of the background screenshot, pixelates it by scaling down and
-back up with nearest-neighbor, and draws it on top — so the exported image hides
-the original pixels.
+Samples a region of the background screenshot, pixelates it by averaging it down
+into ~block-sized cells (smooth downscale) and blowing it back up with hard cell
+edges, then draws it on top — so the exported image hides the original pixels.
+Averaging (rather than nearest-neighbor point sampling) is deliberate: each cell
+is the mean of its source block, so a single high-contrast pixel can't survive
+into the redacted output.
 """
 
 from __future__ import annotations
@@ -17,16 +20,23 @@ _DEFAULT_BLOCK = 12
 
 
 def pixelate(source: QPixmap, block: int = _DEFAULT_BLOCK) -> QPixmap:
-    """Return a blocky (mosaic) copy of ``source`` with ~``block``-pixel cells."""
-    if source.isNull() or source.width() < 1 or source.height() < 1:
-        return source
+    """Return a blocky (mosaic) copy of ``source`` with ~``block``-pixel cells.
+
+    An empty/null source yields an empty pixmap; this never returns ``source``
+    itself when it carries pixels, so a redacted region can't leak verbatim.
+    """
+    if source.isNull():
+        return QPixmap()
     block = max(1, block)  # a 0/negative cell size would divide by zero below
+    # Smooth downscale averages each block; nearest-neighbor here would leave a
+    # single real pixel per cell, weakening the redaction.
     small = source.scaled(
         max(1, source.width() // block),
         max(1, source.height() // block),
         Qt.IgnoreAspectRatio,
-        Qt.FastTransformation,
+        Qt.SmoothTransformation,
     )
+    # Fast upscale keeps crisp cell edges (no blending back toward the original).
     return small.scaled(
         source.width(),
         source.height(),

@@ -332,7 +332,29 @@ class ShotquillApp(QObject):
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
             return
+        result = self._redact_window_overlaps(result, origin)
         self._deliver_capture(result_to_qimage(result), origin)
+
+    def _redact_window_overlaps(self, result, target: QRect):
+        """Hide blocklisted windows stacked over the target when the grab may
+        have read them off the framebuffer (no-compositor X11). Surface-accurate
+        backends grab only the target's own pixels, so this is a no-op there —
+        the capability is read defensively in case the backend predates it."""
+        includes = getattr(self._capturer, "window_capture_includes_overlaps", None)
+        if includes is None or not includes():
+            return result
+        from shotquill.capture.base import Rect
+
+        target_rect = Rect(target.x(), target.y(), target.width(), target.height())
+        overlaps = [
+            w.bounds
+            for w in self._blocked_windows.values()
+            if redact.rect_intersects(target_rect, w.bounds)
+        ]
+        if not overlaps:
+            return result
+        result, _ = redact.redact_bounds(result, (target_rect.x, target_rect.y), overlaps)
+        return result
 
     def _grab(self, blocklist: bl.Blocklist) -> QImage | None:
         # Resolve which on-screen windows are blocklisted *before* capturing, so

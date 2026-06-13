@@ -166,6 +166,39 @@ def list_windows() -> list[WindowInfo]:
 # --- X11 shim: needs a live server + python-xlib + an EWMH WM ----------------
 
 
+def has_compositor() -> bool:  # pragma: no cover - needs a real X server
+    """Whether a compositing manager owns ``_NET_WM_CM_Sn`` for the default screen.
+
+    With a compositor running, ``QScreen.grabWindow`` reads a window's off-screen
+    backing pixmap (only its own pixels); without one it reads the root
+    framebuffer, so a window stacked on top bleeds into the grab. Returns
+    ``False`` on any uncertainty — no python-xlib, no display, or a probe error —
+    so callers fail closed toward redacting overlapping blocklisted windows.
+    """
+    try:
+        from Xlib import X
+        from Xlib import display as xdisplay
+    except ImportError:
+        return False
+    if not os.environ.get("DISPLAY"):
+        return False
+    try:
+        display = xdisplay.Display()
+    except Exception:
+        return False
+    try:
+        screen = display.get_default_screen()
+        atom = display.intern_atom(f"_NET_WM_CM_S{screen}")
+        return display.get_selection_owner(atom) != X.NONE
+    except Exception:
+        return False
+    finally:
+        try:
+            display.close()
+        except Exception:
+            pass
+
+
 def _connect():  # pragma: no cover - needs a real X server
     """Open the X display, or raise CapabilityUnsupported explaining why not."""
     try:

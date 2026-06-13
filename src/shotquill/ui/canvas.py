@@ -116,6 +116,11 @@ class AnnotationCanvas(QGraphicsView):
         self._start = QPointF()
         self._mosaic_rect = None  # latest drag rect; release renders it exactly
         self._mosaic_last = 0.0  # monotonic time of the last live mosaic render
+        # One-way latch: starting a text edit commits to annotating even if the
+        # text is later discarded as empty, so the crop can't become adjustable
+        # again under a half-finished annotation. See ``is_pristine``.
+        self._text_started = False
+        self._closing = False  # set on teardown; stops late focus-out commits
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -138,10 +143,10 @@ class AnnotationCanvas(QGraphicsView):
         self._scene.setSceneRect(QRectF(background.rect()))
 
     def is_pristine(self) -> bool:
-        """True while nothing has been annotated: no undo history and nothing
-        on the scene beyond the background screenshot (an uncommitted text
-        item counts as an annotation)."""
-        return self._undo.count() == 0 and len(self._scene.items()) == 1
+        """True while nothing has been annotated: no undo history, no text edit
+        ever started, and nothing on the scene beyond the background screenshot
+        (an uncommitted text item counts as an annotation)."""
+        return not self._text_started and self._undo.count() == 0 and len(self._scene.items()) == 1
 
     def color(self) -> QColor:
         return QColor(self._color)
@@ -295,6 +300,7 @@ class AnnotationCanvas(QGraphicsView):
     def _create_text(self, pos: QPointF) -> None:
         # The undo entry is deferred to _finish_text: only text that survives
         # its first focus-out (i.e. is non-empty) becomes part of the document.
+        self._text_started = True  # latch: never re-enable crop adjustment
         item = _TextItem(self._finish_text)
         item.setDefaultTextColor(self._color)
         font = QFont()
@@ -307,9 +313,18 @@ class AnnotationCanvas(QGraphicsView):
         self._scene.addItem(item)
         item.setFocus()
 
+    def begin_teardown(self) -> None:
+        """Stop committing text on focus-out — the window is closing.
+
+        ``WA_DeleteOnClose`` fires a focus-out on the active text item while the
+        view/scene are being destroyed; pushing onto the (dying) undo stack then
+        risks a ``RuntimeError``. The on-screen pixels are already captured, so
+        the deferred commit is moot at this point."""
+        self._closing = True
+
     def _finish_text(self, item: _TextItem) -> None:
         """First focus-out commits a text item: empty → discarded, else undoable."""
-        if item.committed:
+        if item.committed or self._closing:
             return
         item.committed = True
         if not item.toPlainText().strip():

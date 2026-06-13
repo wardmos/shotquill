@@ -95,10 +95,13 @@ def test_recognize_omits_lang_flag_when_none_installed(monkeypatch):
     assert "-l" not in captured["args"]
 
 
-def test_recognize_raises_when_not_installed(monkeypatch):
+def test_recognize_raises_unsupported_when_not_installed(monkeypatch):
+    from shotquill import headless
+
     monkeypatch.setattr(linux, "tesseract_path", lambda: None)
-    with pytest.raises(RuntimeError, match="not installed"):
+    with pytest.raises(headless.CapabilityUnsupported, match="not installed") as exc:
         linux.TesseractTextRecognizer().recognize(_image())
+    assert exc.value.exit_code == headless.EXIT_UNSUPPORTED
 
 
 def test_recognize_raises_on_nonzero_exit(monkeypatch):

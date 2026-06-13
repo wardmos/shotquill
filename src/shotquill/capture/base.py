@@ -175,3 +175,19 @@ class ScreenCapturer(ABC):
                 )
             )
         return displays
+
+    def window_capture_includes_overlaps(self) -> bool:
+        """Whether :meth:`capture_window` may include pixels of windows stacked
+        *above* the target (a framebuffer read) rather than only the target's own
+        surface.
+
+        ``False`` for surface-accurate backends — macOS ScreenCaptureKit,
+        Windows, and X11 *with* a compositor all grab the window's own pixels, so
+        nothing on top bleeds in. The headless layer uses this to decide whether
+        a by-window capture needs blocklisted *overlapping* windows redacted:
+        surface-accurate grabs never see them, so skipping the redaction avoids
+        painting false black boxes over the legitimately captured window.
+
+        Default ``False`` (the safe, common case); a backend whose grab reads the
+        root framebuffer (X11 without a compositor) overrides it."""
+        return False

@@ -67,6 +67,27 @@ def test_fill_blacks_out_the_rect_and_leaves_the_rest():
     assert _px(result, 1, 1) == (200, 200, 200, 255)
 
 
+def test_rect_intersects():
+    a = Rect(0, 0, 10, 10)
+    assert redact.rect_intersects(a, Rect(5, 5, 10, 10))  # overlapping corner
+    assert redact.rect_intersects(a, Rect(-5, -5, 8, 8))  # overlapping from top-left
+    assert not redact.rect_intersects(a, Rect(10, 0, 5, 5))  # touching edge only
+    assert not redact.rect_intersects(a, Rect(20, 20, 5, 5))  # disjoint
+
+
+def test_fill_clamps_out_of_bounds_rect_to_the_buffer():
+    # A rect wider/taller than the result must not let a row-spanning write
+    # bleed fill bytes into the wrong scanline — fill_rects clamps defensively
+    # rather than trusting the caller (security-critical redaction path).
+    result = _solid(4, 4)
+    out = redact.fill_rects(result, [(2, 2, 100, 100)])
+    # The in-bounds part of the rect is filled, nothing outside it is touched,
+    # and the buffer keeps its exact length (no overflow).
+    assert len(out.pixels) == len(result.pixels)
+    assert _px(out, 3, 3) == (0, 0, 0, 255)
+    assert _px(out, 0, 0) == (200, 200, 200, 255)
+
+
 def test_redact_bounds_counts_only_what_lands_in_frame():
     result = _solid(8, 8)
     on = Rect(0, 0, 2, 2)

@@ -342,8 +342,11 @@ def _validate_target(args: argparse.Namespace):
         raise _UsageError("--app needs a non-empty app name")
     if args.title and not args.app:
         raise _UsageError("--title only narrows --app matches; pass --app too")
-    if not args.region:
+    if args.region is None:
         return None
+    # An explicit empty --region "" is falsy; let parse_region reject it rather
+    # than silently falling through to a full-screen grab the caller didn't ask
+    # for (same hazard guarded above for --app).
     try:
         return headless.parse_region(args.region)
     except ValueError as exc:
@@ -665,7 +668,12 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
 
     lines = recognizer.recognize(image)
     for line in lines:
-        print(line)
+        # OCR text is app-controlled (it's literally pixels off the screen), so
+        # an attacker who owns what's on screen could smuggle terminal control
+        # sequences through it — strip them like the windows table does before
+        # printing. The raw `lines` still feed --contains/--matches below, and
+        # the MCP path is JSON-escaped already.
+        print(_printable(line))
     audit.record("ocr", via="cli", target=source)
 
     # No --contains/--matches → the command just prints text (back-compat). With
