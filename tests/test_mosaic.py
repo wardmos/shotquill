@@ -23,9 +23,27 @@ def test_pixelate_preserves_dimensions(qapp):
     assert (out.width(), out.height()) == (40, 30)
 
 
-def test_pixelate_null_pixmap_returned_unchanged(qapp):
-    null = QPixmap()
-    assert pixelate(null, 8) is null
+def test_pixelate_null_pixmap_yields_empty(qapp):
+    # A null source has nothing to redact; the result is empty (and never the
+    # source carrying pixels, so a region can't leak through verbatim).
+    assert pixelate(QPixmap(), 8).isNull()
+
+
+def test_pixelate_averages_block_no_source_pixel_survives(qapp):
+    # A black/white checkerboard collapsed to one cell must average to grey,
+    # not pass through a single real pixel (nearest-neighbor would leave pure
+    # black or white, weakening the redaction).
+    src = QPixmap(2, 2)
+    img = src.toImage()
+    img.setPixelColor(0, 0, QColor("black"))
+    img.setPixelColor(1, 0, QColor("white"))
+    img.setPixelColor(0, 1, QColor("white"))
+    img.setPixelColor(1, 1, QColor("black"))
+    src = QPixmap.fromImage(img)
+    out = pixelate(src, 2).toImage()
+    for x, y in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        value = out.pixelColor(x, y).red()
+        assert 0 < value < 255, f"cell ({x},{y}) is a verbatim source pixel: {value}"
 
 
 def test_pixelate_block_larger_than_image_is_safe(qapp):

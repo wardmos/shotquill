@@ -306,6 +306,9 @@ class EditorWindow(QMainWindow):
         super().changeEvent(event)
 
     def closeEvent(self, event) -> None:
+        # Before teardown fires a focus-out on any active text item, tell the
+        # canvas to stop committing it onto the dying undo stack.
+        self._canvas.begin_teardown()
         if self._backdrop is not None:
             self._backdrop.close()
             self._backdrop.deleteLater()
@@ -491,14 +494,20 @@ class EditorWindow(QMainWindow):
         self._ocr_running = True
         self._set_status(t("title.ocr_running"))
         image = self._canvas.background_image()
-        threading.Thread(target=self._run_ocr, args=(image,), daemon=True, name="sq-ocr").start()
+        # Snapshot the recognizer on the GUI thread and hand it to the worker,
+        # so the worker never reads live ``self`` state that could be swapped
+        # out from under it (mirrors how ``image`` is already passed in).
+        recognizer = self._recognizer
+        threading.Thread(
+            target=self._run_ocr, args=(recognizer, image), daemon=True, name="sq-ocr"
+        ).start()
 
-    def _run_ocr(self, image: QImage) -> None:
+    def _run_ocr(self, recognizer, image: QImage) -> None:
         """Worker thread: recognize and hand the outcome back to the GUI thread."""
         lines: list[str] | None = None
         error: Exception | None = None
         try:
-            lines = self._recognizer.recognize(image)
+            lines = recognizer.recognize(image)
         except Exception as exc:
             error = exc
         try:

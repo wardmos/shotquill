@@ -213,6 +213,20 @@ def test_empty_text_item_is_discarded_on_focus_out(qtbot):
     assert canvas.undo_stack().count() == 0
 
 
+def test_starting_a_text_edit_freezes_crop_even_if_discarded(qtbot):
+    # Starting a text annotation latches the crop closed; discarding the empty
+    # item must not re-open crop adjustment (which would let the shot shift
+    # under a half-finished annotation).
+    canvas = _canvas(qtbot)
+    assert canvas.is_pristine()
+    _click_text_tool(qtbot, canvas)
+    assert not canvas.is_pristine()
+    _finish_editing(_text_items(canvas)[0])  # discarded as empty
+    assert _text_items(canvas) == []
+    assert canvas.undo_stack().count() == 0
+    assert not canvas.is_pristine()  # stays frozen
+
+
 def test_text_item_with_content_becomes_undoable_on_focus_out(qtbot):
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
