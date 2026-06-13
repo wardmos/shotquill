@@ -13,7 +13,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: never cut a release from a commit that fails the checks CI runs. A tag
+  # can land on any commit, and workflow_dispatch could otherwise bypass a red CI
+  # entirely. Split out of the macOS build so the platform builds (which all
+  # `needs: gate`) run in parallel instead of chaining behind one another. Kept
+  # on macOS so the gate exercises the same OS the .app is built on.
+  gate:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c packaging/constraints-release.txt -e ".[dev]"
+      - name: Lint (ruff)
+        run: ruff check src tests
+      - name: Format check (ruff)
+        run: ruff format --check src tests
+      - name: Test
+        run: pytest -q
+
+  # Create the GitHub Release once, so the parallel platform builds each upload
+  # their own artifacts to it instead of racing to create it. Generating release
+  # notes here keeps that work off the build jobs. Created as a DRAFT so the
+  # ~25-min window before the binaries are attached isn't a public, empty
+  # release; publish-release flips it live once every bundle is in.
+  create-release:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create draft GitHub Release
+        # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          draft: true
+          generate_release_notes: true
+
   build-macos:
+    # The .app + per-arch DMGs, plus the Homebrew tap bump. Runs in parallel with
+    # build-linux now that the gate and the Release shell are their own jobs.
+    needs: [gate, create-release]
     runs-on: macos-14
     timeout-minutes: 30
     steps:
@@ -36,15 +81,6 @@ jobs:
             pip freeze | grep -iE '^(pyinstaller|pyside6|shiboken6|pyobjc)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      # Gate: never cut a release from a commit that fails the checks CI runs.
-      # A tag can land on any commit, and workflow_dispatch could otherwise
-      # bypass a red CI entirely.
-      - name: Lint (ruff)
-        run: ruff check src tests
-      - name: Format check (ruff)
-        run: ruff format --check src tests
-      - name: Test
-        run: pytest -q
       - name: Build .app + DMGs (arm64, x86_64, universal2)
         run: bash packaging/macos/build_dmg.sh "${{ github.ref_name }}"
       - name: Compute SHA256
@@ -57,14 +93,15 @@ jobs:
           done
           echo "arm_sha=$(awk '{print $1}' ShotQuill-*-arm64.dmg.sha256)" >> "$GITHUB_OUTPUT"
           echo "intel_sha=$(awk '{print $1}' ShotQuill-*-x86_64.dmg.sha256)" >> "$GITHUB_OUTPUT"
-      - name: Create GitHub Release
+      - name: Add DMGs to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
+          # Keep it a draft; publish-release flips it live once every bundle is in.
+          draft: true
           files: |
             dist/ShotQuill-*.dmg
             dist/ShotQuill-*.dmg.sha256
-          generate_release_notes: true
       - name: Update Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
@@ -75,7 +112,7 @@ jobs:
     # for the CLI/MCP audience. The package is pure Python (one py3-none-any
     # wheel covers every OS; PySide6 and the macOS-only pyobjc deps resolve at
     # install time), so it builds anywhere; ubuntu is just the cheapest runner.
-    needs: build-macos  # don't publish a release the gated build/tests rejected
+    needs: gate  # don't publish from a commit the gate rejected
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
@@ -109,11 +146,10 @@ jobs:
     # Single-file AppImage: the CLI/MCP in a box for users who don't want pip.
     # Built on ubuntu-22.04, so the glibc floor is 2.35 (Ubuntu 22.04+ /
     # Debian 12+) — an older floor needs an older build base (a container).
-    needs: build-macos  # the GitHub Release exists by now; we add the AppImage to it
+    # Runs in parallel with build-macos; the Release shell already exists.
+    needs: [gate, create-release]
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    permissions:
-      contents: write  # action-gh-release uploads the AppImage to the release
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -154,6 +190,89 @@ jobs:
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
+          # Keep it a draft; publish-release flips it live once every bundle is in.
+          draft: true
           files: |
             dist/ShotQuill-*.AppImage
             dist/ShotQuill-*.AppImage.sha256
+
+  build-windows:
+    # The GUI + CLI exes (sharing one payload), zipped into a single release
+    # archive. Mirrors package.yml's build-windows smoke job — same spec, prune,
+    # and smoke test — but attaches the bundle to the draft Release instead of a
+    # throwaway artifact. Runs in parallel with build-macos / build-linux.
+    needs: [gate, create-release]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # Same pinned build deps as the macOS/Linux bundles, for a reproducible
+        # build. ``pillow`` only renders the .ico (the build degrades without it).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c packaging/constraints-release.txt -e . pyinstaller pillow
+      - name: Install UPX
+        # PyInstaller picks UPX up off PATH automatically (the spec excludes the
+        # C runtime / Python core DLLs it would corrupt). Pre-installed on the
+        # GitHub Windows image via Chocolatey.
+        run: choco install upx -y --no-progress
+      - name: Record build dependency versions
+        shell: pwsh
+        run: |
+          "### Build dependency versions" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          pip freeze | Select-String -Pattern '^(pyinstaller|pyside6|shiboken6|pillow)' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Build GUI + CLI exes
+        shell: pwsh
+        run: .\packaging\windows\build_exe.ps1 "${{ github.ref_name }}"
+      - name: Smoke-test the CLI exe
+        # Proves the frozen bundle launches (Python + Qt load) and the lazily
+        # imported Windows backends resolve under PyInstaller before it ships.
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .\dist\shotquill\squill.exe --version
+          .\dist\shotquill\squill.exe doctor
+      - name: Zip the bundle + compute SHA256
+        # macOS/Linux ship single-file bundles; the Windows build is a folder of
+        # exes + a shared _internal payload, so zip it into one release archive.
+        # Sidecar .sha256 in sha256sum-compatible format, like the other bundles.
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          $zip = "dist/ShotQuill-$ver-windows-x64.zip"
+          Compress-Archive -Path dist/shotquill/* -DestinationPath $zip
+          $h = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          "$h  $(Split-Path $zip -Leaf)" | Out-File -Encoding ascii -NoNewline "$zip.sha256"
+      - name: Add the Windows bundle to the release
+        # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          # Keep it a draft; publish-release flips it live once every bundle is in.
+          draft: true
+          files: |
+            dist/ShotQuill-*-windows-x64.zip
+            dist/ShotQuill-*-windows-x64.zip.sha256
+
+  # Flip the draft Release live, but only after every platform bundle has been
+  # attached. Until this runs the release stays a draft (invisible to users and
+  # to "latest release" lookups), so there's never a public release missing its
+  # binaries. publish-pypi is intentionally not a dependency: the PyPI package is
+  # an independent channel, gated only on `gate` like before.
+  publish-release:
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish the release
+        # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          draft: false

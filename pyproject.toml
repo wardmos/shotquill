@@ -51,7 +51,7 @@ Issues = "https://github.com/wardmos/shotquill/issues"
 dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
-    "ruff==0.15.15",
+    "ruff==0.15.17",
 ]
 # On-device OCR on Windows via the WinRT Windows.Media.Ocr engine. Optional and
 # Windows-only — the engine itself ships with Windows, these are just the Python
