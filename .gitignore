@@ -1,39 +1,143 @@
-# Python
+# ── Python ──────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-*.egg-info/
-.eggs/
+*$py.class
+.Python
+
+# ── Distribution / packaging ────────────────────────────
 build/
 dist/
+sdist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+wheels/
+*.egg
+*.egg-info/
+.installed.cfg
+MANIFEST
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Virtual envs
+# ── Virtual envs ────────────────────────────────────────
 .venv/
 venv/
+env/
+ENV/
+.python-version
+__pypackages__/
 
-# Tooling caches
+# ── Tooling caches ──────────────────────────────────────
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.tox/
+.nox/
+.cache/
+.hypothesis/
 
-# Packaging artifacts
+# ── Coverage / test reports ─────────────────────────────
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+htmlcov/
+nosetests.xml
+junit*.xml
+
+# ── App / packaging artifacts ───────────────────────────
 *.app
 *.dmg
+*.exe
+*.msi
+*.AppImage
+*.pkg
+*.deb
+*.rpm
+*.snap
 
-# OS
-.DS_Store
-
-# Local scratch
-tmp/
-
-# PyInstaller
+# ── PyInstaller ─────────────────────────────────────────
 *.spec
+*.manifest
 
-# Editor / IDE
+# ── OS — macOS ──────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.DocumentRevisions-V100
+.TemporaryItems
+
+# ── OS — Windows ────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.stackdump
+
+# ── OS — Linux ──────────────────────────────────────────
+*~
+.directory
+.Trash-*
+.nfs*
+
+# ── Editor / IDE ────────────────────────────────────────
 .vscode/
 .idea/
+.zed/
+.history/
+.fleet/
+*.code-workspace
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
 
-# Claude Code local config
+# ── AI / agent tooling (local config & caches) ──────────
 .claude/
+CLAUDE.local.md
+.codex/
+.opencode/
+.cursor/
+.continue/
+.windsurf/
+.gemini/
+.aider*
 
-# Logs
+# ── Secrets / local env ─────────────────────────────────
+.env
+.env.*
+.envrc
+*.pem
+*.key
+
+# ── Logs ────────────────────────────────────────────────
 *.log
+
+# ── Patch / merge leftovers ─────────────────────────────
+*.orig
+*.rej
+
+# ── Profiling ───────────────────────────────────────────
+*.prof
+*.lprof
+
+# ── Local scratch / backups ─────────────────────────────
+tmp/
+*.bak
+*.tmp
+
+# ── Markdown — ignored by default. Whitelist files to commit below with `!`.
+*.md
+!/README.md
