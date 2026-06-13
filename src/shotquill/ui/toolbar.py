@@ -8,12 +8,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import QColorDialog, QLabel, QSpinBox, QToolBar, QVBoxLayout, QWidget
 
 from shotquill.config import DEFAULT_TOOLBAR_STYLE
 from shotquill.i18n import t
-from shotquill.ui.icons import ICON_SIZE, toolbar_icon
+from shotquill.ui.icons import ICON_SIZE, ICON_SIZE_STANDALONE, toolbar_icon
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
@@ -52,6 +52,17 @@ _BUTTON_STYLES: dict[str, Qt.ToolButtonStyle] = {
     "both": Qt.ToolButtonTextUnderIcon,
     "icon": Qt.ToolButtonIconOnly,
     "text": Qt.ToolButtonTextOnly,
+}
+
+# Icon point size per style. "both" stacks a caption under the glyph, so a
+# small 16pt icon keeps the two-row button compact and lines up over its label.
+# "icon" has no caption — the glyph carries the whole button — so it gets the
+# larger standalone size, which 16pt was visibly too small for next to native
+# toolbar icons (notably on macOS). "text" draws no icon, so its value is unused.
+_ICON_SIZES: dict[str, int] = {
+    "both": ICON_SIZE,
+    "icon": ICON_SIZE_STANDALONE,
+    "text": ICON_SIZE,
 }
 
 # Pack the bar tighter than the platform default: with sixteen buttons the
@@ -93,9 +104,16 @@ def create_toolbar(
 ) -> QToolBar:
     toolbar = QToolBar()
     toolbar.setToolButtonStyle(_BUTTON_STYLES.get(style, _BUTTON_STYLES[DEFAULT_TOOLBAR_STYLE]))
-    # Match the glyphs' emitted size; the platform default (24+) would pad
-    # every button back out around the smaller icons.
-    toolbar.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
+    # Icon size follows the style (see _ICON_SIZES): icon-only buttons get a
+    # larger glyph than the captioned "both" layout. Render every glyph at that
+    # size and match the toolbar's icon size to it, so the buttons don't pad the
+    # glyph back out (the platform default, 24+, would).
+    icon_px = _ICON_SIZES.get(style, ICON_SIZE)
+
+    def sized_icon(name: str) -> QIcon:
+        return toolbar_icon(name, icon_px)
+
+    toolbar.setIconSize(QSize(icon_px, icon_px))
     toolbar.setStyleSheet(_TIGHT_STYLE)
     # Drop the drag handle (the dotted grip at the bar's leading edge): the
     # toolbar already auto-places itself in the corner nearest the pointer, so
@@ -106,7 +124,7 @@ def create_toolbar(
     group.setExclusive(True)
 
     for key, tool, icon in _TOOLS:
-        action = QAction(toolbar_icon(icon), t(key), toolbar)
+        action = QAction(sized_icon(icon), t(key), toolbar)
         action.setCheckable(True)
         action.setChecked(tool == Tool.SELECT)
         action.triggered.connect(lambda _checked=False, bound=tool: canvas.set_tool(bound))
@@ -115,7 +133,7 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
-    color_action = QAction(toolbar_icon("color"), t("toolbar.color"), toolbar)
+    color_action = QAction(sized_icon("color"), t("toolbar.color"), toolbar)
     color_action.triggered.connect(lambda: _pick_color(canvas))
     toolbar.addAction(color_action)
 
@@ -165,10 +183,10 @@ def create_toolbar(
     toolbar.addSeparator()
 
     undo_action = canvas.undo_stack().createUndoAction(toolbar, t("toolbar.undo"))
-    undo_action.setIcon(toolbar_icon("undo"))
+    undo_action.setIcon(sized_icon("undo"))
     undo_action.setShortcut(QKeySequence.Undo)
     redo_action = canvas.undo_stack().createRedoAction(toolbar, t("toolbar.redo"))
-    redo_action.setIcon(toolbar_icon("redo"))
+    redo_action.setIcon(sized_icon("redo"))
     redo_action.setShortcut(QKeySequence.Redo)
     toolbar.addAction(undo_action)
     toolbar.addAction(redo_action)
@@ -179,23 +197,23 @@ def create_toolbar(
     # (macOS Vision today). On Linux there's no backend, so the button is
     # omitted rather than offered as a guaranteed failure.
     if on_ocr is not None:
-        ocr_action = QAction(toolbar_icon("ocr"), t("toolbar.ocr"), toolbar)
+        ocr_action = QAction(sized_icon("ocr"), t("toolbar.ocr"), toolbar)
         ocr_action.setToolTip(t("toolbar.ocr_tip"))
         ocr_action.triggered.connect(on_ocr)
         toolbar.addAction(ocr_action)
 
-    pin_action = QAction(toolbar_icon("pin"), t("toolbar.pin"), toolbar)
+    pin_action = QAction(sized_icon("pin"), t("toolbar.pin"), toolbar)
     pin_action.setToolTip(t("toolbar.pin_tip"))
     pin_action.triggered.connect(on_pin)
     toolbar.addAction(pin_action)
 
-    copy_action = QAction(toolbar_icon("copy"), t("toolbar.copy"), toolbar)
+    copy_action = QAction(sized_icon("copy"), t("toolbar.copy"), toolbar)
     copy_action.setShortcut(QKeySequence.Copy)
     copy_action.setToolTip(t("toolbar.copy_tip"))
     copy_action.triggered.connect(on_copy)
     toolbar.addAction(copy_action)
 
-    save_action = QAction(toolbar_icon("save"), t("toolbar.save"), toolbar)
+    save_action = QAction(sized_icon("save"), t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
     save_action.setToolTip(t("toolbar.save_tip"))
     save_action.triggered.connect(on_save)

@@ -151,6 +151,42 @@ def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
     assert toolbar.iconSize() == QSize(ICON_SIZE, ICON_SIZE)
 
 
+@pytest.mark.parametrize(
+    ("style", "expected_size"),
+    [
+        ("both", "ICON_SIZE"),  # captioned stacked layout: small glyph over label
+        ("icon", "ICON_SIZE_STANDALONE"),  # no caption: larger standalone glyph
+        ("text", "ICON_SIZE"),  # no icon drawn; size is the harmless default
+        ("sideways", "ICON_SIZE"),  # unknown value falls back to the default size
+    ],
+)
+def test_icon_size_follows_the_toolbar_style(qtbot, style, expected_size):
+    from PySide6.QtCore import QSize
+
+    from shotquill.ui import icons
+
+    expected = getattr(icons, expected_size)
+    _canvas_, toolbar = _toolbar(qtbot, style=style)
+    assert toolbar.iconSize() == QSize(expected, expected)
+
+
+def test_icon_only_glyphs_are_rendered_larger_than_the_stacked_layout(qtbot):
+    # The fix: an icon-only button's glyph is actually emitted at the larger
+    # standalone size, not just shown in a bigger box — so it doesn't read tiny
+    # next to native toolbar icons. Compare the emitted glyph pixmaps.
+    from shotquill.ui.icons import ICON_SIZE, ICON_SIZE_STANDALONE
+
+    _canvas_, stacked = _toolbar(qtbot, style="both")
+    _canvas2_, icon_only = _toolbar(qtbot, style="icon")
+    stacked_btn = stacked.widgetForAction(stacked.actions()[0])
+    icon_btn = icon_only.widgetForAction(icon_only.actions()[0])
+    stacked_glyph = stacked_btn.icon().actualSize(stacked.iconSize())
+    icon_glyph = icon_btn.icon().actualSize(icon_only.iconSize())
+    assert stacked_glyph.height() == ICON_SIZE
+    assert icon_glyph.height() == ICON_SIZE_STANDALONE
+    assert icon_glyph.height() > stacked_glyph.height()
+
+
 def test_buttons_are_packed_tighter_than_the_platform_default(qtbot):
     # The tightening stylesheet must actually narrow the buttons; clearing it
     # restores the (wider) platform metrics, proving the effect is real.
