@@ -196,13 +196,78 @@ jobs:
             dist/ShotQuill-*.AppImage
             dist/ShotQuill-*.AppImage.sha256
 
+  build-windows:
+    # The GUI + CLI exes (sharing one payload), zipped into a single release
+    # archive. Mirrors package.yml's build-windows smoke job — same spec, prune,
+    # and smoke test — but attaches the bundle to the draft Release instead of a
+    # throwaway artifact. Runs in parallel with build-macos / build-linux.
+    needs: [gate, create-release]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # Same pinned build deps as the macOS/Linux bundles, for a reproducible
+        # build. ``pillow`` only renders the .ico (the build degrades without it).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c packaging/constraints-release.txt -e . pyinstaller pillow
+      - name: Install UPX
+        # PyInstaller picks UPX up off PATH automatically (the spec excludes the
+        # C runtime / Python core DLLs it would corrupt). Pre-installed on the
+        # GitHub Windows image via Chocolatey.
+        run: choco install upx -y --no-progress
+      - name: Record build dependency versions
+        shell: pwsh
+        run: |
+          "### Build dependency versions" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          pip freeze | Select-String -Pattern '^(pyinstaller|pyside6|shiboken6|pillow)' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Build GUI + CLI exes
+        shell: pwsh
+        run: .\packaging\windows\build_exe.ps1 "${{ github.ref_name }}"
+      - name: Smoke-test the CLI exe
+        # Proves the frozen bundle launches (Python + Qt load) and the lazily
+        # imported Windows backends resolve under PyInstaller before it ships.
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .\dist\shotquill\squill.exe --version
+          .\dist\shotquill\squill.exe doctor
+      - name: Zip the bundle + compute SHA256
+        # macOS/Linux ship single-file bundles; the Windows build is a folder of
+        # exes + a shared _internal payload, so zip it into one release archive.
+        # Sidecar .sha256 in sha256sum-compatible format, like the other bundles.
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          $zip = "dist/ShotQuill-$ver-windows-x64.zip"
+          Compress-Archive -Path dist/shotquill/* -DestinationPath $zip
+          $h = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          "$h  $(Split-Path $zip -Leaf)" | Out-File -Encoding ascii -NoNewline "$zip.sha256"
+      - name: Add the Windows bundle to the release
+        # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          # Keep it a draft; publish-release flips it live once every bundle is in.
+          draft: true
+          files: |
+            dist/ShotQuill-*-windows-x64.zip
+            dist/ShotQuill-*-windows-x64.zip.sha256
+
   # Flip the draft Release live, but only after every platform bundle has been
   # attached. Until this runs the release stays a draft (invisible to users and
   # to "latest release" lookups), so there's never a public release missing its
   # binaries. publish-pypi is intentionally not a dependency: the PyPI package is
   # an independent channel, gated only on `gate` like before.
   publish-release:
-    needs: [build-macos, build-linux]
+    needs: [build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
