@@ -1,22 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Qt-based screen capture: the thin Linux/X11 slice.
+"""Qt-based screen capture: the thin X11 / Windows slice.
 
 ``QScreen.grabWindow`` needs nothing beyond PySide6 (already a dependency),
-which makes full-screen and region capture on X11 nearly free — enough for
-the headless CLI/MCP path and for real end-to-end tests under Xvfb.
+which makes full-screen and region capture nearly free on X11 and on Windows —
+enough for the headless CLI/MCP path and for real end-to-end tests under Xvfb.
 
-Window enumeration and by-id capture need more than pixels (the window
-manager's EWMH properties), so the enumeration lives in ``x11.py`` and is
-delegated to from here. Where it can't be answered — no EWMH window manager,
+Window enumeration and by-id capture need more than pixels (a per-OS window
+list), so they are delegated out. On X11 the enumeration lives in ``x11.py``
+and is called from here; where it can't be answered — no EWMH window manager,
 no reachable server, or ``python-xlib`` absent — it raises
 ``CapabilityUnsupported`` so agents get a typed signal (exit code 4) instead
-of an empty list they would misread as "no windows on screen".
+of an empty list they would misread as "no windows on screen". Windows plugs
+its own ``user32 EnumWindows`` backend in by subclassing
+(:class:`shotquill.capture.windows.WindowsScreenCapturer`).
 
 Wayland is different again: the compositor refuses out-of-band grabs *and*
 window enumeration by design, so that path is served by the xdg-desktop-portal
 backend (:mod:`shotquill.capture.wayland`), which the capturer factory selects
-on a Wayland session. This X11 slice is not chosen there, and refuses up front
+on a Wayland session. This slice is not chosen there, and refuses up front
 if constructed directly so the failure points at the portal path rather than
 handing back a blank frame.
 """
@@ -139,6 +141,18 @@ class QtGrabCapturer(ScreenCapturer):
         """The device-pixel ratio the capture canvas uses — the single source of
         truth shared with ``list_windows`` so window bounds rescale to exactly
         the logical space the captured pixels are addressed in."""
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            raise CapabilityUnsupported("capture", "Qt reports no screens")
+        return max(s.devicePixelRatio() for s in screens)
+
+    @staticmethod
+    def _capture_dpr() -> float:
+        """The device-pixel ratio the capture canvas uses — the single source of
+        truth a window-enumeration subclass shares with the capture path so
+        window bounds rescale to exactly the logical space the pixels live in."""
         from PySide6.QtGui import QGuiApplication
 
         screens = QGuiApplication.screens()

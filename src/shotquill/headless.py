@@ -109,6 +109,14 @@ def get_capturer(include_cursor: bool = False) -> ScreenCapturer:
         from shotquill.capture.qtgrab import QtGrabCapturer
 
         return QtGrabCapturer(include_cursor=include_cursor)
+    if sys.platform.startswith("win"):
+        # Windows places no out-of-band grab restriction (unlike Wayland), so
+        # the PySide6 ``QScreen.grabWindow`` path covers full-screen / region
+        # capture with no extra dependency; the Windows subclass adds window
+        # enumeration and by-id capture over the Win32 API.
+        from shotquill.capture.windows import WindowsScreenCapturer
+
+        return WindowsScreenCapturer(include_cursor=include_cursor)
     raise CapabilityUnsupported("capture", f"no backend for platform {sys.platform!r}")
 
 
@@ -139,6 +147,16 @@ def get_recognizer() -> TextRecognizer:
             return TesseractTextRecognizer()
         raise CapabilityUnsupported(
             "ocr", "Tesseract is not installed (install the 'tesseract-ocr' package)"
+        )
+    if sys.platform.startswith("win"):
+        from shotquill.ocr import windows
+
+        if windows.is_available():
+            return windows.WindowsOcrRecognizer()
+        raise CapabilityUnsupported(
+            "ocr",
+            "Windows OCR needs the WinRT runtime; install it with "
+            "`pip install shotquill[windows-ocr]`",
         )
     raise CapabilityUnsupported("ocr", f"no OCR backend for platform {sys.platform!r}")
 
@@ -483,9 +501,8 @@ def doctor_checks() -> list[dict]:
         checks.append(_check_screen_recording())
 
     try:
-        get_recognizer()
-        backend = "Apple Vision" if sys.platform == "darwin" else "Tesseract"
-        checks.append({"capability": "ocr", "available": True, "detail": backend})
+        recognizer = get_recognizer()
+        checks.append({"capability": "ocr", "available": True, "detail": recognizer.backend_name})
     except CapabilityUnsupported as exc:
         checks.append({"capability": "ocr", "available": False, "detail": exc.reason})
 

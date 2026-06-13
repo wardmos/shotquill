@@ -71,6 +71,8 @@ def _installed_languages(binary: str) -> set[str]:
 class TesseractTextRecognizer(TextRecognizer):
     """Recognise text by piping a PNG of the image through ``tesseract``."""
 
+    backend_name = "Tesseract"
+
     def recognize(
         self, image: QImage, languages: tuple[str, ...] = _DEFAULT_LANGUAGES
     ) -> list[str]:

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
+import os
+
 import pytest
 from PySide6.QtGui import QImage
 
@@ -56,7 +58,10 @@ def test_build_output_path_extension(tmp_path, fmt, expected_ext):
 
 
 def test_build_output_path_expands_user(monkeypatch, tmp_path):
+    # ``~`` resolves via HOME on POSIX and USERPROFILE on Windows; set both so
+    # the expansion lands in the temp dir on every platform.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     path = build_output_path("~/shots", "png")
     assert str(path).startswith(str(tmp_path))
     assert (tmp_path / "shots").is_dir()
@@ -103,6 +108,9 @@ def test_save_unpremultiplies_window_captures(tmp_path):
     assert img.pixelColor(0, 0).getRgb() == (255, 0, 0, 128)
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "getuid"), reason="chmod read-only dir doesn't block writes on Windows"
+)
 def test_save_raises_when_directory_unwritable(tmp_path):
     target = tmp_path / "readonly"
     target.mkdir()

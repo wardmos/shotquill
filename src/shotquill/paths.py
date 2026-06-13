@@ -43,15 +43,19 @@ def capture_tmp_dir() -> Path:
 def config_dir() -> Path:
     """User configuration directory for the headless surface (computed, not created).
 
-    macOS uses ``~/Library/Application Support``; elsewhere we follow XDG,
-    honoring ``$XDG_CONFIG_HOME``. Separate from the audit log (state) and the
-    capture temp dir (cache) so each lands where its platform expects. It is
-    not created here — the config is read far more often than written (every
-    capture consults the blocklist), so creating the directory is the writer's
-    job (see ``blocklist.save``), not a side effect of every read.
+    macOS uses ``~/Library/Application Support``; Windows uses roaming
+    ``%APPDATA%`` (where per-user app config conventionally lives); elsewhere we
+    follow XDG, honoring ``$XDG_CONFIG_HOME``. Separate from the audit log
+    (state) and the capture temp dir (cache) so each lands where its platform
+    expects. It is not created here — the config is read far more often than
+    written (every capture consults the blocklist), so creating the directory
+    is the writer's job (see ``blocklist.save``), not a side effect of every
+    read.
     """
     if sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support"
+    elif sys.platform.startswith("win"):
+        base = Path(os.environ.get("APPDATA", "") or Path.home() / "AppData" / "Roaming")
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", "") or Path.home() / ".config")
     return base / "shotquill"
@@ -70,11 +74,18 @@ def blocklist_path() -> Path:
 def audit_log_path() -> Path:
     """Where the JSONL audit log lives (parent directory is created).
 
-    macOS uses ``~/Library/Logs`` (visible in Console.app); elsewhere we follow
-    XDG and put state where it belongs, honoring ``$XDG_STATE_HOME``.
+    macOS uses ``~/Library/Logs`` (visible in Console.app); Windows uses
+    machine-local ``%LOCALAPPDATA%`` (logs are local state, not roaming config);
+    elsewhere we follow XDG and put state where it belongs, honoring
+    ``$XDG_STATE_HOME``.
     """
     if sys.platform == "darwin":
         base = Path.home() / "Library" / "Logs"
+    elif sys.platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA", "") or Path.home() / "AppData" / "Local"
+        directory = Path(local) / "shotquill" / "Logs"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / "audit.log"
     else:
         base = Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local" / "state")
     directory = base / "shotquill"

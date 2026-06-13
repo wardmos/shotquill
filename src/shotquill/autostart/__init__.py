@@ -13,7 +13,7 @@ def get_manager() -> AutostartManager:
     """Pick the platform launch-at-login backend (the app layer's factory seam).
 
     macOS uses a per-user LaunchAgent; Linux uses an XDG autostart ``.desktop``
-    entry."""
+    entry; Windows uses the per-user ``Run`` registry key."""
     if sys.platform == "darwin":
         from shotquill.autostart.macos import MacAutostartManager
 
@@ -22,4 +22,8 @@ def get_manager() -> AutostartManager:
         from shotquill.autostart.linux import LinuxAutostartManager
 
         return LinuxAutostartManager()
+    if sys.platform.startswith("win"):
+        from shotquill.autostart.windows import WindowsAutostartManager
+
+        return WindowsAutostartManager()
     raise RuntimeError(f"no autostart backend for platform {sys.platform!r}")
