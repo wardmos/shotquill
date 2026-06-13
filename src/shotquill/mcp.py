@@ -51,8 +51,18 @@ _INSTRUCTIONS = (
 )
 
 
+# The flight-recorder session that `capture` passively mirrors into, for the
+# lifetime of this stdio connection. `record_start` sets it, `record_end` clears
+# it; None means "not recording", so `capture` behaves exactly as before. This is
+# server-process state (one agent per stdio pipe), deliberately *not* an ambient
+# session the stateless CLI shares — the CLI keeps explicit `--session` handles.
+_active_session: record.Session | None = None
+
+
 def serve(stdin=None, stdout=None, session_timeout: int | None = None) -> int:
     """Run the stdio server until EOF (or ``session_timeout`` seconds)."""
+    global _active_session
+    _active_session = None  # each stdio connection starts not-recording
     fin = stdin if stdin is not None else sys.stdin
     fout = stdout if stdout is not None else sys.stdout
     if session_timeout:
@@ -280,12 +290,47 @@ def _tool_capture(args: dict):
         path.write_bytes(data)
         meta["saved_path"] = dest = str(path.resolve())
 
+    # While a session is active, a capture the agent did to *see* the screen also
+    # mirrors into the trace as an observation frame (D3). Default-on; pass
+    # record=false to skip a one-off. The model still gets the (possibly
+    # downscaled) image above; the archived copy goes through the record path.
+    if args.get("record") is not False:
+        recorded = _mirror_observation(image, target)
+        if recorded is not None:
+            meta["recorded"] = recorded
+
     audit.record("capture", via="mcp", target=target, dest=dest)
     mime = "image/jpeg" if fmt in ("jpg", "jpeg") else "image/png"
     return [
         {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": mime},
         {"type": "text", "text": json.dumps(meta, ensure_ascii=False)},
     ], meta
+
+
+def _mirror_observation(image, target: str) -> dict | None:
+    """File a passive ``observation`` frame into the active session, if any.
+
+    Best-effort: a recording problem must not fail the agent's capture (its
+    primary job), so a record error is reported in the result, not raised.
+    """
+    session = _active_session
+    if session is None:
+        return None
+    try:
+        blocklist = headless.active_blocklist()
+        frame = record.record_frame(
+            session,
+            image_bytes=headless.encode_qimage(image, "png"),
+            tool="observe",
+            target=target,
+            redacted=bool(blocklist),
+            kind=record.KIND_OBSERVATION,
+        )
+    except record.RecordError as exc:
+        return {"error": str(exc)}
+    dest = str((session.dir / frame.image).resolve())
+    audit.record("record_observation", via="record", target=target, dest=dest)
+    return {"conversation_id": session.id, "index": frame.index, "image": dest}
 
 
 def _tool_list_windows(args: dict):
@@ -352,6 +397,7 @@ def _tool_doctor(args: dict):
 
 
 def _tool_record_start(args: dict):
+    global _active_session
     directory = args.get("dir")
     session = record.start_session(
         session_id=args.get("id"),
@@ -360,6 +406,8 @@ def _tool_record_start(args: dict):
         agent_id=args.get("agent_id"),
         label=args.get("label"),
     )
+    # Subsequent captures mirror into this session until record_end (D3).
+    _active_session = session
     audit.record("record_start", via="record", target=session.id, dest=str(session.dir))
     payload = {
         "conversation_id": session.id,
@@ -452,7 +500,10 @@ def _tool_record_frame(args: dict):
 
 
 def _tool_record_end(args: dict):
+    global _active_session
     session = _require_session(args)
+    if _active_session is not None and _active_session.dir == session.dir:
+        _active_session = None  # stop mirroring captures into it
     filmstrip = record.end_session(session)
     manifest = record.load_manifest(session)
     html_path = str(filmstrip.resolve())
@@ -590,6 +641,15 @@ _TOOLS = {
                             "so identical pixels always encode to identical bytes."
                         ),
                     },
+                    "record": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": (
+                            "When a session is recording, also file this capture as "
+                            "an observation frame in the trace. Pass false to skip a "
+                            "one-off (no effect when not recording)."
+                        ),
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -605,6 +665,15 @@ _TOOLS = {
                     },
                     "note": {"type": "string"},
                     "saved_path": {"type": "string"},
+                    "recorded": {
+                        "type": "object",
+                        "description": "Present when mirrored into an active session.",
+                        "properties": {
+                            "conversation_id": {"type": "string"},
+                            "index": {"type": "integer"},
+                            "image": {"type": "string"},
+                        },
+                    },
                 },
                 "required": ["target", "width", "height"],
             },

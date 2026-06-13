@@ -55,6 +55,14 @@ MANIFEST_VERSION = 1
 STATUS_RECORDING = "recording"
 STATUS_COMPLETE = "complete"
 
+# Frame kinds. An "action" frame documents a deliberate step (explicit
+# `record frame`, with a tool + label); an "observation" frame is one mirrored
+# passively from a `capture` the agent did to *see* the screen while a session
+# was active (no label, not a tool call). Keeping them distinct stops a passive
+# glance from masquerading as an action in the timeline or the trace.
+KIND_ACTION = "action"
+KIND_OBSERVATION = "observation"
+
 
 class RecordError(Exception):
     """A flight-recorder operation failed (bad/missing session, corrupt manifest)."""
@@ -75,6 +83,7 @@ class FrameRecord:
     image: str  # shotquill.frame.image_ref — path relative to the session dir
     target: str  # what was actually captured (window / region / fullscreen)
     redacted: bool  # shotquill.frame.redacted — blocklist protection was in force
+    kind: str = KIND_ACTION  # action (deliberate step) vs observation (passive)
     # None when the frame carried no assertion; otherwise whether every OCR
     # check on it held — this is what makes a failed test a frame in the trace.
     assertion_passed: bool | None = None
@@ -87,6 +96,7 @@ class FrameRecord:
                 "tool_call_id": tool_call_id,  # gen_ai.tool.call.id
             },
             "at": self.at,
+            "kind": self.kind,
             "label": self.label,
             "image": self.image,
             "target": self.target,
@@ -219,6 +229,7 @@ def record_frame(
     target: str,
     label: str | None = None,
     redacted: bool = False,
+    kind: str = KIND_ACTION,
     assertions: list[dict] | None = None,
     image_ext: str = "png",
     now: dt.datetime | None = None,
@@ -227,11 +238,13 @@ def record_frame(
 
     Appends to the manifest and writes the image; returns the frame record. The
     caller (the CLI) owns the capture + redaction so this module stays Qt-free.
-    ``assertions`` is an optional list of already-evaluated OCR checks (each a
-    ``{"kind", "pattern", "passed"}`` dict); when given, the frame records
-    whether they all held, so a failed test becomes a frame in the trace.
-    Not safe to call concurrently for one session — a trace is one agent's
-    linear run, and the next index is read from the manifest on each call.
+    ``kind`` is ``"action"`` for a deliberate step or ``"observation"`` for a
+    passively mirrored capture. ``assertions`` is an optional list of
+    already-evaluated OCR checks (each a ``{"kind", "pattern", "passed"}`` dict);
+    when given, the frame records whether they all held, so a failed test becomes
+    a frame in the trace. Not safe to call concurrently for one session — a trace
+    is one agent's linear run, and the next index is read from the manifest on
+    each call.
     """
     manifest = _load_open_manifest(session)
     index = len(manifest["frames"]) + 1
@@ -247,6 +260,7 @@ def record_frame(
         image=rel_image,
         target=target,
         redacted=redacted,
+        kind=kind,
         assertion_passed=passed,
     )
     # A traceable call id without the OTel SDK: a frame is uniquely the Nth tool
@@ -342,10 +356,13 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
 .frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
 .frame .label { color: #ccc; } .frame .at { color: #888; font-size: .8rem; }
 .frame.failed { outline: 2px solid #c55; }
+.frame.observation { opacity: .72; }
+.frame.observation .tool { font-weight: 400; font-style: italic; color: #aaa; }
 .badge { font-size: .7rem; padding: .1rem .4rem; border-radius: 4px; }
 .badge.redacted { background: #2d4a2d; color: #9d9; }
 .badge.pass { background: #234a2f; color: #9e9; }
 .badge.fail { background: #5a2533; color: #f9a; }
+.badge.obs { background: #33384a; color: #abd; }
 .empty { color: #888; }
 """
 
@@ -373,7 +390,10 @@ def render_filmstrip(manifest: dict) -> str:
     for entry in frames:
         span = entry.get("span") or {}
         tool = span.get("tool_name", "")
+        is_observation = entry.get("kind") == "observation"
         badges = []
+        if is_observation:
+            badges.append('<span class="badge obs">observation</span>')
         if entry.get("redacted"):
             badges.append('<span class="badge redacted">redacted</span>')
         passed = entry.get("assertion_passed")
@@ -383,7 +403,12 @@ def render_filmstrip(manifest: dict) -> str:
             badges.append('<span class="badge fail">assert FAIL</span>')
         # A failed assertion outlines the frame so it pops in the strip — the
         # failing step of a recorded test is the one a reviewer wants to find.
-        figure_class = "frame failed" if passed is False else "frame"
+        # Observation frames dim back, so deliberate actions stay foreground.
+        figure_class = "frame"
+        if passed is False:
+            figure_class += " failed"
+        if is_observation:
+            figure_class += " observation"
         label = entry.get("label")
         label_html = f'<div class="label">{esc(label)}</div>' if label else ""
         cards.append(

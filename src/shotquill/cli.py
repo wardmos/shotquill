@@ -135,6 +135,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "and strip PNG timestamp/text chunks (forces the cursor off)"
         ),
     )
+    capture.add_argument(
+        "--session",
+        help="also file this capture as an observation frame in a recording session "
+        "(handle from `record start`)",
+    )
     capture.set_defaults(func=_cmd_capture)
 
     windows = sub.add_parser(
@@ -420,6 +425,19 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     if args.max_width is not None:
         image = headless.downscale_to_width(image, args.max_width)
 
+    # An explicit `--session` files this capture as an observation frame in that
+    # recording session (D3). The CLI keeps the handle explicit — no ambient
+    # "current session" — so concurrent agents and CI stay safe.
+    recorded = None
+    if args.session:
+        from shotquill import record
+
+        try:
+            recorded = _mirror_capture_observation(args.session, image, target)
+        except record.RecordError as exc:
+            print(f"squill: {exc}", file=sys.stderr)
+            return 1
+
     if args.output == "-":
         sys.stdout.buffer.write(
             headless.encode_qimage(image, args.format, deterministic=args.deterministic)
@@ -446,12 +464,35 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             if matched > 1:
                 meta["matched_windows"] = matched
                 meta["note"] = "captured the front-most match; use --window-id for an exact pick"
+            if recorded is not None:
+                meta["recorded"] = recorded
             print(json.dumps(meta, ensure_ascii=False))
         else:
             print(dest)
+    if recorded is not None and not args.json:
+        print(f"squill: recorded observation frame {recorded['index']}", file=sys.stderr)
 
     audit.record("capture", via="cli", target=target, dest=dest)
     return 0
+
+
+def _mirror_capture_observation(session_handle: str, image, target: str) -> dict:
+    """File an observation frame for a CLI `capture --session`; returns its meta."""
+    from shotquill import record
+
+    session = record.resolve_session(session_handle)
+    blocklist = headless.active_blocklist()
+    frame = record.record_frame(
+        session,
+        image_bytes=headless.encode_qimage(image, "png"),
+        tool="observe",
+        target=target,
+        redacted=bool(blocklist),
+        kind=record.KIND_OBSERVATION,
+    )
+    dest = str((session.dir / frame.image).resolve())
+    audit.record("record_observation", via="record", target=target, dest=dest)
+    return {"conversation_id": session.id, "index": frame.index, "image": dest}
 
 
 def _save_image(image, path: Path, format_hint: str, *, deterministic: bool = False) -> None:
