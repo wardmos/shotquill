@@ -85,6 +85,13 @@ class WindowInfo:
     where the platform exposes it and ``None`` otherwise. It is the robust key
     the app blocklist matches on — display names are localizable and a window's
     title is attacker-controlled, but the bundle id is not.
+
+    On X11 there is no OS-issued bundle id, so this carries the window's WM_CLASS
+    instead — stable and the conventional app identity, but *app-set* rather than
+    OS-issued. That is sufficient for the blocklist's threat model (an
+    over-eager or prompt-injected agent, not an adversary running code as the
+    user, who could spoof WM_CLASS but only to avoid being blocked, never to
+    leak more).
     """
 
     window_id: int

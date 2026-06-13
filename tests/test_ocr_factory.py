@@ -16,6 +16,19 @@ def test_macos_returns_vision_recognizer(monkeypatch):
     assert isinstance(recognizer, VisionTextRecognizer)
 
 
-def test_linux_has_no_backend(monkeypatch):
+def test_linux_returns_tesseract_when_installed(monkeypatch):
     monkeypatch.setattr(ocr.sys, "platform", "linux")
+    from shotquill.ocr import linux
+
+    monkeypatch.setattr(linux, "tesseract_path", lambda: "/usr/bin/tesseract")
+    recognizer = ocr.get_recognizer()
+    # Constructed without invoking tesseract (that happens inside recognize()).
+    assert isinstance(recognizer, linux.TesseractTextRecognizer)
+
+
+def test_linux_has_no_backend_without_tesseract(monkeypatch):
+    monkeypatch.setattr(ocr.sys, "platform", "linux")
+    from shotquill.ocr import linux
+
+    monkeypatch.setattr(linux, "tesseract_path", lambda: None)
     assert ocr.get_recognizer() is None

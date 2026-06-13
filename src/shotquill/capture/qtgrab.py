@@ -4,15 +4,21 @@
 
 ``QScreen.grabWindow`` needs nothing beyond PySide6 (already a dependency),
 which makes full-screen and region capture on X11 nearly free — enough for
-the headless CLI/MCP path and for real end-to-end tests under Xvfb. The
-expensive parts of Linux support are deliberately *not* here:
+the headless CLI/MCP path and for real end-to-end tests under Xvfb.
 
-- Wayland refuses out-of-band grabs by design; that needs the
-  xdg-desktop-portal backend (planned) and is reported as unsupported.
-- X11 window enumeration/picking is also deferred — ``list_windows`` and
-  ``capture_window`` raise ``CapabilityUnsupported`` so agents get a typed
-  signal (exit code 4) instead of an empty list they would misread as
-  "no windows on screen".
+Window enumeration and by-id capture need more than pixels (the window
+manager's EWMH properties), so the enumeration lives in ``x11.py`` and is
+delegated to from here. Where it can't be answered — no EWMH window manager,
+no reachable server, or ``python-xlib`` absent — it raises
+``CapabilityUnsupported`` so agents get a typed signal (exit code 4) instead
+of an empty list they would misread as "no windows on screen".
+
+Wayland is different again: the compositor refuses out-of-band grabs *and*
+window enumeration by design, so that path is served by the xdg-desktop-portal
+backend (:mod:`shotquill.capture.wayland`), which the capturer factory selects
+on a Wayland session. This X11 slice is not chosen there, and refuses up front
+if constructed directly so the failure points at the portal path rather than
+handing back a blank frame.
 """
 
 from __future__ import annotations
@@ -38,7 +44,9 @@ def _ensure_gui_session() -> None:
         session = os.environ.get("XDG_SESSION_TYPE", "")
         if session == "wayland":
             raise CapabilityUnsupported(
-                "capture", "Wayland blocks out-of-band grabs; portal backend not implemented yet"
+                "capture",
+                "Wayland blocks out-of-band grabs; use the xdg-desktop-portal backend "
+                "(shotquill.capture.wayland.PortalScreenCapturer)",
             )
         if not os.environ.get("DISPLAY"):
             raise CapabilityUnsupported("capture", "no display session (DISPLAY is unset)")
@@ -78,14 +86,65 @@ class QtGrabCapturer(ScreenCapturer):
         )
 
     def list_windows(self) -> list[WindowInfo]:
-        raise CapabilityUnsupported(
-            "list_windows", "window enumeration is not implemented on this backend yet"
-        )
+        # EWMH enumeration over python-xlib; raises CapabilityUnsupported when
+        # there is no window manager / server / library to read it from. X11
+        # geometry is physical pixels; rescale to the logical points the
+        # overlay and blocklist redaction expect, using the same device-pixel
+        # ratio the capture path applies so the two stay in lockstep.
+        from shotquill.capture import x11
+
+        return x11.to_logical_bounds(x11.list_windows(), self._capture_dpr())
 
     def capture_window(self, window_id: int) -> CaptureResult:
-        raise CapabilityUnsupported(
-            "capture_window", "window capture is not implemented on this backend yet"
-        )
+        # Find the window in the live list so an unknown/closed id fails clearly
+        # and we have its absolute bounds for the result's origin; then let Qt
+        # pull the window's own pixels by id.
+        from shotquill.capture import x11
+
+        window = next((w for w in x11.list_windows() if w.window_id == window_id), None)
+        if window is None:
+            raise RuntimeError(f"window {window_id} is not on screen")
+        return self._grab_window_id(window_id, window.bounds)
+
+    @staticmethod
+    def _grab_window_id(window_id: int, bounds: Rect) -> CaptureResult:
+        """Grab one X window's pixels by id, tagged with its absolute origin.
+
+        Best-effort on X11: without a compositor the server has no off-screen
+        copy of an obscured window, so a covered region may read stale — the
+        common case (a visible window) is exact. ``bounds`` is the window's
+        root-space rectangle, so the result's origin lines up with full-screen
+        and region grabs for redaction maths.
+
+        Unlike the macOS backend (which talks to the window server directly and
+        is thread-safe), this goes through Qt, so it must run on the GUI thread.
+        The CLI/MCP ``--window``/``--app`` paths and the overlay's click-to-
+        capture are all on that thread; the overlay's off-thread hover *preview*
+        is the one best-effort caller, and it already treats any failure as "no
+        preview" (keeping the frozen screenshot).
+        """
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            raise CapabilityUnsupported("capture_window", "Qt reports no screens")
+        pixmap = screens[0].grabWindow(window_id)
+        if pixmap.isNull():
+            raise RuntimeError(f"window {window_id} could not be captured")
+        dpr = pixmap.devicePixelRatio() or 1.0
+        return _qimage_to_result(pixmap.toImage(), dpr, origin=(bounds.x, bounds.y))
+
+    @staticmethod
+    def _capture_dpr() -> float:
+        """The device-pixel ratio the capture canvas uses — the single source of
+        truth shared with ``list_windows`` so window bounds rescale to exactly
+        the logical space the captured pixels are addressed in."""
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            raise CapabilityUnsupported("capture", "Qt reports no screens")
+        return max(s.devicePixelRatio() for s in screens)
 
     @staticmethod
     def _grab_virtual_desktop():
@@ -97,7 +156,7 @@ class QtGrabCapturer(ScreenCapturer):
         if not screens:
             raise CapabilityUnsupported("capture", "Qt reports no screens")
         virtual = screens[0].virtualGeometry()
-        dpr = max(s.devicePixelRatio() for s in screens)
+        dpr = QtGrabCapturer._capture_dpr()
         canvas = QImage(
             int(virtual.width() * dpr),
             int(virtual.height() * dpr),

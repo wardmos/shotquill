@@ -341,6 +341,19 @@ def _save_image(image, path: Path, format_hint: str) -> None:
         raise OSError(f"failed to write {path}")
 
 
+def _printable(text: str) -> str:
+    """Drop control characters before printing an app-supplied string raw.
+
+    A window's title and (on X11) its WM_CLASS are set by the owning app, so an
+    untrusted/hostile one could embed ANSI escapes or other terminal control
+    sequences that would hijack the terminal when ``squill windows`` prints the
+    table. JSON output is already escaped by ``json.dumps``; this guards the
+    human table. Normal text (including CJK and accents) is ``isprintable`` and
+    survives unchanged.
+    """
+    return "".join(c for c in text if c.isprintable())
+
+
 def _cmd_windows(args: argparse.Namespace) -> int:
     capturer = headless.get_capturer()
     windows = capturer.list_windows()
@@ -350,7 +363,7 @@ def _cmd_windows(args: argparse.Namespace) -> int:
         print(f"{'ID':>8}  {'OWNER':<24}{'BOUNDS':<22}TITLE")
         for w in windows:
             bounds = f"{w.bounds.x},{w.bounds.y} {w.bounds.width}x{w.bounds.height}"
-            print(f"{w.window_id:>8}  {w.owner:<24}{bounds:<22}{w.title}")
+            print(f"{w.window_id:>8}  {_printable(w.owner):<24}{bounds:<22}{_printable(w.title)}")
     audit.record("windows", via="cli", target=f"{len(windows)} windows")
     return 0
 

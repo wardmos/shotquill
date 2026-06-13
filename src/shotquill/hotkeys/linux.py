@@ -14,11 +14,14 @@ their ``Key`` member). The live listener can only be exercised against a real X
 server; the binding bookkeeping and match logic here are covered by driving
 ``on_press``/``on_release`` with synthetic keys.
 
-Wayland is out of scope: it blocks global key grabs by design (a compositor-level
-shortcut or the GlobalShortcuts portal is needed instead). ``start`` detects this
-up front and raises :class:`HotkeyUnavailable` rather than spinning up a listener
-that would never see events — silent failure is the worst outcome here, since the
-user has visibly configured hotkeys in Settings.
+This is the *X11* slice. Wayland blocks global key grabs by design and is served
+by :class:`shotquill.hotkeys.wayland.WaylandHotkeyManager` (the GlobalShortcuts
+portal), which the :func:`shotquill.hotkeys.get_manager` factory selects on a
+Wayland session. The Wayland guard below stays as defense-in-depth for anyone
+constructing this X11 manager directly there: ``start`` detects the session and
+raises :class:`HotkeyUnavailable` rather than spinning up a listener that would
+never see events — silent failure is the worst outcome here, since the user has
+visibly configured hotkeys in Settings.
 """
 
 from __future__ import annotations
@@ -101,7 +104,11 @@ class LinuxHotkeyManager(HotkeyManager):
         # and cleared from the main thread in ``stop()``; this serialises both.
         self._state_lock = threading.Lock()
 
-    def register(self, combo: str, callback: Callable[[], None]) -> None:
+    def register(
+        self, combo: str, callback: Callable[[], None], description: str | None = None
+    ) -> None:
+        # ``description`` is only meaningful to the Wayland portal backend; this
+        # raw pynput X11 listener grabs by key, so it is accepted and ignored here.
         self._bindings[combo] = callback
 
     def unregister(self, combo: str) -> None:
