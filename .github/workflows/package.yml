@@ -39,13 +39,15 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
       - name: Install dependencies
         # Same pins as the release workflow, so the smoke build exercises the
-        # exact environment a release would ship with.
-        run: |
-          python -m pip install --upgrade pip
-          pip install -c packaging/constraints-release.txt -e . pyinstaller
+        # exact environment a release would ship with. uv installs from its
+        # global cache via hardlinks, so the large PySide6 wheel isn't
+        # re-extracted every run (much faster than pip).
+        run: uv pip install --system -c packaging/constraints-release.txt -e . pyinstaller
       - name: Record build dependency versions
         run: |
           {
@@ -82,13 +84,15 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
       - name: Install dependencies
         # Same pins as the release workflow, so the smoke build exercises the
-        # exact environment a release would ship with.
-        run: |
-          python -m pip install --upgrade pip
-          pip install -c packaging/constraints-release.txt -e . pyinstaller
+        # exact environment a release would ship with. uv installs from its
+        # global cache via hardlinks, so the large PySide6 wheel isn't
+        # re-extracted every run (much faster than pip).
+        run: uv pip install --system -c packaging/constraints-release.txt -e . pyinstaller
       - name: Record build dependency versions
         run: |
           {
@@ -135,19 +139,27 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
       - name: Install dependencies
         # ``pillow`` is only needed to render the .ico; the build degrades to no
         # custom icon without it, but the smoke build folds it in to exercise
         # that path too.
-        run: |
-          python -m pip install --upgrade pip
-          pip install -c packaging/constraints-release.txt -e . pyinstaller pillow
+        run: uv pip install --system -c packaging/constraints-release.txt -e . pyinstaller pillow
       - name: Install UPX
         # PyInstaller picks UPX up off PATH automatically (the spec excludes the
-        # C runtime / Python core DLLs it would corrupt). Pre-installed on the
-        # GitHub Windows image via Chocolatey.
-        run: choco install upx -y --no-progress
+        # C runtime / Python core DLLs it would corrupt). Download the pinned
+        # release straight from GitHub — faster than ``choco install`` and
+        # reproducible: the exact UPX that compressed a bundle is fixed, not
+        # "whatever the runner's Chocolatey feed currently has".
+        shell: pwsh
+        run: |
+          $ver = '5.2.0'
+          $url = "https://github.com/upx/upx/releases/download/v$ver/upx-$ver-win64.zip"
+          Invoke-WebRequest -Uri $url -OutFile upx.zip
+          Expand-Archive -Path upx.zip -DestinationPath upx -Force
+          "$PWD\upx\upx-$ver-win64" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Record build dependency versions
         shell: pwsh
         run: |
