@@ -141,16 +141,12 @@ def create_toolbar(
     width.setRange(1, 40)
     width.setValue(canvas.width())
     width.setAlignment(Qt.AlignHCenter)
-    # The label moves out of the (wide) inline prefix into a caption below, so
-    # drop the prefix. Frameless lets the field shrink to about the icons'
-    # height: a normal spin box is taller than the 16px icons, which would make
-    # the two-row control taller than the buttons and push its caption off their
-    # label line. Removing the box border slims it so the whole control matches a
-    # button's height (pinned below) and the rows line up.
+    # Frameless lets the field shrink to about the icons' height: a normal spin
+    # box is taller than the 16px icons, which would make the stacked control
+    # taller than the buttons and push its caption off their label line.
+    # Removing the box border slims it so the whole control matches a button's
+    # height (pinned below) and the rows line up.
     width.setFrame(False)
-    # Cap the field to its two-digit value plus the up/down button column, so it
-    # doesn't reserve the spin box's (much wider) default size.
-    width.setMaximumWidth(width.fontMetrics().horizontalAdvance("40") + _WIDTH_FIELD_PADDING)
     # The editor's keyboard surface lives on the canvas/window: arrows adjust
     # a region capture's crop, Space/Enter finish the shot. A focusable spin
     # box would keep those keys after a click — arrows would silently step the
@@ -161,23 +157,39 @@ def create_toolbar(
     width.lineEdit().setFocusPolicy(Qt.NoFocus)
     width.valueChanged.connect(canvas.set_width)
 
-    # Stack a caption under the spin box so it reads as two rows like the
-    # icon-over-label buttons. Pin the container to a tool button's height and
-    # the caption to its own line at the bottom, so the caption lands on the
-    # same line as the buttons' labels (and the number on the icons' line).
-    # Icon-only mode strips every button's label, so the caption is dropped to
-    # match (otherwise a lone "Width" text sits among label-less buttons); the
-    # field carries its name through a tooltip there, as the icon buttons do.
-    width_caption_label = t("toolbar.width").strip()
+    # The width field carries its "Width" name differently per style, so the
+    # control always matches the buttons' row count:
+    #   both  — number over a caption (two rows), like the icon-over-label
+    #           buttons; the caption lands on their label line.
+    #   icon  — number only, name via tooltip (one row), like the label-less
+    #           icon buttons.
+    #   text  — single-row labels, so the name goes inline as a prefix
+    #           ("Width 12"); a stacked caption would be clipped against the
+    #           shorter single-row button height.
+    # Unknown styles fall back to the two-row layout, matching the button-style
+    # fallback above.
+    width_label = t("toolbar.width").strip()
+
+    def _cap_to_two_digits() -> None:
+        # Cap the field to its two-digit value plus the up/down button column,
+        # so it doesn't reserve the spin box's (much wider) default size.
+        width.setMaximumWidth(width.fontMetrics().horizontalAdvance("40") + _WIDTH_FIELD_PADDING)
+
     width_control = QWidget()
     width_box = QVBoxLayout(width_control)
     width_box.setContentsMargins(0, 0, 0, 0)
     width_box.setSpacing(0)
     width_box.addWidget(width)
     if style == "icon":
-        width.setToolTip(width_caption_label)
+        _cap_to_two_digits()
+        width.setToolTip(width_label)
+    elif style == "text":
+        # No narrow cap here: the inline prefix needs the room.
+        width.setPrefix(f"{width_label} ")
+        width.setToolTip(width_label)
     else:
-        width_caption = QLabel(width_caption_label)
+        _cap_to_two_digits()
+        width_caption = QLabel(width_label)
         width_caption.setAlignment(Qt.AlignHCenter)
         width_box.addWidget(width_caption)
         width_caption.setFixedHeight(width_caption.sizeHint().height())

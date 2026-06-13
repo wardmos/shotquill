@@ -99,11 +99,14 @@ def test_width_caption_is_dropped_in_icon_only_mode(qtbot):
     assert spin.toolTip() == "Width"
 
 
-def test_width_caption_shown_in_text_mode(qtbot):
-    # Text-only buttons show their labels, so the captioned "Width" stays.
+def test_width_shows_inline_label_in_text_mode(qtbot):
+    # Text-only buttons are single-row labels, so the width field shows its name
+    # inline as a prefix ("Width 12") rather than a stacked caption that would be
+    # clipped against the shorter single-row button height.
     _canvas_, toolbar = _toolbar(qtbot, style="text")
-    container = toolbar.width_spin.parentWidget()
-    assert [label.text() for label in container.findChildren(QLabel)] == ["Width"]
+    spin = toolbar.width_spin
+    assert spin.prefix() == "Width "
+    assert spin.parentWidget().findChildren(QLabel) == []
 
 
 def test_toolbar_exposes_copy_and_save_actions(qtbot):
