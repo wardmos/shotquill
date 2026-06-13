@@ -1,0 +1,367 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 wardmos
+"""Agent flight-recorder sessions: a trace of frames, not a single capture.
+
+Where ``squill capture`` returns one image, ``squill record`` accumulates a
+*session* — an ordered run of frames an agent leaves behind as it operates a
+real screen, so a human or a reviewing AI can see what it did, step by step.
+
+This module is the session store and its on-disk format; it owns no pixels and
+imports no Qt. The CLI captures and redacts a frame, then hands the already
+encoded bytes here to be filed under the session. Splitting it this way keeps
+the format unit-testable without a screen, mirroring :mod:`shotquill.redact`
+and :mod:`shotquill.deterministic`.
+
+Format. Each session is a directory::
+
+    <records>/<session-id>/
+        manifest.json     the trace (one object; the source of truth)
+        frames/0001.png   one file per recorded frame
+        index.html        a static filmstrip, written at `record end`
+
+The manifest is a *local projection* of an OpenTelemetry GenAI trace: a session
+is an ``invoke_agent`` span (``gen_ai.conversation.id`` == our session id), each
+frame an ``execute_tool`` span carrying the screenshot as a ``shotquill.frame.*``
+event. We do not depend on the OTel SDK yet — the field names are chosen so an
+OTLP exporter can be bolted on later without reshaping what is already on disk.
+
+Privacy. The record path keeps the blocklist redaction default-on (the CLI does
+not expose a way to turn it off mid-trace), so a blocked app cannot be filed
+into an archive by an agent that "forgot" to mask it. The honest limit still
+holds: redaction only covers *known* apps, so the manifest's ``redacted`` flag
+means "blocklist protection was in force for this frame", not "this frame is
+free of user content" — agent actions and user pixels are the same pixels. See
+shotquill_docs/feature-agent-flight-recorder.md (D15).
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import html
+import json
+import os
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+MANIFEST_NAME = "manifest.json"
+FILMSTRIP_NAME = "index.html"
+FRAMES_SUBDIR = "frames"
+
+# Bumped only on a breaking change to the on-disk shape, so a reader can refuse
+# a manifest it does not understand rather than mis-parse a future one.
+MANIFEST_VERSION = 1
+
+STATUS_RECORDING = "recording"
+STATUS_COMPLETE = "complete"
+
+
+class RecordError(Exception):
+    """A flight-recorder operation failed (bad/missing session, corrupt manifest)."""
+
+
+class SessionNotFound(RecordError):
+    """No session directory at the given handle (id or path)."""
+
+
+@dataclass(frozen=True)
+class FrameRecord:
+    """One recorded frame — the data the manifest keeps per ``execute_tool`` span."""
+
+    index: int  # 1-based order within the session
+    at: str  # ISO-8601 capture time
+    tool: str  # gen_ai.tool.name — the action this frame documents
+    label: str | None  # shotquill.frame.label — human-readable note
+    image: str  # shotquill.frame.image_ref — path relative to the session dir
+    target: str  # what was actually captured (window / region / fullscreen)
+    redacted: bool  # shotquill.frame.redacted — blocklist protection was in force
+
+    def as_manifest_entry(self, *, tool_call_id: str) -> dict:
+        """Serialize with OTel-derived field names (see module docstring)."""
+        return {
+            "span": {
+                "tool_name": self.tool,
+                "tool_call_id": tool_call_id,  # gen_ai.tool.call.id
+            },
+            "at": self.at,
+            "label": self.label,
+            "image": self.image,
+            "target": self.target,
+            "redacted": self.redacted,
+        }
+
+
+def now_iso(now: dt.datetime | None = None) -> str:
+    """Local-aware ISO timestamp, matching the audit log's format."""
+    moment = now or dt.datetime.now().astimezone()
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    return moment.isoformat(timespec="seconds")
+
+
+def new_session_id(now: dt.datetime | None = None, *, suffix: str | None = None) -> str:
+    """A readable, collision-resistant conversation id (``conv-<date>-<rand>``).
+
+    The date prefix sorts and skims well in a directory listing; the random
+    suffix keeps two sessions started in the same second apart.
+    """
+    moment = now or dt.datetime.now().astimezone()
+    tail = suffix if suffix is not None else uuid.uuid4().hex[:6]
+    return f"conv-{moment:%Y%m%d-%H%M%S}-{tail}"
+
+
+@dataclass(frozen=True)
+class Session:
+    """A live handle to a session directory (the manifest is the durable truth)."""
+
+    id: str
+    dir: Path
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.dir / MANIFEST_NAME
+
+    @property
+    def frames_dir(self) -> Path:
+        return self.dir / FRAMES_SUBDIR
+
+    @property
+    def filmstrip_path(self) -> Path:
+        return self.dir / FILMSTRIP_NAME
+
+
+def start_session(
+    *,
+    session_id: str | None = None,
+    directory: Path | None = None,
+    records_root: Path | None = None,
+    agent_name: str | None = None,
+    agent_id: str | None = None,
+    label: str | None = None,
+    now: dt.datetime | None = None,
+) -> Session:
+    """Create a new session directory and write its initial manifest.
+
+    By default the session lands at ``<records_root>/<session-id>/``. Pass
+    ``directory`` to pin an exact location (e.g. a CI artifact path); that
+    directory then *is* the handle later commands resolve.
+    """
+    sid = session_id or new_session_id(now)
+    if directory is not None:
+        session_dir = Path(directory).expanduser()
+    else:
+        root = records_root if records_root is not None else _default_records_root()
+        session_dir = root / sid
+    # ``0o700``: a frame archive is at least as sensitive as the audit log —
+    # other local users have no business reading what an agent captured.
+    session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (session_dir / FRAMES_SUBDIR).mkdir(mode=0o700, exist_ok=True)
+
+    manifest = {
+        "shotquill_manifest_version": MANIFEST_VERSION,
+        "conversation_id": sid,  # gen_ai.conversation.id
+        "agent": {"name": agent_name, "id": agent_id},  # gen_ai.agent.name / .id
+        "status": STATUS_RECORDING,
+        "label": label,
+        "started_at": now_iso(now),
+        "ended_at": None,
+        "frames": [],
+    }
+    session = Session(id=sid, dir=session_dir)
+    _write_manifest(session.manifest_path, manifest)
+    return session
+
+
+def resolve_session(handle: str, *, records_root: Path | None = None) -> Session:
+    """Turn a ``--session`` handle into a :class:`Session`.
+
+    A handle that names an existing directory (or looks like a path) is used
+    as-is, so a caller who pinned ``--dir`` threads that path straight back. A
+    bare id resolves under the default records root. Either way the manifest
+    must exist, or the session is treated as not found.
+    """
+    candidate = Path(handle).expanduser()
+    looks_like_path = os.sep in handle or (os.altsep and os.altsep in handle) or candidate.is_dir()
+    if looks_like_path:
+        session_dir = candidate
+    else:
+        root = records_root if records_root is not None else _default_records_root()
+        session_dir = root / handle
+    manifest_path = session_dir / MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise SessionNotFound(f"no recording session at {handle!r} (expected {manifest_path})")
+    manifest = _read_manifest(manifest_path)
+    return Session(id=manifest.get("conversation_id", session_dir.name), dir=session_dir)
+
+
+def load_manifest(session: Session) -> dict:
+    """Read a session's manifest (the trace), validating its version."""
+    return _read_manifest(session.manifest_path)
+
+
+def record_frame(
+    session: Session,
+    *,
+    image_bytes: bytes,
+    tool: str,
+    target: str,
+    label: str | None = None,
+    redacted: bool = False,
+    image_ext: str = "png",
+    now: dt.datetime | None = None,
+) -> FrameRecord:
+    """File one already-encoded, already-redacted frame under the session.
+
+    Appends to the manifest and writes the image; returns the frame record. The
+    caller (the CLI) owns the capture + redaction so this module stays Qt-free.
+    Not safe to call concurrently for one session — a trace is one agent's
+    linear run, and the next index is read from the manifest on each call.
+    """
+    manifest = _load_open_manifest(session)
+    index = len(manifest["frames"]) + 1
+    rel_image = f"{FRAMES_SUBDIR}/{index:04d}.{image_ext}"
+    (session.dir / rel_image).write_bytes(image_bytes)
+
+    frame = FrameRecord(
+        index=index,
+        at=now_iso(now),
+        tool=tool,
+        label=label,
+        image=rel_image,
+        target=target,
+        redacted=redacted,
+    )
+    # A traceable call id without the OTel SDK: a frame is uniquely the Nth tool
+    # call of this conversation.
+    entry = frame.as_manifest_entry(tool_call_id=f"{session.id}/frame/{index}")
+    manifest["frames"].append(entry)
+    _write_manifest(session.manifest_path, manifest)
+    return frame
+
+
+def end_session(session: Session, *, now: dt.datetime | None = None) -> Path:
+    """Close the session: mark the manifest complete and render the filmstrip.
+
+    Returns the path to the static HTML filmstrip. Idempotent enough to re-run:
+    closing an already-closed session just refreshes ``ended_at`` and the HTML.
+    """
+    manifest = _read_manifest(session.manifest_path)
+    manifest["status"] = STATUS_COMPLETE
+    manifest["ended_at"] = now_iso(now)
+    _write_manifest(session.manifest_path, manifest)
+    session.filmstrip_path.write_text(render_filmstrip(manifest), encoding="utf-8")
+    return session.filmstrip_path
+
+
+# --- manifest I/O -----------------------------------------------------------
+
+
+def _default_records_root() -> Path:
+    from shotquill import paths
+
+    return paths.records_dir()
+
+
+def _load_open_manifest(session: Session) -> dict:
+    manifest = _read_manifest(session.manifest_path)
+    if manifest.get("status") == STATUS_COMPLETE:
+        raise RecordError(
+            f"session {session.id} is already closed; start a new one to record more frames"
+        )
+    return manifest
+
+
+def _read_manifest(path: Path) -> dict:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SessionNotFound(f"cannot read session manifest {path}: {exc}") from exc
+    try:
+        manifest = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RecordError(f"session manifest {path} is corrupt: {exc}") from exc
+    version = manifest.get("shotquill_manifest_version")
+    if version != MANIFEST_VERSION:
+        raise RecordError(
+            f"session manifest {path} is version {version!r}, "
+            f"but this build understands version {MANIFEST_VERSION}"
+        )
+    manifest.setdefault("frames", [])
+    return manifest
+
+
+def _write_manifest(path: Path, manifest: dict) -> None:
+    """Write the manifest atomically so a crash mid-frame can't truncate it."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# --- filmstrip --------------------------------------------------------------
+
+_FILMSTRIP_CSS = """\
+body { font: 14px system-ui, sans-serif; margin: 2rem; background: #1a1a1a; color: #eee; }
+h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
+.strip { display: flex; flex-wrap: wrap; gap: 1rem; }
+.frame { background: #262626; border-radius: 8px; padding: .75rem; width: 280px; }
+.frame img { width: 100%; border-radius: 4px; display: block; background: #000; }
+.frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
+.frame .label { color: #ccc; } .frame .at { color: #888; font-size: .8rem; }
+.badge { font-size: .7rem; padding: .1rem .4rem; border-radius: 4px; }
+.badge { background: #2d4a2d; color: #9d9; }
+.empty { color: #888; }
+"""
+
+
+def render_filmstrip(manifest: dict) -> str:
+    """Render the manifest as a self-contained static HTML filmstrip.
+
+    Every app-supplied string (labels, tool names, capture targets, window
+    titles inside ``target``) is HTML-escaped: an agent or the captured app
+    could otherwise smuggle markup into a page the user opens in a browser.
+    """
+
+    def esc(value: object) -> str:
+        return html.escape("" if value is None else str(value))
+
+    sid = manifest.get("conversation_id", "")
+    agent = manifest.get("agent") or {}
+    agent_name = agent.get("name")
+    status = manifest.get("status", "")
+    started = manifest.get("started_at", "")
+    ended = manifest.get("ended_at")
+    frames = manifest.get("frames", [])
+
+    cards: list[str] = []
+    for entry in frames:
+        span = entry.get("span") or {}
+        tool = span.get("tool_name", "")
+        badge = '<span class="badge">redacted</span>' if entry.get("redacted") else ""
+        label = entry.get("label")
+        label_html = f'<div class="label">{esc(label)}</div>' if label else ""
+        cards.append(
+            '<figure class="frame">'
+            f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+            f'<div class="tool">{esc(tool)} {badge}</div>'
+            f"{label_html}"
+            f'<div class="at">{esc(entry.get("at", ""))} · {esc(entry.get("target", ""))}</div>'
+            "</figure>"
+        )
+    strip = "\n".join(cards) if cards else '<p class="empty">No frames recorded.</p>'
+
+    meta_bits = [f"{len(frames)} frame(s)", f"status: {esc(status)}", f"started {esc(started)}"]
+    if ended:
+        meta_bits.append(f"ended {esc(ended)}")
+    if agent_name:
+        meta_bits.insert(0, f"agent: {esc(agent_name)}")
+
+    return (
+        "<!doctype html>\n"
+        '<html lang="en"><head><meta charset="utf-8">\n'
+        f"<title>ShotQuill recording {esc(sid)}</title>\n"
+        f"<style>{_FILMSTRIP_CSS}</style></head><body>\n"
+        f"<h1>ShotQuill recording <code>{esc(sid)}</code></h1>\n"
+        f'<div class="meta">{" · ".join(meta_bits)}</div>\n'
+        f'<div class="strip">\n{strip}\n</div>\n'
+        "</body></html>\n"
+    )

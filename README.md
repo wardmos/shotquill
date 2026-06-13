@@ -275,6 +275,45 @@ The parts agents rely on:
   exists, which user-space processes cannot rewrite.
   Each entry records the process chain that drove the capture.
 
+### Flight recorder (record a session)
+
+Where `capture` returns one image, `squill record` accumulates a **session** —
+an ordered trail of frames an agent leaves behind as it operates the screen, so
+a human or a reviewing AI can replay what it did, step by step. Frames are
+written to disk (never returned into the agent's context), and the blocklist
+redaction stays on the whole time.
+
+```bash
+DIR=$(squill record start --agent builder --label "login flow")  # prints the session dir
+squill record frame --session "$DIR" --tool click --label "click submit"
+squill record frame --session "$DIR" --tool type  --label "enter email" --app safari
+squill record end --session "$DIR"                                # prints the HTML filmstrip path
+```
+
+- **`start` prints the session directory; thread it back as `--session`.**
+  Keeping the handle explicit (rather than an ambient "current session") is
+  what makes concurrent agents and CI runs safe — `--session` also accepts the
+  bare conversation id. Pin a location with `--dir` (e.g. a CI artifact path).
+- **Each session is a directory**: `manifest.json` (the trace), `frames/NNNN.png`
+  (one file per frame), and `index.html` (a static filmstrip, written at `end`).
+  The manifest is a local projection of an [OpenTelemetry GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+  trace — a session is an `invoke_agent` span (`gen_ai.conversation.id`), each
+  frame an `execute_tool` span carrying the screenshot as a `shotquill.frame.*`
+  event — so an OTLP exporter can be added later without reshaping what is on
+  disk.
+- **Redaction is on by default and cannot be turned off mid-trace**, so a
+  blocklisted app cannot be filed into an archive by an agent that "forgot" to
+  mask it. The manifest's `redacted` flag means *blocklist protection was in
+  force* — not that the frame is free of user content. Agent actions and user
+  pixels are the same pixels; redaction only covers the apps you listed.
+- `--json` on any of the three prints a machine-readable object; every step is
+  audit-logged with `via: "record"`.
+
+The MCP server exposes the same loop as `record_start` / `record_frame` /
+`record_end` (below). For agents,
+[`skills/flight-recorder/SKILL.md`](skills/flight-recorder/SKILL.md) is the
+recipe for *when* to capture and *how* to label, layered on top of those tools.
+
 ### MCP server
 
 `squill mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io)
@@ -295,12 +334,15 @@ or in `claude_desktop_config.json`:
 }
 ```
 
-Five tools: **capture** (full screen / window by id or app+title / one
+Eight tools: **capture** (full screen / window by id or app+title / one
 monitor by `display` index / region; returns the image inline — pass
 `max_width` to downscale and save context; `save_path` optionally persists),
 **list_windows**, **list_displays**, **ocr** (a file, or
 capture-and-recognize fully in memory so reading on-screen text costs no
-image tokens), and **doctor**. Built for agent ergonomics: every tool
+image tokens), **doctor**, and the flight-recorder trio **record_start** /
+**record_frame** / **record_end** (the CLI `record` session above, driven by
+an agent: frames go to disk, not into the agent's context). Built for agent
+ergonomics: every tool
 declares an `outputSchema` and returns typed `structuredContent` (no
 re-parsing JSON out of text), the read-only tools are annotated
 `readOnlyHint` so hosts can auto-approve them, and every in-band error

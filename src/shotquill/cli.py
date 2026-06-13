@@ -165,6 +165,8 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="machine-readable output")
     doctor.set_defaults(func=_cmd_doctor)
 
+    _add_record_parser(sub)
+
     mcp = sub.add_parser("mcp", help="serve the MCP stdio protocol (for AI agent hosts)")
     mcp.add_argument(
         "--timeout",
@@ -218,6 +220,63 @@ def _add_blocklist_selector(command: argparse.ArgumentParser) -> None:
     target = command.add_mutually_exclusive_group(required=True)
     target.add_argument("--bundle-id", help="match the owning app's bundle id exactly")
     target.add_argument("--name", help="match the app name as a case-insensitive substring")
+
+
+def _add_record_parser(sub) -> None:
+    """The ``record`` flight-recorder commands: start → frame… → end.
+
+    ``start`` prints the session directory on stdout — that path is the handle
+    the caller threads back into ``--session`` for every later ``frame`` and the
+    closing ``end``. Keeping the handle explicit (rather than an ambient "current
+    session") is what makes concurrent agents and CI runs safe.
+    """
+    record = sub.add_parser(
+        "record",
+        help="record a session of frames an agent leaves behind (a flight recorder)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    rec_sub = record.add_subparsers(dest="record_command", required=True)
+
+    start = rec_sub.add_parser(
+        "start",
+        help="open a session; prints its directory (pass it back as --session)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    start.add_argument("--label", help="human-readable note for the whole session")
+    start.add_argument("--agent", help="name of the agent being recorded (gen_ai.agent.name)")
+    start.add_argument("--agent-id", help="stable id of the agent (gen_ai.agent.id)")
+    start.add_argument(
+        "--id", dest="session_id", help="set the conversation id (default: generated)"
+    )
+    start.add_argument(
+        "--dir",
+        help="pin the session directory (default: a generated dir under the data folder)",
+    )
+    start.add_argument("--json", action="store_true", help="machine-readable output")
+    start.set_defaults(func=_cmd_record_start)
+
+    frame = rec_sub.add_parser(
+        "frame",
+        help="capture one frame into a session (redaction stays on)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    frame.add_argument("--session", required=True, help="session handle from `record start`")
+    frame.add_argument(
+        "--tool", required=True, help="the action this frame documents (gen_ai.tool.name)"
+    )
+    frame.add_argument("--label", help="human-readable note for this frame")
+    _add_target_options(frame)
+    frame.add_argument("--json", action="store_true", help="machine-readable output")
+    frame.set_defaults(func=_cmd_record_frame)
+
+    end = rec_sub.add_parser(
+        "end",
+        help="close a session and render its HTML filmstrip",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    end.add_argument("--session", required=True, help="session handle from `record start`")
+    end.add_argument("--json", action="store_true", help="machine-readable output")
+    end.set_defaults(func=_cmd_record_end)
 
 
 def _add_target_options(command: argparse.ArgumentParser) -> None:
@@ -362,6 +421,132 @@ def _save_image(image, path: Path, format_hint: str, *, deterministic: bool = Fa
         image = image.convertToFormat(QImage.Format.Format_RGB888)
     if not image.save(str(path), fmt.upper()):
         raise OSError(f"failed to write {path}")
+
+
+def _cmd_record_start(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    session = record.start_session(
+        session_id=args.session_id,
+        directory=Path(args.dir).expanduser() if args.dir else None,
+        agent_name=args.agent,
+        agent_id=args.agent_id,
+        label=args.label,
+    )
+    audit.record("record_start", via="record", target=session.id, dest=str(session.dir))
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "conversation_id": session.id,
+                    "dir": str(session.dir.resolve()),
+                    "manifest": str(session.manifest_path.resolve()),
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        # The directory is the handle for later commands, so it owns stdout
+        # (mirroring `capture`'s one-path contract); the id is human info.
+        print(f"squill: recording session {session.id}", file=sys.stderr)
+        print(str(session.dir.resolve()))
+    return 0
+
+
+def _cmd_record_frame(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    try:
+        session = record.resolve_session(args.session)
+        region = _validate_target(args)
+    except record.RecordError as exc:
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
+    except _UsageError as exc:
+        return _usage_error(str(exc))
+
+    # Redaction stays on for the record path: the blocklist is loaded and applied
+    # by perform_capture, and a non-empty list means protection was in force for
+    # this frame (recorded as `redacted` — see record.py for the honest meaning).
+    blocklist = headless.active_blocklist()
+    capturer = headless.get_capturer()
+    result, target, matched = headless.perform_capture(
+        capturer,
+        window_id=args.window_id,
+        app=args.app,
+        title=args.title,
+        region=region,
+        display=args.display,
+        blocklist=blocklist,
+        via="record",
+    )
+    if matched > 1 and not args.json:
+        print(
+            f"squill: {matched} windows match; captured the front-most"
+            " (use --window-id for an exact pick)",
+            file=sys.stderr,
+        )
+
+    from shotquill.imaging import result_to_qimage
+
+    image_bytes = headless.encode_qimage(result_to_qimage(result), "png")
+    frame = record.record_frame(
+        session,
+        image_bytes=image_bytes,
+        tool=args.tool,
+        target=target,
+        label=args.label,
+        redacted=bool(blocklist),
+    )
+    dest = str((session.dir / frame.image).resolve())
+    audit.record("record_frame", via="record", target=target, dest=dest)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "conversation_id": session.id,
+                    "index": frame.index,
+                    "image": dest,
+                    "tool": frame.tool,
+                    "target": target,
+                    "redacted": frame.redacted,
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        print(dest)
+    return 0
+
+
+def _cmd_record_end(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    try:
+        session = record.resolve_session(args.session)
+        filmstrip = record.end_session(session)
+        manifest = record.load_manifest(session)
+    except record.RecordError as exc:
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
+    html_path = str(filmstrip.resolve())
+    audit.record("record_end", via="record", target=session.id, dest=html_path)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "conversation_id": session.id,
+                    "dir": str(session.dir.resolve()),
+                    "manifest": str(session.manifest_path.resolve()),
+                    "filmstrip": html_path,
+                    "frames": len(manifest.get("frames", [])),
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        print(html_path)
+    return 0
 
 
 def _printable(text: str) -> str:

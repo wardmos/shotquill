@@ -61,6 +61,36 @@ def config_dir() -> Path:
     return base / "shotquill"
 
 
+def data_dir() -> Path:
+    """User data directory for durable headless artifacts (computed, not created).
+
+    Distinct from :func:`config_dir` (preferences, read on every capture) and
+    :func:`capture_tmp_dir` (auto-cleaned cache): flight-recorder sessions are
+    archives the user keeps, so they belong in the platform's app-data location.
+    macOS uses ``~/Library/Application Support``; Windows uses machine-local
+    ``%LOCALAPPDATA%`` (artifacts are local state, not roaming); elsewhere we
+    follow XDG, honoring ``$XDG_DATA_HOME``. Created by the writer, not here.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    elif sys.platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA", "") or Path.home() / "AppData" / "Local"
+        base = Path(local)
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", "") or Path.home() / ".local" / "share")
+    return base / "shotquill"
+
+
+def records_dir() -> Path:
+    """Default root for flight-recorder sessions (``<data>/records``).
+
+    Each ``squill record start`` creates one ``<records>/<session-id>/`` beneath
+    it (unless the caller pins an explicit directory). Not created here — the
+    session writer makes the leaf directory it owns.
+    """
+    return data_dir() / "records"
+
+
 def blocklist_path() -> Path:
     """The app blocklist file (apps that must never be captured).
 
