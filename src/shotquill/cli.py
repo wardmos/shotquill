@@ -29,12 +29,24 @@ from shotquill import __version__, audit, headless, paths
 
 _EXIT_USAGE = 2
 
+# Exit codes split into two bands so a caller can always tell *the operation
+# failed* from *the operation succeeded and the answer is "no"*:
+#   1-19   errors (the command could not do its job)
+#   20+    assertion / predicate results (it ran fine; the asserted condition
+#          was false)
+# `ocr --contains/--matches` failing is the latter — the tool ran, the text just
+# was not on screen. Keeping it out of the error band lets CI branch cleanly
+# (`rc >= 20` = assertion false, `0 < rc < 20` = broken tool) and grow either
+# band without collision. 20 also dodges the shell-reserved codes (126+, 255).
+_EXIT_ASSERTION_FAILED = 20
+
 # Shown in every --help: agents discover the exit-code contract the same way
 # they discover the flags, instead of needing the README.
 _EXIT_CODE_EPILOG = (
-    "exit codes: 0 ok, 1 error, 2 usage, 3 permission denied, "
+    "exit codes: 0 ok; errors 1-19 (1 error, 2 usage, 3 permission denied, "
     "4 capability unavailable on this platform/session, 5 no window or display "
-    "matched, 6 blocked by the app blocklist"
+    "matched, 6 blocked by the app blocklist); assertion results 20+ "
+    "(20 OCR assertion failed)"
 )
 
 
@@ -155,6 +167,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_target_options(ocr)
+    ocr.add_argument(
+        "--contains",
+        action="append",
+        metavar="TEXT",
+        help="assert the recognized text contains TEXT (repeatable; all must hold)",
+    )
+    ocr.add_argument(
+        "--matches",
+        action="append",
+        metavar="REGEX",
+        help="assert the recognized text matches REGEX (repeatable; all must hold)",
+    )
+    ocr.add_argument(
+        "-i",
+        "--ignore-case",
+        action="store_true",
+        help="make --contains / --matches case-insensitive (OCR case is noisy)",
+    )
     ocr.set_defaults(func=_cmd_ocr)
 
     doctor = sub.add_parser(
@@ -633,10 +663,29 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
         # instead of `capture -o - | ocr -`, same as the MCP ocr tool.
         image, source, _matched = _capture_image(args, region)
 
-    for line in recognizer.recognize(image):
+    lines = recognizer.recognize(image)
+    for line in lines:
         print(line)
     audit.record("ocr", via="cli", target=source)
-    return 0
+
+    # No --contains/--matches → the command just prints text (back-compat). With
+    # them, the recognized text is asserted and the exit code carries the result.
+    if not args.contains and not args.matches:
+        return 0
+    from shotquill import textassert
+
+    try:
+        checks = textassert.evaluate(
+            lines,
+            contains=tuple(args.contains or ()),
+            matches=tuple(args.matches or ()),
+            ignore_case=args.ignore_case,
+        )
+    except ValueError as exc:
+        return _usage_error(str(exc))  # a broken regex is the caller's bug
+    for check in checks:
+        print(textassert.describe(check), file=sys.stderr)
+    return 0 if textassert.all_passed(checks) else _EXIT_ASSERTION_FAILED
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
