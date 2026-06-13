@@ -55,9 +55,14 @@ EXCLUDES=(
 EXCLUDE_FLAGS=()
 for mod in "${EXCLUDES[@]}"; do EXCLUDE_FLAGS+=(--exclude-module "$mod"); done
 
+# --strip drops ELF symbol tables; --noupx keeps UPX off on purpose. UPX-packed
+# .so files hide their DT_NEEDED from readelf, which is exactly what
+# prune_bundle.py walks to decide what's dead — packing would blind the prune.
+# AppImage also squashes the whole tree below, so per-file UPX buys little here.
 pyinstaller --noconfirm --name squill \
   --paths src \
   --strip \
+  --noupx \
   --optimize 2 \
   --workpath build/appimage/pyinstaller \
   --distpath build/appimage/dist \
@@ -102,5 +107,9 @@ fi
 
 mkdir -p dist
 OUTPUT="dist/ShotQuill-$VERSION-$ARCH.AppImage"
-ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" "$APPDIR" "$OUTPUT"
+# --comp xz: smaller files than the default gzip squashfs. AppImageKit 13's
+# appimagetool only offers gzip and xz (no zstd); xz is the classic AppImage
+# default and its runtime mounts it, so the glibc floor (set by the build host,
+# above) is what still gates launch.
+ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --comp xz "$APPDIR" "$OUTPUT"
 echo "Built $OUTPUT"
