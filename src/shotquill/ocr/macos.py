@@ -21,9 +21,7 @@ _DEFAULT_LANGUAGES = ("zh-Hans", "en")
 class VisionTextRecognizer(TextRecognizer):
     backend_name = "Apple Vision"
 
-    def recognize(
-        self, image: QImage, languages: tuple[str, ...] = _DEFAULT_LANGUAGES
-    ) -> list[str]:
+    def recognize(self, image: QImage) -> list[str]:
         import Quartz
         import Vision
         from Foundation import NSData
@@ -47,10 +45,18 @@ class VisionTextRecognizer(TextRecognizer):
         request = Vision.VNRecognizeTextRequest.alloc().init()
         request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
         request.setUsesLanguageCorrection_(True)
-        request.setRecognitionLanguages_(list(languages))
+        request.setRecognitionLanguages_(list(_DEFAULT_LANGUAGES))
 
         handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
-        ok, _error = handler.performRequests_error_([request], None)
+        # PyObjC bridges ``performRequests:error:`` as either a bare BOOL or a
+        # ``(BOOL, error)`` tuple depending on the metadata; tolerate both, and
+        # degrade to "no text" on any Vision error rather than crashing (mirrors
+        # the Windows backend's contract).
+        try:
+            outcome = handler.performRequests_error_([request], None)
+            ok = outcome[0] if isinstance(outcome, tuple) else outcome
+        except Exception:
+            return []
         if not ok:
             return []
 

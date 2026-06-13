@@ -40,10 +40,20 @@ def _load_ocr_namespace():
     try:
         import winrt as root
         import winrt.windows.media.ocr  # noqa: F401
-    except ImportError:
-        import winsdk as root
-        import winsdk.windows.media.ocr  # noqa: F401
-    return root
+
+        return root
+    except ImportError as winrt_err:
+        # Fall back to the older distribution, but chain the original failure so
+        # a partial winrt install (root imports, OCR submodule doesn't) isn't
+        # masked behind a misleading "winsdk not found".
+        try:
+            import winsdk as root
+            import winsdk.windows.media.ocr  # noqa: F401
+        except ImportError as winsdk_err:
+            raise ImportError(
+                f"no WinRT OCR projection: winrt ({winrt_err}); winsdk ({winsdk_err})"
+            ) from winsdk_err
+        return root
 
 
 def is_available() -> bool:

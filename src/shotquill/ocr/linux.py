@@ -73,12 +73,15 @@ class TesseractTextRecognizer(TextRecognizer):
 
     backend_name = "Tesseract"
 
-    def recognize(
-        self, image: QImage, languages: tuple[str, ...] = _DEFAULT_LANGUAGES
-    ) -> list[str]:
+    def recognize(self, image: QImage) -> list[str]:
+        from shotquill.headless import CapabilityUnsupported
+
         binary = tesseract_path()
         if binary is None:
-            raise RuntimeError("tesseract is not installed")
+            # The factory already gated on this, but a teardown between then and
+            # now should still raise the typed, exit-coded error the contract
+            # documents (exit 4) rather than a generic RuntimeError.
+            raise CapabilityUnsupported("ocr", "tesseract is not installed")
 
         from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 
@@ -93,7 +96,7 @@ class TesseractTextRecognizer(TextRecognizer):
         # Only request languages whose data is actually installed; if none match,
         # omit -l entirely and let Tesseract fall back to its built-in default.
         installed = _installed_languages(binary)
-        wanted = [lang for lang in languages if lang in installed]
+        wanted = [lang for lang in _DEFAULT_LANGUAGES if lang in installed]
         if wanted:
             args += ["-l", "+".join(wanted)]
 
