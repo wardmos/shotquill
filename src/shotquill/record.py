@@ -75,10 +75,13 @@ class FrameRecord:
     image: str  # shotquill.frame.image_ref — path relative to the session dir
     target: str  # what was actually captured (window / region / fullscreen)
     redacted: bool  # shotquill.frame.redacted — blocklist protection was in force
+    # None when the frame carried no assertion; otherwise whether every OCR
+    # check on it held — this is what makes a failed test a frame in the trace.
+    assertion_passed: bool | None = None
 
     def as_manifest_entry(self, *, tool_call_id: str) -> dict:
         """Serialize with OTel-derived field names (see module docstring)."""
-        return {
+        entry = {
             "span": {
                 "tool_name": self.tool,
                 "tool_call_id": tool_call_id,  # gen_ai.tool.call.id
@@ -89,6 +92,9 @@ class FrameRecord:
             "target": self.target,
             "redacted": self.redacted,
         }
+        if self.assertion_passed is not None:
+            entry["assertion_passed"] = self.assertion_passed
+        return entry
 
 
 def now_iso(now: dt.datetime | None = None) -> str:
@@ -213,6 +219,7 @@ def record_frame(
     target: str,
     label: str | None = None,
     redacted: bool = False,
+    assertions: list[dict] | None = None,
     image_ext: str = "png",
     now: dt.datetime | None = None,
 ) -> FrameRecord:
@@ -220,6 +227,9 @@ def record_frame(
 
     Appends to the manifest and writes the image; returns the frame record. The
     caller (the CLI) owns the capture + redaction so this module stays Qt-free.
+    ``assertions`` is an optional list of already-evaluated OCR checks (each a
+    ``{"kind", "pattern", "passed"}`` dict); when given, the frame records
+    whether they all held, so a failed test becomes a frame in the trace.
     Not safe to call concurrently for one session — a trace is one agent's
     linear run, and the next index is read from the manifest on each call.
     """
@@ -228,6 +238,7 @@ def record_frame(
     rel_image = f"{FRAMES_SUBDIR}/{index:04d}.{image_ext}"
     (session.dir / rel_image).write_bytes(image_bytes)
 
+    passed = all(check["passed"] for check in assertions) if assertions else None
     frame = FrameRecord(
         index=index,
         at=now_iso(now),
@@ -236,10 +247,13 @@ def record_frame(
         image=rel_image,
         target=target,
         redacted=redacted,
+        assertion_passed=passed,
     )
     # A traceable call id without the OTel SDK: a frame is uniquely the Nth tool
     # call of this conversation.
     entry = frame.as_manifest_entry(tool_call_id=f"{session.id}/frame/{index}")
+    if assertions:
+        entry["assertions"] = [dict(check) for check in assertions]
     manifest["frames"].append(entry)
     _write_manifest(session.manifest_path, manifest)
     return frame
@@ -327,8 +341,11 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
 .frame img { width: 100%; border-radius: 4px; display: block; background: #000; }
 .frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
 .frame .label { color: #ccc; } .frame .at { color: #888; font-size: .8rem; }
+.frame.failed { outline: 2px solid #c55; }
 .badge { font-size: .7rem; padding: .1rem .4rem; border-radius: 4px; }
-.badge { background: #2d4a2d; color: #9d9; }
+.badge.redacted { background: #2d4a2d; color: #9d9; }
+.badge.pass { background: #234a2f; color: #9e9; }
+.badge.fail { background: #5a2533; color: #f9a; }
 .empty { color: #888; }
 """
 
@@ -356,13 +373,23 @@ def render_filmstrip(manifest: dict) -> str:
     for entry in frames:
         span = entry.get("span") or {}
         tool = span.get("tool_name", "")
-        badge = '<span class="badge">redacted</span>' if entry.get("redacted") else ""
+        badges = []
+        if entry.get("redacted"):
+            badges.append('<span class="badge redacted">redacted</span>')
+        passed = entry.get("assertion_passed")
+        if passed is True:
+            badges.append('<span class="badge pass">assert ok</span>')
+        elif passed is False:
+            badges.append('<span class="badge fail">assert FAIL</span>')
+        # A failed assertion outlines the frame so it pops in the strip — the
+        # failing step of a recorded test is the one a reviewer wants to find.
+        figure_class = "frame failed" if passed is False else "frame"
         label = entry.get("label")
         label_html = f'<div class="label">{esc(label)}</div>' if label else ""
         cards.append(
-            '<figure class="frame">'
+            f'<figure class="{figure_class}">'
             f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
-            f'<div class="tool">{esc(tool)} {badge}</div>'
+            f'<div class="tool">{esc(tool)} {" ".join(badges)}</div>'
             f"{label_html}"
             f'<div class="at">{esc(entry.get("at", ""))} · {esc(entry.get("target", ""))}</div>'
             "</figure>"

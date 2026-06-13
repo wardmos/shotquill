@@ -299,6 +299,7 @@ redaction stays on the whole time.
 DIR=$(squill record start --agent builder --label "login flow")  # prints the session dir
 squill record frame --session "$DIR" --tool click --label "click submit"
 squill record frame --session "$DIR" --tool type  --label "enter email" --app safari
+squill record frame --session "$DIR" --tool assert --contains "Welcome"  # OCR + assert (exit 20 if absent)
 squill record end --session "$DIR"                                # prints the HTML filmstrip path
 ```
 
@@ -325,6 +326,13 @@ squill record end --session "$DIR"                                # prints the H
   mask it. The manifest's `redacted` flag means *blocklist protection was in
   force* — not that the frame is free of user content. Agent actions and user
   pixels are the same pixels; redaction only covers the apps you listed.
+- **A frame can assert, so a failed test is a replayable trace.** Add
+  `--contains TEXT` / `--matches REGEX` (`-i` to ignore case) to `record frame`
+  and it OCRs the frame it just captured and records the verdict: a failed
+  assertion exits `20`, marks the card in the filmstrip, and sets that step's
+  OTLP span to error — while still recording the frame, so the failure is
+  replayable. This is where the screenshot backend and the flight recorder meet:
+  the failing step of a test *is* a frame in the trace.
 - `--json` on any of the three prints a machine-readable object; every step is
   audit-logged with `via: "record"`.
 
