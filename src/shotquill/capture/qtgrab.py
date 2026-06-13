@@ -149,6 +149,18 @@ class QtGrabCapturer(ScreenCapturer):
         return max(s.devicePixelRatio() for s in screens)
 
     @staticmethod
+    def _capture_dpr() -> float:
+        """The device-pixel ratio the capture canvas uses — the single source of
+        truth a window-enumeration subclass shares with the capture path so
+        window bounds rescale to exactly the logical space the pixels live in."""
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            raise CapabilityUnsupported("capture", "Qt reports no screens")
+        return max(s.devicePixelRatio() for s in screens)
+
+    @staticmethod
     def _grab_virtual_desktop():
         """Composite every screen onto one canvas in virtual-desktop space."""
         from PySide6.QtCore import QRect

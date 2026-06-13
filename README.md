@@ -5,12 +5,12 @@
 <h1 align="center">ShotQuill</h1>
 
 <p align="center">
-  A fast, privacy-respecting screenshot &amp; annotation tool for macOS &mdash; with Linux/X11 GUI and Linux CLI/MCP support.
+  A fast, privacy-respecting screenshot &amp; annotation tool for macOS &mdash; with Linux/X11 and Windows GUI plus cross-platform CLI/MCP support.
 </p>
 
 <p align="center">
   <a href="https://github.com/wardmos/shotquill/actions/workflows/ci.yml"><img src="https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue" alt="Platform: macOS | Linux">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platform: macOS | Linux | Windows">
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache 2.0"></a>
 </p>
@@ -29,7 +29,9 @@ editor to annotate, redact, and extract text first.
   blocked by Wayland by design (use the tray menu, or bind a compositor-level
   shortcut to `squill capture`); the GUI surfaces this loudly instead of failing
   silently.
-- **Windows** — planned; the platform seams are in place, the backends are not.
+- **Windows** — full menu-bar GUI plus CLI / MCP: capture, window enumeration
+  (Win32), global hotkeys, and launch-at-login (the per-user `Run` key). On-device
+  OCR isn't implemented yet, so `squill ocr` is unavailable.
 
 > **Status:** early development — macOS is usable day-to-day; the Linux GUI is
 > newly landed and still being smoothed out. Expect rough edges either way.
@@ -164,15 +166,15 @@ hotkeys from anywhere.
 
 ### Capture hotkeys
 
-| Action         | macOS | Linux  | Notes                                                                                |
-| -------------- | ----- | ------ | ------------------------------------------------------------------------------------ |
+| Action         | macOS | Linux / Windows | Notes                                                                                |
+| -------------- | ----- | --------------- | ------------------------------------------------------------------------------------ |
 | Capture        | `⌥A`  | `Alt+A` | Click a window to grab it, click empty space for full screen, or drag for a region. `Esc` / right-click cancels. |
 | Full-screen    | `⌥S`  | `Alt+S` | All displays composited into one image, instantly.                                   |
 
 Both are remappable in **Settings** — any combination of modifiers (`⌘ ⌃ ⌥ ⇧`
-on macOS, `Super+ Ctrl+ Alt+ Shift+` on Linux) plus a key. Hotkey labels in
-the tray menu and Settings render natively per platform (Apple keycap glyphs
-on macOS, text labels on Linux).
+on macOS, `Super+ Ctrl+ Alt+ Shift+` on Linux/Windows) plus a key. Hotkey labels
+in the tray menu and Settings render natively per platform (Apple keycap glyphs
+on macOS, text labels on Linux/Windows).
 
 > **Linux / Wayland**: global hotkeys are blocked by the compositor; ShotQuill
 > raises a notification at startup so you can fall back to the tray menu, or
@@ -263,8 +265,9 @@ The parts agents rely on:
   names the real controller, and `squill doctor` reports what is missing.
 - **Every programmatic capture is audit-logged** — metadata only, never
   pixels — to a JSONL file (`~/Library/Logs/shotquill/audit.log` on macOS,
-  `$XDG_STATE_HOME/shotquill/audit.log` elsewhere) and mirrored into the OS log
-  store (unified log / journald), which user-space processes cannot rewrite.
+  `%LOCALAPPDATA%\shotquill\Logs\audit.log` on Windows, `$XDG_STATE_HOME/shotquill/audit.log`
+  elsewhere) and mirrored into the OS log store (unified log / journald) where one
+  exists, which user-space processes cannot rewrite.
   Each entry records the process chain that drove the capture.
 
 ### MCP server
@@ -337,6 +340,7 @@ The list is a plain JSON file, read by every surface so one rule protects them
 all:
 
 - macOS: `~/Library/Application Support/shotquill/blocklist.json`
+- Windows: `%APPDATA%\shotquill\blocklist.json`
 - elsewhere: `$XDG_CONFIG_HOME/shotquill/blocklist.json`
 
 ```json

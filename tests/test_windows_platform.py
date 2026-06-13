@@ -46,16 +46,18 @@ def test_audit_log_path_ignores_xdg_on_windows(tmp_path, monkeypatch):
     assert not (tmp_path / "xdg").exists()
 
 
-def test_get_capturer_routes_to_qtgrab_on_windows(qapp, monkeypatch):
-    # Windows has no out-of-band grab restriction, so QScreen.grabWindow covers
-    # full-screen / region capture with no extra dependency. ``qapp`` already
-    # owns a QGuiApplication, so no platform-specific session setup runs.
+def test_get_capturer_routes_to_windows_backend(qapp, monkeypatch):
+    # The Windows backend is a QtGrabCapturer subclass: QScreen.grabWindow
+    # covers full-screen / region capture, plus Win32 window enumeration on top.
+    # ``qapp`` already owns a QGuiApplication, so no session setup runs.
     pytest.importorskip("PySide6")
     from shotquill.capture.qtgrab import QtGrabCapturer
+    from shotquill.capture.windows import WindowsScreenCapturer
 
     monkeypatch.setattr(headless.sys, "platform", "win32")
     capturer = headless.get_capturer()
-    assert isinstance(capturer, QtGrabCapturer)
+    assert isinstance(capturer, WindowsScreenCapturer)
+    assert isinstance(capturer, QtGrabCapturer)  # inherits the pixel-grab path
 
 
 def test_get_recognizer_unsupported_on_windows(monkeypatch):
