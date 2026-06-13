@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-from shotquill.ui.geometry import loupe_anchor, scale_rect, selection_rect, window_at_point
+from shotquill.ui.geometry import (
+    loupe_anchor,
+    rect_containing,
+    scale_rect,
+    selection_rect,
+    window_at_point,
+)
 
 
 def test_selection_rect_normalizes_reverse_drag():
@@ -63,6 +69,26 @@ def test_window_at_point_right_and_bottom_edges_exclusive():
     # The box spans [0,100); the far edge belongs to no window.
     assert window_at_point([(0, 0, 100, 100)], 100, 50) is None
     assert window_at_point([(0, 0, 100, 100)], 0, 0) == 0
+
+
+# Two side-by-side monitors on a virtual desktop (overlay-local coords).
+_MONITORS = [(0, 0, 100, 100), (100, 0, 120, 90)]
+
+
+def test_rect_containing_picks_the_monitor_under_the_pointer():
+    assert rect_containing(_MONITORS, 50, 50) == (0, 0, 100, 100)
+    assert rect_containing(_MONITORS, 150, 40) == (100, 0, 120, 90)
+
+
+def test_rect_containing_returns_none_in_the_gap_between_monitors():
+    # Below the shorter right-hand monitor: inside no screen.
+    assert rect_containing(_MONITORS, 150, 95) is None
+
+
+def test_rect_containing_right_and_bottom_edges_exclusive():
+    assert rect_containing([(0, 0, 100, 100)], 100, 50) is None
+    assert rect_containing([(0, 0, 100, 100)], 50, 100) is None
+    assert rect_containing([(0, 0, 100, 100)], 0, 0) == (0, 0, 100, 100)
 
 
 def test_scale_rect_edges_matches_scale_rect_on_integer_products():
