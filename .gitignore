@@ -64,6 +64,9 @@ junit*.xml
 
 # ── PyInstaller ─────────────────────────────────────────
 *.spec
+# ...except the hand-authored Windows spec (shares one payload across the GUI +
+# CLI exes); it's source, not a generated artifact.
+!packaging/windows/shotquill.spec
 *.manifest
 
 # ── OS — macOS ──────────────────────────────────────────

@@ -79,11 +79,15 @@ build_one() {
   local app="dist/$arch/ShotQuill.app"
   local plist="$app/Contents/Info.plist"
 
+  # --noupx: UPX rewrites Mach-O headers, which breaks the ad-hoc codesign below
+  # and Apple Silicon's loader; the DMG's LZMA compression is what shrinks the
+  # download instead. (macOS runners ship no upx anyway — this is belt-and-braces.)
   pyinstaller --noconfirm --windowed --name ShotQuill \
     --osx-bundle-identifier com.wardmos.shotquill \
     --icon "$ICNS" \
     --paths src \
     --strip \
+    --noupx \
     --optimize 2 \
     --target-arch "$arch" \
     --workpath "build/$arch" \
