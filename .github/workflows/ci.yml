@@ -79,6 +79,7 @@ jobs:
       - name: Install dependencies
         # uv reuses its warm cache (hardlinks on macOS/Linux); the test matrix
         # deliberately resolves the loose pyproject bounds, not the release pins.
+        # (Even cold, uv resolves+installs far faster than pip here.)
         run: uv pip install --system -e ".[dev]"
       - name: Test (Linux, headless via Xvfb)
         if: runner.os == 'Linux'
