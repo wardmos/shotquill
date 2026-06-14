@@ -43,7 +43,7 @@ _STROKE = 1.8
 # the larger standalone size. ``toolbar_icon`` takes the size so each toolbar
 # style can pick (see shotquill.ui.toolbar).
 ICON_SIZE = 20
-ICON_SIZE_STANDALONE = 30
+ICON_SIZE_STANDALONE = 24
 
 
 def _draw_select(p: QPainter) -> None:
