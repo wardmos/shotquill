@@ -36,14 +36,14 @@ _STROKE = 1.8
 # the toolbar's icons is a one-constant change here. The toolbar sets its
 # icon size to match so the buttons don't pad the glyph back out.
 #
-# 16pt is tuned for the stacked "icon over caption" layout, where the label
-# below shares the work and a small glyph keeps the two-row button compact.
-# Icon-only buttons have no caption to lean on, so the glyph carries the whole
-# button and 16pt reads too small next to native toolbar icons — those use the
-# larger standalone size. ``toolbar_icon`` takes the size so each toolbar style
-# can pick (see shotquill.ui.toolbar).
-ICON_SIZE = 16
-ICON_SIZE_STANDALONE = 20
+# ICON_SIZE suits the stacked "icon over caption" layout, where the label below
+# shares the work and a smaller glyph keeps the two-row button compact. Icon-only
+# buttons have no caption to lean on, so the glyph carries the whole button and
+# reads too small at the stacked size next to native toolbar icons — those use
+# the larger standalone size. ``toolbar_icon`` takes the size so each toolbar
+# style can pick (see shotquill.ui.toolbar).
+ICON_SIZE = 20
+ICON_SIZE_STANDALONE = 30
 
 
 def _draw_select(p: QPainter) -> None:

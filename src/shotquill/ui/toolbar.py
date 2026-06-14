@@ -55,10 +55,10 @@ _BUTTON_STYLES: dict[str, Qt.ToolButtonStyle] = {
 }
 
 # Icon point size per style. "both" stacks a caption under the glyph, so a
-# small 16pt icon keeps the two-row button compact and lines up over its label.
+# smaller icon keeps the two-row button compact and lines up over its label.
 # "icon" has no caption — the glyph carries the whole button — so it gets the
-# larger standalone size, which 16pt was visibly too small for next to native
-# toolbar icons (notably on macOS). "text" draws no icon, so its value is unused.
+# larger standalone size; at the stacked size it read visibly too small next to
+# native toolbar icons (notably on macOS). "text" draws no icon, value unused.
 _ICON_SIZES: dict[str, int] = {
     "both": ICON_SIZE,
     "icon": ICON_SIZE_STANDALONE,
@@ -142,8 +142,8 @@ def create_toolbar(
     width.setValue(canvas.width())
     width.setAlignment(Qt.AlignHCenter)
     # Frameless lets the field shrink to about the icons' height: a normal spin
-    # box is taller than the 16px icons, which would make the stacked control
-    # taller than the buttons and push its caption off their label line.
+    # box is taller than the icons, which would make the stacked control taller
+    # than the buttons and push its caption off their label line.
     # Removing the box border slims it so the whole control matches a button's
     # height (pinned below) and the rows line up.
     width.setFrame(False)
