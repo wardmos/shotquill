@@ -45,6 +45,12 @@ _STROKE = 1.8
 ICON_SIZE = 20
 ICON_SIZE_STANDALONE = 24
 
+# Stroke width is in 24-grid design units and scales with the icon, so a bigger
+# glyph draws thicker. At the standalone size the default stroke looks heavy, so
+# icon-only buttons use a thinner one — picked so the on-screen line weight lands
+# close to the smaller stacked icons rather than scaling up with the glyph.
+ICON_STROKE_STANDALONE = 1.5
+
 
 def _draw_select(p: QPainter) -> None:
     # Classic pointer: arrow body with a short tail off the heel.
@@ -236,14 +242,15 @@ _GLYPHS: dict[str, Callable[[QPainter], None]] = {
 ICON_NAMES: tuple[str, ...] = tuple(_GLYPHS)
 
 
-def toolbar_icon(name: str, size: int = ICON_SIZE) -> QIcon:
+def toolbar_icon(name: str, size: int = ICON_SIZE, stroke: float = _STROKE) -> QIcon:
     """Render the named glyph into a QIcon in the palette's text colour.
 
     ``size`` is the logical point size the icon is emitted at (the toolbar sets
     its icon size to match); the glyph keeps its 24-grid design and is scaled to
-    fit. Rendered fresh on every call (toolbars are built once per editor
-    window), so a theme change between captures picks up the new palette
-    automatically.
+    fit. ``stroke`` is the pen width in those design units, so it scales with the
+    glyph; pass a smaller value to keep a larger icon's lines from looking heavy.
+    Rendered fresh on every call (toolbars are built once per editor window), so
+    a theme change between captures picks up the new palette automatically.
     """
     draw = _GLYPHS[name]
     pixmap = QPixmap(size * _SCALE, size * _SCALE)
@@ -254,7 +261,7 @@ def toolbar_icon(name: str, size: int = ICON_SIZE) -> QIcon:
     # Glyphs are drawn in their 24-grid design coordinates; this scale maps
     # them onto the emitted size, pen width included.
     painter.scale(size / _CANVAS, size / _CANVAS)
-    pen = QPen(QGuiApplication.palette().color(QPalette.Text), _STROKE)
+    pen = QPen(QGuiApplication.palette().color(QPalette.Text), stroke)
     pen.setCapStyle(Qt.RoundCap)
     pen.setJoinStyle(Qt.RoundJoin)
     painter.setPen(pen)

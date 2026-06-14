@@ -13,7 +13,12 @@ from PySide6.QtWidgets import QColorDialog, QLabel, QSpinBox, QToolBar, QVBoxLay
 
 from shotquill.config import DEFAULT_TOOLBAR_STYLE
 from shotquill.i18n import t
-from shotquill.ui.icons import ICON_SIZE, ICON_SIZE_STANDALONE, toolbar_icon
+from shotquill.ui.icons import (
+    ICON_SIZE,
+    ICON_SIZE_STANDALONE,
+    ICON_STROKE_STANDALONE,
+    toolbar_icon,
+)
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
@@ -111,6 +116,11 @@ def create_toolbar(
     icon_px = _ICON_SIZES.get(style, ICON_SIZE)
 
     def sized_icon(name: str) -> QIcon:
+        # The stroke scales with the glyph, so the larger icon-only glyph draws
+        # heavy lines at the default width; thin it so its line weight stays
+        # close to the smaller stacked icons. Other styles keep the default.
+        if style == "icon":
+            return toolbar_icon(name, icon_px, ICON_STROKE_STANDALONE)
         return toolbar_icon(name, icon_px)
 
     toolbar.setIconSize(QSize(icon_px, icon_px))
