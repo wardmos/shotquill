@@ -32,10 +32,24 @@ _SCALE = 2
 _STROKE = 1.8
 
 # Logical size the icons are emitted (and shown) at: the glyphs keep their
-# 24-grid design coordinates and are scaled down at paint time, so shrinking
+# 24-grid design coordinates and are scaled down at paint time, so resizing
 # the toolbar's icons is a one-constant change here. The toolbar sets its
-# icon size to this so the buttons don't pad the glyph back out.
-ICON_SIZE = 16
+# icon size to match so the buttons don't pad the glyph back out.
+#
+# ICON_SIZE suits the stacked "icon over caption" layout, where the label below
+# shares the work and a smaller glyph keeps the two-row button compact. Icon-only
+# buttons have no caption to lean on, so the glyph carries the whole button and
+# reads too small at the stacked size next to native toolbar icons — those use
+# the larger standalone size. ``toolbar_icon`` takes the size so each toolbar
+# style can pick (see shotquill.ui.toolbar).
+ICON_SIZE = 20
+ICON_SIZE_STANDALONE = 24
+
+# Stroke width is in 24-grid design units and scales with the icon, so a bigger
+# glyph draws thicker. At the standalone size the default stroke looks heavy, so
+# icon-only buttons use a thinner one — picked so the on-screen line weight lands
+# close to the smaller stacked icons rather than scaling up with the glyph.
+ICON_STROKE_STANDALONE = 1.5
 
 
 def _draw_select(p: QPainter) -> None:
@@ -228,22 +242,26 @@ _GLYPHS: dict[str, Callable[[QPainter], None]] = {
 ICON_NAMES: tuple[str, ...] = tuple(_GLYPHS)
 
 
-def toolbar_icon(name: str) -> QIcon:
+def toolbar_icon(name: str, size: int = ICON_SIZE, stroke: float = _STROKE) -> QIcon:
     """Render the named glyph into a QIcon in the palette's text colour.
 
-    Rendered fresh on every call (toolbars are built once per editor window),
-    so a theme change between captures picks up the new palette automatically.
+    ``size`` is the logical point size the icon is emitted at (the toolbar sets
+    its icon size to match); the glyph keeps its 24-grid design and is scaled to
+    fit. ``stroke`` is the pen width in those design units, so it scales with the
+    glyph; pass a smaller value to keep a larger icon's lines from looking heavy.
+    Rendered fresh on every call (toolbars are built once per editor window), so
+    a theme change between captures picks up the new palette automatically.
     """
     draw = _GLYPHS[name]
-    pixmap = QPixmap(ICON_SIZE * _SCALE, ICON_SIZE * _SCALE)
+    pixmap = QPixmap(size * _SCALE, size * _SCALE)
     pixmap.setDevicePixelRatio(_SCALE)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     # Glyphs are drawn in their 24-grid design coordinates; this scale maps
-    # them onto the (smaller) emitted size, pen width included.
-    painter.scale(ICON_SIZE / _CANVAS, ICON_SIZE / _CANVAS)
-    pen = QPen(QGuiApplication.palette().color(QPalette.Text), _STROKE)
+    # them onto the emitted size, pen width included.
+    painter.scale(size / _CANVAS, size / _CANVAS)
+    pen = QPen(QGuiApplication.palette().color(QPalette.Text), stroke)
     pen.setCapStyle(Qt.RoundCap)
     pen.setJoinStyle(Qt.RoundJoin)
     painter.setPen(pen)

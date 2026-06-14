@@ -41,3 +41,17 @@ def test_glyphs_are_distinct(qtbot):
 def test_unknown_glyph_name_raises():
     with pytest.raises(KeyError):
         toolbar_icon("nonexistent")
+
+
+def test_thinner_stroke_paints_fewer_pixels(qtbot):
+    # The stroke argument must actually reach the pen: a thinner stroke covers
+    # less of the glyph, so it paints strictly fewer opaque pixels at one size.
+    def opaque(stroke):
+        image = toolbar_icon("rect", ICON_SIZE, stroke).pixmap(ICON_SIZE, ICON_SIZE).toImage()
+        return sum(
+            image.pixelColor(x, y).alpha() > 0
+            for x in range(image.width())
+            for y in range(image.height())
+        )
+
+    assert opaque(1.5) < opaque(2.5)
