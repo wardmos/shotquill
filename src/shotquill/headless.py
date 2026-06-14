@@ -40,6 +40,21 @@ EXIT_BLOCKED = 6
 EXIT_INVALID_INPUT = 7
 
 
+def printable(text: str) -> str:
+    """Drop control characters from an app-supplied string before it is shown.
+
+    A window's title and its owner (the WM_CLASS on X11, the executable name on
+    Windows) are set by the owning app, as is any text OCR reads off the screen,
+    so an untrusted/hostile source could embed ANSI escapes or other terminal
+    control sequences that would hijack the terminal once the string is printed.
+    Anything that reaches a human surface raw (the CLI table, an error message,
+    an MCP text block) goes through here. JSON output is already escaped by
+    ``json.dumps``. Normal text (including CJK and accents) is ``isprintable``
+    and survives unchanged.
+    """
+    return "".join(c for c in text if c.isprintable())
+
+
 class HeadlessError(Exception):
     """Base for typed headless failures; ``exit_code`` is the CLI contract."""
 
@@ -236,8 +251,12 @@ def _refuse_if_blocked(window: WindowInfo, blocklist, *, via: str) -> None:
     from shotquill import audit
 
     audit.record("capture_blocked", via=via, target=target)
+    # The owner (WM_CLASS on X11) is app-controlled and this message is printed
+    # raw to the terminal by the CLI, so strip control chars to keep a hostile
+    # blocklisted app from smuggling ANSI escapes through the refusal.
     raise CaptureBlocked(
-        f"{window.owner} is on the app blocklist (rule {rule.describe()}); refusing to capture it"
+        f"{printable(window.owner)} is on the app blocklist "
+        f"(rule {rule.describe()}); refusing to capture it"
     )
 
 

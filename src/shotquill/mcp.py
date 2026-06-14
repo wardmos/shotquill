@@ -387,10 +387,14 @@ def _tool_list_displays(args: dict):
 def _tool_ocr(args: dict):
     recognizer = headless.get_recognizer()  # fail fast before any capture
     path = args.get("path")
-    if path and any(args.get(key) is not None for key in ("window_id", "app", "title", "region")):
+    if path and any(
+        args.get(key) is not None for key in ("window_id", "app", "title", "region", "display")
+    ):
         # Silently OCRing the file while ignoring the capture target would
         # answer a different question than the agent asked.
-        raise ValueError("path and capture targets (window_id/app/title/region) are exclusive")
+        raise ValueError(
+            "path and capture targets (window_id/app/title/region/display) are exclusive"
+        )
     if path:
         from PySide6.QtGui import QImage
 
@@ -425,7 +429,11 @@ def _tool_ocr(args: dict):
         ]
         structured["passed"] = textassert.all_passed(checks)
 
-    return [{"type": "text", "text": "\n".join(lines)}], structured
+    # OCR'd text is attacker-controllable (it comes off the screen) and an MCP
+    # host may render this block in a terminal, so strip control chars the same
+    # way the CLI does. The structured `lines` stay raw for programmatic use.
+    text = "\n".join(headless.printable(line) for line in lines)
+    return [{"type": "text", "text": text}], structured
 
 
 def _tool_doctor(args: dict):

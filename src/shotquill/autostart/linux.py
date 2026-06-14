@@ -40,12 +40,16 @@ _EXEC_RESERVED = set(" \t\n\"'\\><~|&;$*?#()`")
 def _quote_exec_arg(arg: str) -> str:
     """Quote one Exec= argument per the freedesktop Desktop Entry spec.
 
-    Args with no reserved char pass through bare (so a plain path stays
-    readable); otherwise the arg is double-quoted and the four chars that keep
-    meaning inside double quotes — ``\\ " ` $`` — are backslash-escaped, so a
-    path containing a quote or ``$`` can't break out of the field or be
-    interpreted by the launcher.
+    A literal ``%`` is a field code (``%f``, ``%u``, …) to the launcher, so it
+    is first doubled to ``%%`` — required whether or not the arg ends up quoted,
+    or a path containing ``%`` would be mis-launched at login. Args with no
+    reserved char then pass through bare (so a plain path stays readable);
+    otherwise the arg is double-quoted and the four chars that keep meaning
+    inside double quotes — ``\\ " ` $`` — are backslash-escaped, so a path
+    containing a quote or ``$`` can't break out of the field or be interpreted
+    by the launcher.
     """
+    arg = arg.replace("%", "%%")
     if not any(c in _EXEC_RESERVED for c in arg):
         return arg
     escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$")

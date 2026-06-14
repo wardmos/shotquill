@@ -70,6 +70,15 @@ def test_desktop_entry_quotes_paths_with_spaces():
     assert exec_line == 'Exec="/home/a b/ShotQuill.AppImage"'
 
 
+def test_desktop_entry_doubles_literal_percent_in_exec():
+    # A literal ``%`` in a path is a field code (``%f``/``%u``) to the launcher,
+    # so it must be doubled or the entry is mis-launched at login. A bare path
+    # with no other reserved char stays unquoted.
+    body = autostart_linux.build_autostart_desktop(["/home/u%er/bin/python"])
+    exec_line = next(line for line in body.splitlines() if line.startswith("Exec="))
+    assert exec_line == "Exec=/home/u%%er/bin/python"
+
+
 def test_gui_desktop_and_icon_files_ship_in_packaging():
     # Sanity guard for the two files pyproject's ``[tool.setuptools.data-files]``
     # references — a rename or accidental deletion would silently break the

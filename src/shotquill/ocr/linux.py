@@ -52,9 +52,18 @@ def _probe_languages(binary: str) -> set[str]:
         )
     except (OSError, subprocess.SubprocessError):
         return set()
-    # The first line is a human-readable header ("List of available languages…");
-    # every line after it is one language code.
-    return {line.strip() for line in proc.stdout.splitlines()[1:] if line.strip()}
+    # Tesseract prints a human-readable header ("List of available languages…")
+    # then one language code per line. Some builds/locales send the header to
+    # stderr, so dropping stdout line 0 positionally can swallow a real code
+    # (e.g. chi_sim). Filter by shape instead: a code is a single whitespace-free
+    # token, while the header line always contains spaces.
+    langs: set[str] = set()
+    for stream in (proc.stdout, proc.stderr):
+        for line in stream.splitlines():
+            token = line.strip()
+            if token and len(token.split()) == 1:
+                langs.add(token)
+    return langs
 
 
 def _installed_languages(binary: str) -> set[str]:
