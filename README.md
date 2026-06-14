@@ -240,6 +240,7 @@ squill capture --display 1 -o second.png  # one monitor (`squill displays` lists
 squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
+squill capture --reveal 40,12,180,20 -o shot.png # mosaic all but this rectangle
 squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
@@ -265,6 +266,13 @@ The parts agents rely on:
   `capture` and `record frame` tools take the same `mask` (as `{x,y,width,height}`
   objects); on a recorded frame the mask also hides the region from the OCR
   assertion, not just the archive.
+- **Or reveal only the action.** `--reveal X,Y,W,H` (repeatable) is the inverse:
+  it mosaics the *whole* frame and keeps only the given rectangle(s) sharp, so a
+  recorded frame shows what the agent did without leaving the rest of the screen
+  legible — minimize exposure to just the action. Each mosaic cell is the
+  average of its source block (a lone pixel can't survive), so it isn't
+  reversible, though the revealed window stays fully readable. Same coordinates,
+  same `reveal` arg on the MCP tools; composes with `mask`.
 - **OCR reads the screen directly.** `squill ocr --app safari` (or
   `--window-id`, `--region`, or nothing for the full screen) captures and
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
