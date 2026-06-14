@@ -140,6 +140,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="also file this capture as an observation frame in a recording session "
         "(handle from `record start`)",
     )
+    capture.add_argument(
+        "--mask",
+        action="append",
+        metavar="X,Y,W,H",
+        help="black out a rectangle (image-relative logical coords) before output; "
+        "repeatable. A caller-controlled redaction layered on the blocklist.",
+    )
     capture.set_defaults(func=_cmd_capture)
 
     windows = sub.add_parser(
@@ -319,6 +326,12 @@ def _add_record_parser(sub) -> None:
         action="store_true",
         help="make --contains / --matches case-insensitive",
     )
+    frame.add_argument(
+        "--mask",
+        action="append",
+        metavar="X,Y,W,H",
+        help="black out a rectangle (image-relative logical coords) before filing; repeatable",
+    )
     frame.add_argument("--json", action="store_true", help="machine-readable output")
     frame.set_defaults(func=_cmd_record_frame)
 
@@ -376,9 +389,24 @@ def _validate_target(args: argparse.Namespace):
         raise _UsageError(str(exc)) from None
 
 
-def _capture_image(args: argparse.Namespace, region, include_cursor: bool = False):
+def _parse_masks(args: argparse.Namespace):
+    """Parse repeatable ``--mask x,y,w,h`` into logical rectangles (or empty)."""
+    masks = []
+    for spec in getattr(args, "mask", None) or ():
+        try:
+            masks.append(headless.parse_region(spec))
+        except ValueError as exc:
+            raise _UsageError(f"--mask {exc}") from None
+    return masks
+
+
+def _capture_image(args: argparse.Namespace, region, include_cursor: bool = False, masks=()):
     """Run one capture and return ``(QImage, target, matched)``; warn on stderr
-    when an app/title match was ambiguous, mirroring the MCP metadata."""
+    when an app/title match was ambiguous, mirroring the MCP metadata.
+
+    ``masks`` are caller-supplied rectangles painted out before the frame leaves
+    the raw-pixel stage, so the masked region never reaches the QImage, the
+    file, or a recorded copy."""
     capturer = headless.get_capturer(include_cursor=include_cursor)
     result, target, matched = headless.perform_capture(
         capturer,
@@ -396,6 +424,7 @@ def _capture_image(args: argparse.Namespace, region, include_cursor: bool = Fals
             file=sys.stderr,
         )
 
+    result = headless.apply_masks(result, list(masks))
     from shotquill.imaging import result_to_qimage
 
     return result_to_qimage(result), target, matched
@@ -418,7 +447,10 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     include_cursor = args.include_cursor and not args.deterministic
     try:
         region = _validate_target(args)
-        image, target, matched = _capture_image(args, region, include_cursor=include_cursor)
+        masks = _parse_masks(args)
+        image, target, matched = _capture_image(
+            args, region, include_cursor=include_cursor, masks=masks
+        )
     except _UsageError as exc:
         return _usage_error(str(exc))
 
@@ -551,6 +583,7 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     try:
         session = record.resolve_session(args.session)
         region = _validate_target(args)
+        masks = _parse_masks(args)
     except record.RecordError as exc:
         print(f"squill: {exc}", file=sys.stderr)
         return 1
@@ -585,6 +618,9 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    # Caller masks apply before OCR too, so a masked field is hidden from the
+    # assertion as well as the archived frame.
+    result = headless.apply_masks(result, masks)
     from shotquill.imaging import result_to_qimage
 
     image = result_to_qimage(result)

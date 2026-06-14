@@ -239,6 +239,7 @@ squill capture --region 0,0,800,600 -o -  # stream PNG bytes to a pipe
 squill capture --display 1 -o second.png  # one monitor (`squill displays` lists them)
 squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill capture --deterministic -o shot.png # byte-stable output for golden tests
+squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
 squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
@@ -257,6 +258,13 @@ The parts agents rely on:
   and strips PNG timestamp/text chunks (and forces the cursor off), so identical
   pixels always encode to identical bytes — what a golden-image diff or content
   hash needs across machines. The MCP `capture` tool takes the same flag.
+- **Mask out a region before output.** `--mask X,Y,W,H` (repeatable) blacks out
+  a rectangle — in the captured frame's own logical coordinates — before the
+  image reaches a file, a pipe, or a model. A caller-controlled redaction
+  layered on the app blocklist: blank a field you know holds a secret. The MCP
+  `capture` and `record frame` tools take the same `mask` (as `{x,y,width,height}`
+  objects); on a recorded frame the mask also hides the region from the OCR
+  assertion, not just the archive.
 - **OCR reads the screen directly.** `squill ocr --app safari` (or
   `--window-id`, `--region`, or nothing for the full screen) captures and
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and

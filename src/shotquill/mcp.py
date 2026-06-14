@@ -241,8 +241,39 @@ def _validate_target(args: dict) -> Rect | None:
     return rect
 
 
-def _capture_image(args: dict):
-    """Capture per the shared target args and return (QImage, target, matched)."""
+def _parse_masks(args: dict) -> list[Rect]:
+    """Parse the optional ``mask`` array into logical rectangles (image-relative).
+
+    Each is an object ``{x, y, width, height}`` in the captured frame's own
+    point space — a caller-controlled redaction layered on the blocklist (D14).
+    """
+    raw = args.get("mask") or []
+    if not isinstance(raw, list):
+        raise ValueError("mask must be an array of {x, y, width, height} objects")
+    masks: list[Rect] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("each mask must be an object {x, y, width, height}")
+        try:
+            rect = Rect(
+                x=int(item["x"]),
+                y=int(item["y"]),
+                width=int(item["width"]),
+                height=int(item["height"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("each mask must be {x, y, width, height} of integers") from None
+        if rect.width <= 0 or rect.height <= 0:
+            raise ValueError("mask width/height must be positive")
+        masks.append(rect)
+    return masks
+
+
+def _capture_image(args: dict, masks: list[Rect] | None = None):
+    """Capture per the shared target args and return (QImage, target, matched).
+
+    ``masks`` are caller rectangles painted out before the raw pixels become a
+    QImage, so a masked region never reaches the model, a file, or a frame."""
     region = _validate_target(args)
     capturer = headless.get_capturer()
     result, target, matched = headless.perform_capture(
@@ -254,6 +285,7 @@ def _capture_image(args: dict):
         display=args.get("display"),
         via="mcp",
     )
+    result = headless.apply_masks(result, masks or [])
     from shotquill.imaging import result_to_qimage
 
     return result_to_qimage(result), target, matched
@@ -263,7 +295,7 @@ def _tool_capture(args: dict):
     fmt = args.get("format") or "png"
     if fmt not in ("png", "jpg", "jpeg"):
         raise ValueError(f"format must be png or jpg — got {fmt!r}")
-    image, target, matched = _capture_image(args)
+    image, target, matched = _capture_image(args, _parse_masks(args))
 
     max_width = args.get("max_width")
     if max_width is not None:
@@ -438,6 +470,7 @@ def _tool_record_frame(args: dict):
     matches = tuple(args.get("matches") or ())
     asserting = bool(contains or matches)
     recognizer = headless.get_recognizer() if asserting else None
+    masks = _parse_masks(args)
 
     # Mirror the CLI record path: load the blocklist once, keep redaction on, and
     # record `redacted` as whether protection was in force (see record.py).
@@ -454,6 +487,9 @@ def _tool_record_frame(args: dict):
         blocklist=blocklist,
         via="record",
     )
+    # Caller masks apply before OCR too, so a masked field is hidden from the
+    # assertion as well as the archived frame.
+    result = headless.apply_masks(result, masks)
     from shotquill.imaging import result_to_qimage
 
     image = result_to_qimage(result)
@@ -520,6 +556,29 @@ def _tool_record_end(args: dict):
 
 
 # --- tool descriptors --------------------------------------------------------
+
+_MASK_PROPERTY = {
+    "mask": {
+        "type": "array",
+        "description": (
+            "Rectangles to black out before the frame is used anywhere, in the "
+            "captured frame's own logical coordinates (0,0 = its top-left). A "
+            "caller-controlled redaction layered on the blocklist — mask a field "
+            "you know holds a secret so it never reaches the model, a file, or a "
+            "recorded frame."
+        ),
+        "items": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
+            },
+            "required": ["x", "y", "width", "height"],
+        },
+    },
+}
 
 _TARGET_PROPERTIES = {
     "window_id": {
@@ -650,6 +709,7 @@ _TOOLS = {
                             "one-off (no effect when not recording)."
                         ),
                     },
+                    **_MASK_PROPERTY,
                 },
                 "additionalProperties": False,
             },
@@ -875,6 +935,7 @@ _TOOLS = {
                         "default": False,
                         "description": "Make contains/matches case-insensitive.",
                     },
+                    **_MASK_PROPERTY,
                     **_TARGET_PROPERTIES,
                 },
                 "required": ["session", "tool"],

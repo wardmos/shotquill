@@ -452,6 +452,25 @@ def _redact_window_overlaps(
     return result
 
 
+def apply_masks(result: CaptureResult, masks: list[Rect]) -> CaptureResult:
+    """Paint solid blocks over caller-supplied rectangles before the frame is
+    used anywhere — the dynamic, caller-controlled redaction layer (D14).
+
+    Coordinates are **image-relative logical points**: ``(0, 0)`` is the frame's
+    own top-left, so a caller masks a rectangle within the screenshot it asked
+    for without needing to know where on the virtual desktop it was captured.
+    Reuses the same hardened fill path as the blocklist, and stacks on top of it
+    (the blocklist already ran inside ``perform_capture``). Returns the input
+    unchanged when there are no masks.
+    """
+    if not masks:
+        return result
+    from shotquill import redact
+
+    masked, _ = redact.redact_bounds(result, (0, 0), masks)
+    return masked
+
+
 def windows_payload(windows: list[WindowInfo]) -> list[dict]:
     """The machine-readable window list shared by ``--json`` and MCP."""
     return [
