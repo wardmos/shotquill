@@ -26,11 +26,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -c packaging/constraints-release.txt -e ".[dev]"
+        run: uv pip install --system -c packaging/constraints-release.txt -e ".[dev]"
       - name: Lint (ruff)
         run: ruff check src tests
       - name: Format check (ruff)
@@ -69,6 +72,11 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
+          # Key the cache on the dependency inputs so it survives across runs and
+          # rebuilds only when the pins (or pyproject) actually change.
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
         # Build deps are pinned so re-running this workflow on the same commit
         # reproduces the same bundle; upgrades go through that file in a PR. uv
@@ -159,6 +167,11 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
+          # Key the cache on the dependency inputs so it survives across runs and
+          # rebuilds only when the pins (or pyproject) actually change.
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
         # Same pinned build deps as the macOS bundle, for a reproducible build.
         # uv installs from its global cache via hardlinks (much faster than pip).
@@ -214,6 +227,11 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
+          # Key the cache on the dependency inputs so it survives across runs and
+          # rebuilds only when the pins (or pyproject) actually change.
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
         # Same pinned build deps as the macOS/Linux bundles, for a reproducible
         # build. ``pillow`` only renders the .ico (the build degrades without it).

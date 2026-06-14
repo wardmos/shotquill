@@ -42,6 +42,11 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
+          # Key the cache on the dependency inputs so it survives across runs and
+          # rebuilds only when the pins (or pyproject) actually change.
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
         # Same pins as the release workflow, so the smoke build exercises the
         # exact environment a release would ship with. uv installs from its
@@ -87,6 +92,11 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
+          # Key the cache on the dependency inputs so it survives across runs and
+          # rebuilds only when the pins (or pyproject) actually change.
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
         # Same pins as the release workflow, so the smoke build exercises the
         # exact environment a release would ship with. uv installs from its
@@ -142,6 +152,11 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
+          # Key the cache on the dependency inputs so it survives across runs and
+          # rebuilds only when the pins (or pyproject) actually change.
+          cache-dependency-glob: |
+            pyproject.toml
+            packaging/constraints-release.txt
       - name: Install dependencies
         # ``pillow`` is only needed to render the .ico; the build degrades to no
         # custom icon without it, but the smoke build folds it in to exercise
