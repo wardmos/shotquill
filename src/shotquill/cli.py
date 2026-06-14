@@ -147,6 +147,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="black out a rectangle (image-relative logical coords) before output; "
         "repeatable. A caller-controlled redaction layered on the blocklist.",
     )
+    capture.add_argument(
+        "--reveal",
+        action="append",
+        metavar="X,Y,W,H",
+        help="mosaic the whole frame, keeping only these rectangle(s) sharp; "
+        "repeatable. Minimizes exposure to just the action (image-relative coords).",
+    )
     capture.set_defaults(func=_cmd_capture)
 
     windows = sub.add_parser(
@@ -332,6 +339,12 @@ def _add_record_parser(sub) -> None:
         metavar="X,Y,W,H",
         help="black out a rectangle (image-relative logical coords) before filing; repeatable",
     )
+    frame.add_argument(
+        "--reveal",
+        action="append",
+        metavar="X,Y,W,H",
+        help="mosaic the whole frame, keeping only these rectangle(s) sharp; repeatable",
+    )
     frame.add_argument("--json", action="store_true", help="machine-readable output")
     frame.set_defaults(func=_cmd_record_frame)
 
@@ -389,24 +402,37 @@ def _validate_target(args: argparse.Namespace):
         raise _UsageError(str(exc)) from None
 
 
+def _parse_rects(specs, flag: str):
+    """Parse repeatable ``x,y,w,h`` specs into logical rectangles (or empty)."""
+    rects = []
+    for spec in specs or ():
+        try:
+            rects.append(headless.parse_region(spec))
+        except ValueError as exc:
+            raise _UsageError(f"{flag} {exc}") from None
+    return rects
+
+
 def _parse_masks(args: argparse.Namespace):
     """Parse repeatable ``--mask x,y,w,h`` into logical rectangles (or empty)."""
-    masks = []
-    for spec in getattr(args, "mask", None) or ():
-        try:
-            masks.append(headless.parse_region(spec))
-        except ValueError as exc:
-            raise _UsageError(f"--mask {exc}") from None
-    return masks
+    return _parse_rects(getattr(args, "mask", None), "--mask")
 
 
-def _capture_image(args: argparse.Namespace, region, include_cursor: bool = False, masks=()):
+def _parse_reveal(args: argparse.Namespace):
+    """Parse repeatable ``--reveal x,y,w,h`` into logical rectangles (or empty)."""
+    return _parse_rects(getattr(args, "reveal", None), "--reveal")
+
+
+def _capture_image(
+    args: argparse.Namespace, region, include_cursor: bool = False, masks=(), reveal=()
+):
     """Run one capture and return ``(QImage, target, matched)``; warn on stderr
     when an app/title match was ambiguous, mirroring the MCP metadata.
 
     ``masks`` are caller-supplied rectangles painted out before the frame leaves
     the raw-pixel stage, so the masked region never reaches the QImage, the
-    file, or a recorded copy."""
+    file, or a recorded copy. ``reveal`` mosaics the whole frame, keeping only
+    those rectangles sharp (minimize exposure to just the action)."""
     capturer = headless.get_capturer(include_cursor=include_cursor)
     result, target, matched = headless.perform_capture(
         capturer,
@@ -425,9 +451,9 @@ def _capture_image(args: argparse.Namespace, region, include_cursor: bool = Fals
         )
 
     result = headless.apply_masks(result, list(masks))
-    from shotquill.imaging import result_to_qimage
+    from shotquill.imaging import pixelate_except, result_to_qimage
 
-    return result_to_qimage(result), target, matched
+    return pixelate_except(result_to_qimage(result), list(reveal), result.scale), target, matched
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
@@ -448,8 +474,9 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     try:
         region = _validate_target(args)
         masks = _parse_masks(args)
+        reveal = _parse_reveal(args)
         image, target, matched = _capture_image(
-            args, region, include_cursor=include_cursor, masks=masks
+            args, region, include_cursor=include_cursor, masks=masks, reveal=reveal
         )
     except _UsageError as exc:
         return _usage_error(str(exc))
@@ -584,6 +611,7 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         session = record.resolve_session(args.session)
         region = _validate_target(args)
         masks = _parse_masks(args)
+        reveal = _parse_reveal(args)
     except record.RecordError as exc:
         print(f"squill: {exc}", file=sys.stderr)
         return 1
@@ -618,12 +646,12 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    # Caller masks apply before OCR too, so a masked field is hidden from the
-    # assertion as well as the archived frame.
+    # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
+    # from the assertion, not just the archived frame.
     result = headless.apply_masks(result, masks)
-    from shotquill.imaging import result_to_qimage
+    from shotquill.imaging import pixelate_except, result_to_qimage
 
-    image = result_to_qimage(result)
+    image = pixelate_except(result_to_qimage(result), reveal, result.scale)
     image_bytes = headless.encode_qimage(image, "png")
 
     # Assert on the very pixels being filed (post-redaction), so the recorded
