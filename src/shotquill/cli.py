@@ -14,8 +14,8 @@ Contract (agents rely on it):
   options as ``capture`` to recognize straight off the screen in one step.
 - Exit codes: 0 ok, 1 other error, 2 usage, 3 permission denied,
   4 capability unavailable on this platform/session, 5 no window or display
-  matched, 6 blocked by the app blocklist. They are printed in every
-  ``--help`` so agents can discover them.
+  matched, 6 blocked by the app blocklist, 7 invalid input. They are printed in
+  every ``--help`` so agents can discover them.
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ _EXIT_ASSERTION_FAILED = 20
 _EXIT_CODE_EPILOG = (
     "exit codes: 0 ok; errors 1-19 (1 error, 2 usage, 3 permission denied, "
     "4 capability unavailable on this platform/session, 5 no window or display "
-    "matched, 6 blocked by the app blocklist); assertion results 20+ "
-    "(20 OCR assertion failed)"
+    "matched, 6 blocked by the app blocklist, 7 invalid input); assertion "
+    "results 20+ (20 OCR assertion failed)"
 )
 
 

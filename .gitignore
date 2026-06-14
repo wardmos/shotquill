@@ -145,3 +145,4 @@ tmp/
 *.md
 !/README.md
 !/skills/**/*.md
+!/docs/**/*.md
