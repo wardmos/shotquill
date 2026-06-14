@@ -138,6 +138,19 @@ def test_probe_languages_parses_list(monkeypatch):
     assert linux._probe_languages("tesseract") == {"eng", "chi_sim"}
 
 
+def test_probe_languages_keeps_codes_when_header_goes_to_stderr(monkeypatch):
+    # Some Tesseract builds print the "List of available languages" banner to
+    # stderr; dropping stdout line 0 positionally would then swallow a real code.
+    def fake_run(args, **kwargs):
+        return _FakeProc(
+            stdout="eng\nchi_sim\n",
+            stderr="List of available languages (2):\n",
+        )
+
+    monkeypatch.setattr(linux.subprocess, "run", fake_run)
+    assert linux._probe_languages("tesseract") == {"eng", "chi_sim"}
+
+
 def test_probe_languages_empty_on_error(monkeypatch):
     def boom(args, **kwargs):
         raise OSError("no binary")

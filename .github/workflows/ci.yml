@@ -28,7 +28,7 @@ jobs:
           cache: pip
       - name: Install ruff
         # Pin kept in lockstep with pyproject's dev extra so local and CI agree.
-        run: pip install ruff==0.15.15
+        run: pip install ruff==0.15.17
       - name: Lint (ruff)
         run: ruff check src tests
       - name: Format check (ruff)

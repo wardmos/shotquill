@@ -89,6 +89,20 @@ def test_app_capture_of_allowed_app_proceeds():
     assert "Safari" in target
 
 
+def test_blocked_refusal_strips_control_chars_from_owner():
+    # The owner is app-controlled and the message is printed raw to the terminal,
+    # so a hostile blocklisted app must not be able to smuggle ANSI escapes
+    # through the refusal text.
+    evil = WindowInfo(33, "ev\x1b]0;pwned\x07il", "x", Rect(0, 0, 80, 60), bundle_id="com.evil.app")
+    rules = bl.Blocklist((bl.BlockRule(bundle_id="com.evil.app"),))
+    cap = FakeCapturer(windows=[evil])
+    with pytest.raises(headless.CaptureBlocked) as exc:
+        headless.perform_capture(cap, window_id=33, blocklist=rules)
+    assert "\x1b" not in str(exc.value)
+    assert "\x07" not in str(exc.value)
+    assert "ev]0;pwnedil" in str(exc.value)
+
+
 def test_window_id_capture_of_blocked_window_is_refused():
     cap = FakeCapturer(windows=[ONEPW])
     with pytest.raises(headless.CaptureBlocked):

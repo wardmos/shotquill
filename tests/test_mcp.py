@@ -455,6 +455,29 @@ def test_ocr_path_and_capture_target_is_invalid_arguments(fake_recognizer, fake_
     assert fake_capturer.calls == []  # neither interpretation was guessed at
 
 
+def test_ocr_text_block_strips_control_chars(fake_capturer, isolated_audit, monkeypatch):
+    # OCR'd text is attacker-controllable; the rendered text block must drop
+    # control chars (an MCP host may show it in a terminal), while the structured
+    # `lines` stay raw for programmatic use.
+    class _Recognizer:
+        def recognize(self, image):
+            return ["safe\x1b]0;pwn\x07line", "world"]
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _Recognizer())
+    result = call("ocr", {"app": "notes"})["result"]
+    assert result["content"] == [{"type": "text", "text": "safe]0;pwnline\nworld"}]
+    assert result["structuredContent"]["lines"] == ["safe\x1b]0;pwn\x07line", "world"]
+
+
+def test_ocr_path_and_display_is_invalid_arguments(fake_recognizer, fake_capturer):
+    # display is a capture target too; OCRing the file while ignoring it would
+    # answer a different question than the agent asked (matches the CLI guard).
+    result = call("ocr", {"path": "/tmp/x.png", "display": 0})["result"]
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
+    assert fake_capturer.calls == []
+
+
 def test_ocr_fails_fast_when_recognizer_unavailable(fake_capturer, monkeypatch):
     def _nope():
         raise headless.CapabilityUnsupported("ocr", "requires macOS Vision")

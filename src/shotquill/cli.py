@@ -737,17 +737,9 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
     return 0
 
 
-def _printable(text: str) -> str:
-    """Drop control characters before printing an app-supplied string raw.
-
-    A window's title and its owner (the WM_CLASS on X11, the executable name on
-    Windows) are set by the owning app, so an untrusted/hostile one could embed
-    ANSI escapes or other terminal control sequences that would hijack the
-    terminal when ``squill windows`` prints the table. JSON output is already
-    escaped by ``json.dumps``; this guards the human table. Normal text
-    (including CJK and accents) is ``isprintable`` and survives unchanged.
-    """
-    return "".join(c for c in text if c.isprintable())
+# Strip control chars before printing app-supplied strings raw to the terminal;
+# defined in headless so the CLI and MCP surfaces share one implementation.
+_printable = headless.printable
 
 
 def _cmd_windows(args: argparse.Namespace) -> int:

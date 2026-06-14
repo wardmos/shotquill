@@ -60,10 +60,12 @@ class VisionTextRecognizer(TextRecognizer):
         if not ok:
             return []
 
-        # Vision returns observations in detection order; sort top-to-bottom
-        # (boundingBox origin is bottom-left, so larger y is higher up).
+        # Vision returns observations in detection order; sort top-to-bottom,
+        # then left-to-right (boundingBox origin is bottom-left, so larger y is
+        # higher up). Without the x tiebreak, same-row text keeps detection
+        # order, which can jumble a multi-column layout the assertions read.
         observations = list(request.results() or [])
-        observations.sort(key=lambda obs: -obs.boundingBox().origin.y)
+        observations.sort(key=lambda obs: (-obs.boundingBox().origin.y, obs.boundingBox().origin.x))
 
         lines = []
         for obs in observations:
