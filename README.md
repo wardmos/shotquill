@@ -43,6 +43,7 @@ editor to annotate, redact, and extract text first.
 [Usage](#usage) ·
 [Scripting & agents (CLI · MCP)](docs/scripting.md) ·
 [App blocklist](#app-blocklist) ·
+[App allowlist](#app-allowlist) ·
 [Configuration](#configuration) ·
 [Troubleshooting](#troubleshooting) ·
 [Privacy](#privacy) ·
@@ -309,6 +310,73 @@ silently passed through), and an unreadable blocklist file fails *closed*
 
 ---
 
+## App allowlist
+
+The inverse of the blocklist, and a tighter leash. The blocklist names what may
+*never* be captured; the allowlist, **when you enable it**, flips the default —
+ShotQuill then captures *only* the apps you list and refuses everything else.
+It is especially useful for agents driving the CLI or MCP: pin the allowlist to
+the one or two apps a task needs and the agent cannot wander off and screenshot
+your mail, chats, or desktop. **Disabled by default**, so it never gets in the
+way until you ask for it.
+
+Manage it from **Settings → Allowed apps…** (tick the box to turn it on), from
+the command line, or by hand-editing the JSON file:
+
+```bash
+squill allowlist add --bundle-id com.apple.Terminal
+squill allowlist add --name firefox       # app-name substring
+squill allowlist enable                    # turn the restriction on
+squill allowlist list                      # shows enabled state + rules (--json)
+squill allowlist disable                   # back to normal capture
+squill allowlist remove --name firefox
+```
+
+When the allowlist is **enabled**:
+
+- a window or app capture is refused unless its target is on the list;
+- a **whole-screen capture (full-screen, region, or display) is refused
+  outright** — its "only these apps" promise cannot be kept for a grab of
+  everything, so the caller must target a specific window (`--window-id`) or app
+  (`--app`);
+- a refused capture exits `6` (the MCP `capture` tool returns error
+  `type: "blocked"`), and every refusal is audit-logged as `capture_not_allowed`.
+
+It stacks with the blocklist: a window must be **both** off the blocklist **and**
+on the allowlist to be captured. The rule shape is identical to the blocklist
+(`bundle_id` exact match, or `name` substring). The file lives next to the
+blocklist:
+
+- macOS: `~/Library/Application Support/shotquill/allowlist.json`
+- Windows: `%APPDATA%\shotquill\allowlist.json`
+- elsewhere: `$XDG_CONFIG_HOME/shotquill/allowlist.json`
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "rules": [
+    { "bundle_id": "com.apple.Terminal" },
+    { "name": "firefox" }
+  ]
+}
+```
+
+Two things to know: an allowlist that is **enabled with no rules** allows
+nothing — a deliberate full lockdown, surfaced by `squill doctor` and the
+editor rather than left as mysterious blanket refusals; and like the blocklist
+it fails *closed* — an unreadable file, or a by-id capture on a backend that
+cannot enumerate windows to verify the target, is refused rather than passed
+through. The same boundary applies: this constrains ShotQuill's own capture
+paths against an over-eager or prompt-injected agent, not an adversary with code
+execution.
+
+> **For agents:** the allowlist can only be changed from the CLI or the GUI —
+> it is deliberately **not** exposed over MCP, so an agent on the leash cannot
+> loosen its own. Set it up before handing control over.
+
+---
+
 ## Configuration
 
 Open **Settings…** from the menu-bar icon:
@@ -331,6 +399,8 @@ Open **Settings…** from the menu-bar icon:
 - **Include mouse pointer** (off) — composite the cursor into captures.
 - **Blocked apps…** — manage the [app blocklist](#app-blocklist) (apps that are
   never captured).
+- **Allowed apps…** — manage the [app allowlist](#app-allowlist) (when enabled,
+  the only apps that *can* be captured; off by default).
 - **Launch at login** — installs a per-user `LaunchAgent`.
 - **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
 
@@ -427,6 +497,10 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 - **Sensitive apps can be blocklisted.** Name a password manager (or any app)
   and ShotQuill refuses to capture its windows and paints it out of full-screen
   shots — for the GUI, CLI, and agents alike. See [App blocklist](#app-blocklist).
+- **Agents can be put on an allowlist.** Flip the default the other way: enable
+  the [app allowlist](#app-allowlist) and ShotQuill captures *only* the apps you
+  name, refusing every other window and every whole-screen grab — a tight leash
+  for an agent on the CLI or MCP, off by default.
 - **No telemetry.** ShotQuill makes no network requests of its own.
 - **Programmatic captures are accountable.** Scripts and AI agents using the
   CLI or the MCP server go through the same OS consent as any app — macOS
@@ -544,6 +618,7 @@ a clean slate:
 | Settings                    | `~/Library/Preferences/com.wardmos.ShotQuill.plist` |
 | Launch-at-login agent       | `~/Library/LaunchAgents/com.wardmos.shotquill.plist` (only if enabled in Settings) |
 | Blocklist                   | `~/Library/Application Support/shotquill/blocklist.json` |
+| Allowlist                   | `~/Library/Application Support/shotquill/allowlist.json` |
 | Audit log                   | `~/Library/Logs/shotquill/`                        |
 | Your screenshots            | `~/Pictures/ShotQuill/` (or your configured folder) — yours to keep |
 
@@ -559,6 +634,7 @@ pipx uninstall shotquill               # pipx install
 | Settings                    | `~/.config/wardmos/ShotQuill.conf` (QSettings INI) |
 | Autostart entry             | `~/.config/autostart/shotquill.desktop` (only if enabled in Settings) |
 | Blocklist                   | `${XDG_CONFIG_HOME:-~/.config}/shotquill/blocklist.json` |
+| Allowlist                   | `${XDG_CONFIG_HOME:-~/.config}/shotquill/allowlist.json` |
 | Audit log                   | `${XDG_STATE_HOME:-~/.local/state}/shotquill/`     |
 | Your screenshots            | `~/Pictures/ShotQuill/` (or your configured folder) — yours to keep |
 

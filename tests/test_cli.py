@@ -486,6 +486,81 @@ def test_blocklist_add_requires_a_selector(tmp_path, capsys):
     assert exc.value.code == 2
 
 
+# --- allowlist management ---------------------------------------------------
+
+
+def _load_allowlist(tmp_path):
+    from shotquill import allowlist as al
+
+    return al.load(tmp_path / "allowlist.json")
+
+
+def test_allowlist_starts_disabled_and_empty(tmp_path, capsys):
+    assert cli.main(["allowlist", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "enabled: no" in out
+    assert "(no rules)" in out
+
+
+def test_allowlist_add_then_list(tmp_path, capsys):
+    assert cli.main(["allowlist", "add", "--bundle-id", "com.apple.Terminal"]) == 0
+    capsys.readouterr()
+    assert cli.main(["allowlist", "add", "--name", "firefox"]) == 0
+    capsys.readouterr()
+    assert cli.main(["allowlist", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "com.apple.Terminal" in out and "name~firefox" in out
+
+
+def test_allowlist_enable_and_disable(tmp_path, capsys):
+    cli.main(["allowlist", "add", "--name", "firefox"])
+    capsys.readouterr()
+    assert cli.main(["allowlist", "enable"]) == 0
+    assert _load_allowlist(tmp_path).enabled is True
+    assert cli.main(["allowlist", "disable"]) == 0
+    loaded = _load_allowlist(tmp_path)
+    assert loaded.enabled is False
+    assert loaded.rules  # disabling keeps the rules
+
+
+def test_allowlist_enable_with_no_rules_warns(tmp_path, capsys):
+    assert cli.main(["allowlist", "enable"]) == 0
+    assert "nothing can be captured" in capsys.readouterr().err
+    assert _load_allowlist(tmp_path).enabled is True
+
+
+def test_allowlist_list_json(tmp_path, capsys):
+    cli.main(["allowlist", "add", "--bundle-id", "com.x"])
+    cli.main(["allowlist", "enable"])
+    capsys.readouterr()
+    assert cli.main(["allowlist", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "enabled": True,
+        "rules": [{"bundle_id": "com.x"}],
+    }
+
+
+def test_allowlist_remove(tmp_path, capsys):
+    cli.main(["allowlist", "add", "--name", "firefox"])
+    capsys.readouterr()
+    assert cli.main(["allowlist", "remove", "--name", "firefox"]) == 0
+    assert _load_allowlist(tmp_path).rules == ()
+
+
+def test_doctor_reports_enabled_allowlist(fake_capturer, tmp_path, capsys):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    al.save(
+        al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),)),
+        tmp_path / "allowlist.json",
+    )
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "app_allowlist" in out
+    assert "ENABLED" in out
+
+
 def test_windows_json(fake_capturer, capsys):
     assert cli.main(["windows", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)

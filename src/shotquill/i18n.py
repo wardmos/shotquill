@@ -229,6 +229,36 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "The blocklist file couldn't be read; starting from an empty list.",
         "zh": "排除名单文件无法读取，已从空列表开始。",
     },
+    "settings.allowlist": {"en": "Allowed apps", "zh": "白名单"},
+    "settings.allowlist_button": {"en": "Allowed apps…", "zh": "白名单…"},
+    # Allowlist editor
+    "allowlist.title": {"en": "Allowed apps", "zh": "白名单应用"},
+    "allowlist.enabled": {
+        "en": "Restrict capture to the allowlist (only these apps can be captured)",
+        "zh": "限制为只截白名单内的应用(仅这些应用可被截图)",
+    },
+    "allowlist.hint": {
+        "en": "When enabled, ONLY these apps can be captured — every other window, and "
+        "any full-screen or region shot, is refused. A tight leash for agents using "
+        "the CLI or MCP. Disabled by default.",
+        "zh": "开启后只有这些应用能被截图——其它窗口、以及任何全屏或区域截图都会被拒绝。"
+        "适合给通过 CLI 或 MCP 工作的 agent 套上紧约束。默认关闭。",
+    },
+    "allowlist.type_bundle": {"en": "Bundle ID", "zh": "Bundle ID"},
+    "allowlist.type_name": {"en": "App name", "zh": "应用名"},
+    "allowlist.add": {"en": "Add", "zh": "添加"},
+    "allowlist.remove": {"en": "Remove", "zh": "移除"},
+    "allowlist.add_running": {"en": "Add running app…", "zh": "添加运行中的应用…"},
+    "allowlist.pick_running": {"en": "Pick a running app", "zh": "选择一个运行中的应用"},
+    "allowlist.corrupt": {
+        "en": "The allowlist file couldn't be read; starting from an empty list.",
+        "zh": "白名单文件无法读取，已从空列表开始。",
+    },
+    "allowlist.empty_enabled": {
+        "en": "The allowlist is on but has no rules, so nothing can be captured. Add an "
+        "app, or turn the allowlist off.",
+        "zh": "白名单已开启但没有任何规则,因此什么都截不了。请添加一个应用,或关闭白名单。",
+    },
 }
 
 # Localized display names for keys shown in tooltips, keyed by the Qt

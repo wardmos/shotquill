@@ -19,6 +19,14 @@ The [app blocklist](../README.md#app-blocklist) (apps that are never captured)
 applies to the CLI and MCP too; its `squill blocklist` commands are documented
 with the feature in the main README.
 
+The [app allowlist](../README.md#app-allowlist) is the inverse leash, made for
+exactly this surface: enable it and ShotQuill captures *only* the apps you list,
+refusing every other window and every whole-screen grab with exit code `6`. Pin
+it to the apps a task needs before handing an agent the CLI or MCP and the agent
+cannot screenshot anything else. It is configured with `squill allowlist`
+(enable / add / remove / list) — deliberately **not** over MCP, so the agent on
+the leash cannot loosen its own.
+
 ---
 
 ## Command line
@@ -105,7 +113,7 @@ from a negative result:
 | | `3` | permission denied |
 | | `4` | capability unavailable on this platform/session |
 | | `5` | no window or display matched |
-| | `6` | blocked by the app blocklist |
+| | `6` | blocked by the blocklist, or not on the allowlist |
 | | `7` | invalid input (e.g. an image past the size cap) |
 | **assertion results `20`+** | `20` | OCR assertion failed |
 

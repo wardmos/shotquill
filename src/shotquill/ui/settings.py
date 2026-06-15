@@ -367,6 +367,10 @@ class SettingsDialog(QDialog):
         self._blocklist_button.clicked.connect(self._open_blocklist)
         form.addRow(t("settings.blocklist"), self._blocklist_button)
 
+        self._allowlist_button = QPushButton(t("settings.allowlist_button"))
+        self._allowlist_button.clicked.connect(self._open_allowlist)
+        form.addRow(t("settings.allowlist"), self._allowlist_button)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
@@ -396,6 +400,13 @@ class SettingsDialog(QDialog):
         from shotquill.ui.blocklist_dialog import BlocklistDialog
 
         BlocklistDialog(self).exec()
+
+    def _open_allowlist(self) -> None:
+        # Same as the blocklist editor: writes the allowlist file directly
+        # (including its enabled toggle), independent of this dialog's OK/Cancel.
+        from shotquill.ui.allowlist_dialog import AllowlistDialog
+
+        AllowlistDialog(self).exec()
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(

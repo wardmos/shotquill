@@ -101,6 +101,18 @@ def blocklist_path() -> Path:
     return config_dir() / "blocklist.json"
 
 
+def allowlist_path() -> Path:
+    """The capture allowlist file (when enabled, only these apps are captured).
+
+    The complement of the blocklist and, like it, a plain hand-editable JSON
+    file the GUI, CLI, and MCP server all read. It carries its own ``enabled``
+    flag (default off) inside the file rather than in QSettings, so the headless
+    surface enforces it without a running Qt application — the same reason the
+    blocklist lives in a file.
+    """
+    return config_dir() / "allowlist.json"
+
+
 def audit_log_path() -> Path:
     """Where the JSONL audit log lives (parent directory is created).
 
