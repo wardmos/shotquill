@@ -37,9 +37,11 @@ shotquill_docs/feature-agent-flight-recorder.md (D15).
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import html
 import json
 import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -232,6 +234,7 @@ def record_frame(
     kind: str = KIND_ACTION,
     assertions: list[dict] | None = None,
     image_ext: str = "png",
+    dedup: bool = False,
     now: dt.datetime | None = None,
 ) -> FrameRecord:
     """File one already-encoded, already-redacted frame under the session.
@@ -245,11 +248,28 @@ def record_frame(
     a frame in the trace. Not safe to call concurrently for one session — a trace
     is one agent's linear run, and the next index is read from the manifest on
     each call.
+
+    ``dedup`` drops the cost of an unchanged screen: when the new bytes are
+    identical to the previous frame's image, the new frame *references* that same
+    file instead of writing a duplicate (and is flagged ``deduped`` in the
+    manifest). It still gets its own frame entry — it is a distinct step in the
+    timeline, it just shares pixels. Byte-identity is reliable when frames are
+    encoded deterministically (the CLI record path does); without that, an
+    unchanged screen may still differ byte-wise and simply won't be deduped.
     """
     manifest = _load_open_manifest(session)
     index = len(manifest["frames"]) + 1
+    digest = hashlib.sha256(image_bytes).hexdigest()
     rel_image = f"{FRAMES_SUBDIR}/{index:04d}.{image_ext}"
-    (session.dir / rel_image).write_bytes(image_bytes)
+    deduped = False
+    if dedup and manifest["frames"]:
+        previous = manifest["frames"][-1]
+        if previous.get("image_sha256") == digest:
+            # Same pixels as the last frame: point at its file, write nothing.
+            rel_image = previous["image"]
+            deduped = True
+    if not deduped:
+        (session.dir / rel_image).write_bytes(image_bytes)
 
     passed = all(check["passed"] for check in assertions) if assertions else None
     frame = FrameRecord(
@@ -266,6 +286,11 @@ def record_frame(
     # A traceable call id without the OTel SDK: a frame is uniquely the Nth tool
     # call of this conversation.
     entry = frame.as_manifest_entry(tool_call_id=f"{session.id}/frame/{index}")
+    # Content digest of the stored image: lets the next frame dedup against this
+    # one, and doubles as an integrity check on the archived pixels.
+    entry["image_sha256"] = digest
+    if deduped:
+        entry["deduped"] = True
     if assertions:
         entry["assertions"] = [dict(check) for check in assertions]
     manifest["frames"].append(entry)
@@ -289,6 +314,117 @@ def end_session(session: Session, *, now: dt.datetime | None = None) -> Path:
     session.filmstrip_path.write_text(render_filmstrip(manifest), encoding="utf-8")
     _write_otlp(session, manifest)
     return session.filmstrip_path
+
+
+# --- retention --------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    """A read-only view of one session on disk, for listing and pruning."""
+
+    id: str
+    dir: Path
+    started_at: str | None
+    status: str | None
+    frame_count: int
+    size_bytes: int
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                total += child.stat().st_size
+        except OSError:
+            continue  # a file vanished mid-walk — ignore, this is a size estimate
+    return total
+
+
+def _parse_started(started_at: str | None) -> dt.datetime | None:
+    if not started_at:
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(started_at)
+    except ValueError:
+        return None
+    # Make naive timestamps comparable to the aware cutoff below.
+    return moment.astimezone() if moment.tzinfo is None else moment
+
+
+def list_sessions(records_root: Path | None = None) -> list[SessionSummary]:
+    """Summarize every session under the records root, newest first.
+
+    Skips directories without a readable manifest (a foreign or half-written
+    dir is not a session), so this never raises on a messy records folder.
+    """
+    root = records_root if records_root is not None else _default_records_root()
+    if not root.is_dir():
+        return []
+    summaries: list[SessionSummary] = []
+    for child in sorted(root.iterdir()):
+        manifest_path = child / MANIFEST_NAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = _read_manifest(manifest_path)
+        except RecordError:
+            continue  # corrupt or future-version manifest: leave it alone
+        summaries.append(
+            SessionSummary(
+                id=manifest.get("conversation_id", child.name),
+                dir=child,
+                started_at=manifest.get("started_at"),
+                status=manifest.get("status"),
+                frame_count=len(manifest.get("frames", [])),
+                size_bytes=_dir_size(child),
+            )
+        )
+    # Newest first; the time-prefixed id is a stable fallback when started_at
+    # is missing, so the order is deterministic either way.
+    summaries.sort(key=lambda s: (s.started_at or "", s.id), reverse=True)
+    return summaries
+
+
+def prune_sessions(
+    records_root: Path | None = None,
+    *,
+    max_age_days: float | None = None,
+    max_sessions: int | None = None,
+    now: dt.datetime | None = None,
+    dry_run: bool = False,
+) -> list[SessionSummary]:
+    """Delete archived sessions to cap the records folder's cost.
+
+    Two independent limits, applied together (a session hit by either goes):
+    ``max_age_days`` removes sessions started longer ago than that; ``max_sessions``
+    keeps only the newest N. An in-progress (``recording``) session is never a
+    candidate — only ``complete`` ones are reaped, so a live trace can't be pulled
+    out from under the agent writing it. Returns the summaries that were (or, with
+    ``dry_run``, would be) removed.
+    """
+    summaries = list_sessions(records_root)
+    # Only finished sessions are eligible; recordings in flight are off-limits.
+    complete = [s for s in summaries if s.status == STATUS_COMPLETE]
+
+    doomed: dict[str, SessionSummary] = {}
+    if max_sessions is not None and max_sessions >= 0:
+        # complete is already newest-first (inherited from list_sessions order).
+        for summary in complete[max_sessions:]:
+            doomed[summary.id] = summary
+    if max_age_days is not None:
+        cutoff = (now or dt.datetime.now().astimezone()) - dt.timedelta(days=max_age_days)
+        for summary in complete:
+            started = _parse_started(summary.started_at)
+            if started is not None and started < cutoff:
+                doomed[summary.id] = summary
+
+    removed = [s for s in summaries if s.id in doomed]
+    if not dry_run:
+        for summary in removed:
+            shutil.rmtree(summary.dir, ignore_errors=True)
+    return removed
 
 
 def _write_otlp(session: Session, manifest: dict) -> None:

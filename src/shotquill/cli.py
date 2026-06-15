@@ -345,6 +345,19 @@ def _add_record_parser(sub) -> None:
         metavar="X,Y,W,H",
         help="mosaic the whole frame, keeping only these rectangle(s) sharp; repeatable",
     )
+    frame.add_argument(
+        "--dedup",
+        action="store_true",
+        help="if this frame is identical to the previous one, reference it instead "
+        "of writing a duplicate image (cost control)",
+    )
+    frame.add_argument(
+        "--max-dimension",
+        type=int,
+        default=0,
+        metavar="PX",
+        help="cap the frame's longer edge to PX pixels before filing (0 = keep native size)",
+    )
     frame.add_argument("--json", action="store_true", help="machine-readable output")
     frame.set_defaults(func=_cmd_record_frame)
 
@@ -356,6 +369,39 @@ def _add_record_parser(sub) -> None:
     end.add_argument("--session", required=True, help="session handle from `record start`")
     end.add_argument("--json", action="store_true", help="machine-readable output")
     end.set_defaults(func=_cmd_record_end)
+
+    ls = rec_sub.add_parser(
+        "list",
+        help="list recorded sessions (newest first) with size and frame count",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    ls.add_argument("--json", action="store_true", help="machine-readable output")
+    ls.set_defaults(func=_cmd_record_list)
+
+    prune = rec_sub.add_parser(
+        "prune",
+        help="delete old recorded sessions to cap disk cost (complete sessions only)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    prune.add_argument(
+        "--max-age-days",
+        type=float,
+        metavar="DAYS",
+        help="remove sessions started more than DAYS ago",
+    )
+    prune.add_argument(
+        "--max-sessions",
+        type=int,
+        metavar="N",
+        help="keep only the newest N sessions",
+    )
+    prune.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be removed without deleting anything",
+    )
+    prune.add_argument("--json", action="store_true", help="machine-readable output")
+    prune.set_defaults(func=_cmd_record_prune)
 
 
 def _add_target_options(command: argparse.ArgumentParser) -> None:
@@ -649,10 +695,15 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
     # from the assertion, not just the archived frame.
     result = headless.apply_masks(result, masks)
-    from shotquill.imaging import pixelate_except, result_to_qimage
+    from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal, result.scale)
-    image_bytes = headless.encode_qimage(image, "png")
+    # Cap the long edge before OCR/encoding so the archived frame and the
+    # assertion read the very same (possibly shrunk) pixels (D12 cost control).
+    image = downscale_to_max(image, args.max_dimension)
+    # Deterministic encoding (pinned DPI, no volatile PNG chunks) so an unchanged
+    # screen encodes byte-for-byte the same and `--dedup` can spot it.
+    image_bytes = headless.encode_qimage(image, "png", deterministic=True)
 
     # Assert on the very pixels being filed (post-redaction), so the recorded
     # frame and its verdict always agree.
@@ -678,6 +729,7 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         label=args.label,
         redacted=bool(blocklist),
         assertions=assertions,
+        dedup=args.dedup,
     )
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_frame", via="record", target=target, dest=dest)
@@ -734,6 +786,83 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
         )
     else:
         print(html_path)
+    return 0
+
+
+def _format_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}GB"
+
+
+def _cmd_record_list(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    summaries = record.list_sessions()
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "conversation_id": s.id,
+                        "dir": str(s.dir.resolve()),
+                        "started_at": s.started_at,
+                        "status": s.status,
+                        "frames": s.frame_count,
+                        "size_bytes": s.size_bytes,
+                    }
+                    for s in summaries
+                ],
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if not summaries:
+        print("squill: no recorded sessions", file=sys.stderr)
+        return 0
+    print(f"{'STARTED':<25}{'STATUS':<11}{'FRAMES':>7}  {'SIZE':>8}  SESSION")
+    for s in summaries:
+        started = s.started_at or "?"
+        print(
+            f"{started:<25}{(s.status or '?'):<11}{s.frame_count:>7}  "
+            f"{_format_size(s.size_bytes):>8}  {_printable(s.id)}"
+        )
+    return 0
+
+
+def _cmd_record_prune(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    if args.max_age_days is None and args.max_sessions is None:
+        return _usage_error("record prune needs --max-age-days and/or --max-sessions")
+    removed = record.prune_sessions(
+        max_age_days=args.max_age_days,
+        max_sessions=args.max_sessions,
+        dry_run=args.dry_run,
+    )
+    freed = sum(s.size_bytes for s in removed)
+    if not args.dry_run:
+        audit.record("record_prune", via="record", target=f"{len(removed)} sessions")
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "removed": [s.id for s in removed],
+                    "count": len(removed),
+                    "freed_bytes": freed,
+                    "dry_run": args.dry_run,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    verb = "would remove" if args.dry_run else "removed"
+    for s in removed:
+        print(f"{verb} {_printable(s.id)} ({_format_size(s.size_bytes)})", file=sys.stderr)
+    print(f"{verb} {len(removed)} session(s), {_format_size(freed)}")
     return 0
 
 
