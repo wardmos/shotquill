@@ -196,3 +196,43 @@ def test_present_overlay_builds_controller_on_multi_display_macos(qtbot, monkeyp
     assert isinstance(brain._controller, SmartOverlayController)
     for view in brain._controller._views:
         qtbot.addWidget(view)
+
+
+def test_present_overlay_single_window_on_single_output_wayland(qtbot, monkeypatch):
+    # One Wayland output: a single fullscreen surface already covers it, so the
+    # single-window path is kept (no controller).
+    brain = _brain(qtbot)
+    monkeypatch.setattr(smart_overlay.sys, "platform", "linux")
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: True)
+    calls = []
+    monkeypatch.setattr(brain, "present", lambda: calls.append(True))
+
+    present_overlay(brain, QGuiApplication.instance())  # offscreen: one screen
+
+    assert calls == [True]
+    assert not hasattr(brain, "_controller")
+
+
+def test_present_overlay_uses_fullscreen_views_on_multi_output_wayland(qtbot, monkeypatch):
+    # Several Wayland outputs: each gets its own fullscreen view sharing the
+    # brain, since one fullscreen surface only covers the output it lands on.
+    brain = _brain(qtbot)
+    monkeypatch.setattr(smart_overlay.sys, "platform", "linux")
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: True)
+
+    real_screen = QGuiApplication.screens()[0]
+
+    class _TwoScreenApp:
+        def screens(self):
+            return [real_screen, real_screen]
+
+    present_overlay(brain, _TwoScreenApp())
+
+    # The controller always builds one view per real QScreen (offscreen reports
+    # one); what this asserts is that the Wayland multi-output branch was taken
+    # and its views present themselves fullscreen rather than as plain windows.
+    assert isinstance(brain._controller, SmartOverlayController)
+    assert brain._controller._views
+    assert all(view._fullscreen for view in brain._controller._views)
+    for view in brain._controller._views:
+        qtbot.addWidget(view)

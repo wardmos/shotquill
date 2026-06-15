@@ -728,14 +728,22 @@ class _ScreenOverlay(QWidget):
     Holds no capture state: it paints the brain's frame translated into its own
     screen's local space and forwards input (translated to virtual-desktop
     coords) back to the brain, which owns all selection/hover/loupe logic. The
-    controller creates one per :class:`QScreen` so macOS gets a window on every
-    display — a single virtual-desktop window only composites on one display
-    under per-display Spaces — and each view renders at its own screen's dpr.
+    controller creates one per :class:`QScreen` so every display gets a window:
+    macOS, where a single virtual-desktop window only composites on one display
+    under per-display Spaces, and Wayland, where a single fullscreen surface only
+    covers the output it lands on. Each view renders at its own screen's dpr.
+
+    ``fullscreen`` picks how the window owns its display: a Wayland output is
+    claimed with ``showFullScreen`` (the compositor ignores a set position /
+    stay-on-top hint), while macOS keeps the stay-on-top window and raises its
+    NSWindow above the menu bar.
     """
 
-    def __init__(self, brain: SmartOverlay, screen, vorigin: QPoint) -> None:
+    def __init__(self, brain: SmartOverlay, screen, vorigin: QPoint, *, fullscreen=False) -> None:
         super().__init__()
         self._brain = brain
+        self._screen = screen
+        self._fullscreen = fullscreen
         self._on_focus_change = None  # set by the controller
         geometry = screen.geometry()
         # This screen's position within the brain's virtual-desktop coords: add
@@ -752,14 +760,26 @@ class _ScreenOverlay(QWidget):
         return QPointF(pos.x() + self._offset.x(), pos.y() + self._offset.y())
 
     def present(self) -> None:
-        from shotquill.ui import macos_window
+        if self._fullscreen:
+            # Wayland: the compositor owns geometry and stacking and ignores a
+            # set position / stay-on-top hint, so each view goes fullscreen on
+            # its own output. Pin the screen before the native surface maps so
+            # the fullscreen request targets the right monitor.
+            self.createWinId()
+            handle = self.windowHandle()
+            if handle is not None and self._screen is not None:
+                handle.setScreen(self._screen)
+            self.showFullScreen()
+        else:
+            from shotquill.ui import macos_window
 
-        self.show()
+            self.show()
+            self.raise_()
+            # Push the native window above the menu bar and onto every Space so
+            # the overlay covers the whole display (menu bar included) and shows
+            # on the external monitor too. No-op off macOS / without pyobjc.
+            macos_window.raise_above_menubar(self)
         self.raise_()
-        # Push the native window above the menu bar and onto every Space so the
-        # overlay covers the whole display (menu bar included) and appears on the
-        # external monitor too. No-op off macOS / without pyobjc.
-        macos_window.raise_above_menubar(self)
         self.activateWindow()
         self.setFocus()
 
@@ -794,21 +814,26 @@ class _ScreenOverlay(QWidget):
 class SmartOverlayController:
     """Drives one :class:`SmartOverlay` brain across one window per screen.
 
-    Used on macOS with more than one display, where a single virtual-desktop
-    window only shows on one of them. The brain is never shown; it holds all
-    state and emits ``changed`` whenever it needs a repaint, which fans out to
-    every per-screen view. A selection started on one display therefore
-    continues onto another, and each view raises its NSWindow above the menu bar.
+    Used where a single window can't cover every display: macOS with more than
+    one display (per-display Spaces) and multi-output Wayland (per-output
+    fullscreen). The brain is never shown; it holds all state and emits
+    ``changed`` whenever it needs a repaint, which fans out to every per-screen
+    view. A selection started on one display therefore continues onto another.
+    ``fullscreen`` is forwarded to each view to pick how it owns its display
+    (Wayland fullscreen vs. macOS menu-bar-level stay-on-top).
 
     Kept alive by the brain (``brain._controller``), so it shares the brain's
     lifetime: when the brain closes (accept/cancel) the views close with it.
     """
 
-    def __init__(self, brain: SmartOverlay) -> None:
+    def __init__(self, brain: SmartOverlay, *, fullscreen=False) -> None:
         self._brain = brain
         self._finished = False
         vorigin = brain._geometry.topLeft()
-        self._views = [_ScreenOverlay(brain, s, vorigin) for s in QGuiApplication.screens()]
+        self._views = [
+            _ScreenOverlay(brain, s, vorigin, fullscreen=fullscreen)
+            for s in QGuiApplication.screens()
+        ]
         for view in self._views:
             view._on_focus_change = self._on_focus_change
         brain.changed.connect(self._repaint_views)
@@ -881,11 +906,20 @@ def present_overlay(overlay: SmartOverlay, app) -> None:
     one of them (per-display Spaces). Both are fixed by driving the overlay
     through one :class:`SmartOverlayController`-managed window per screen, each
     raised above the menu bar — so the per-screen path is taken for *all* macOS,
-    single display included. Everywhere else the single stay-on-top (X11) or
-    Wayland-fullscreen window already owns the whole desktop, so present it directly.
+    single display included.
+
+    On Wayland a single fullscreen surface only covers the output it lands on, so
+    with more than one display the others get no overlay; there the controller
+    gives each output its own fullscreen view. A single-output Wayland session,
+    and X11 (one window already spans the whole virtual desktop), present the
+    single window directly.
     """
     if sys.platform == "darwin":
         controller = SmartOverlayController(overlay)
+        overlay._controller = controller  # share the brain's lifetime
+        controller.present()
+    elif _compositor_prefers_fullscreen() and len(app.screens()) > 1:
+        controller = SmartOverlayController(overlay, fullscreen=True)
         overlay._controller = controller  # share the brain's lifetime
         controller.present()
     else:
