@@ -392,20 +392,23 @@ class ShotquillApp(QObject):
         self._deliver_capture(result_to_qimage(result), origin)
 
     def _redact_window_overlaps(self, result, target: QRect):
-        """Hide blocklisted windows stacked over the target when the grab may
-        have read them off the framebuffer (no-compositor X11). Surface-accurate
-        backends grab only the target's own pixels, so this is a no-op there —
-        the capability is read defensively in case the backend predates it."""
+        """Hide windows stacked over the target whose pixels must not leak, when
+        the grab may have read them off the framebuffer (no-compositor X11):
+        blocklisted windows, and — when the allowlist is on — windows that are
+        not allowed. Surface-accurate backends grab only the target's own pixels,
+        so this is a no-op there — the capability is read defensively in case the
+        backend predates it."""
         includes = getattr(self._capturer, "window_capture_includes_overlaps", None)
         if includes is None or not includes():
             return result
         from shotquill.capture.base import Rect
 
         target_rect = Rect(target.x(), target.y(), target.width(), target.height())
+        # Union both per-session sets (keyed by id, so a window that is both
+        # blocklisted and not-allowed is redacted once).
+        hide = {**self._blocked_windows, **self._not_allowed_windows}
         overlaps = [
-            w.bounds
-            for w in self._blocked_windows.values()
-            if redact.rect_intersects(target_rect, w.bounds)
+            w.bounds for w in hide.values() if redact.rect_intersects(target_rect, w.bounds)
         ]
         if not overlaps:
             return result

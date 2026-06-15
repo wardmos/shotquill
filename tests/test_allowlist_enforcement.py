@@ -24,14 +24,17 @@ from shotquill.capture.base import CaptureResult, Rect, WindowInfo
 
 
 class FakeCapturer:
-    def __init__(self, windows=None, list_raises=None):
+    def __init__(self, windows=None, list_raises=None, includes_overlaps=False):
         self.include_cursor = False
         self._windows = windows or []
         self._list_raises = list_raises
+        # When True, model a no-compositor X11 grab whose window capture reads the
+        # framebuffer, so windows stacked over the target bleed into the result.
+        self._includes_overlaps = includes_overlaps
         self.captured = []
 
     def window_capture_includes_overlaps(self):
-        return False
+        return self._includes_overlaps
 
     def _result(self):
         return CaptureResult(
@@ -63,6 +66,11 @@ TERMINAL = WindowInfo(12, "Terminal", "zsh", Rect(0, 0, 80, 60), bundle_id="com.
 TERM_ONLY = al.Allowlist(enabled=True, rules=(bl.BlockRule(bundle_id="com.apple.Terminal"),))
 DISABLED = al.Allowlist(enabled=False, rules=(bl.BlockRule(bundle_id="com.apple.Terminal"),))
 EMPTY = bl.Blocklist()  # an empty blocklist, passed alongside the allowlist under test
+
+
+def _all_black(result):
+    """Whether every pixel is opaque black — i.e. the frame was fully redacted."""
+    return all(b == 0 for i, b in enumerate(result.pixels) if i % 4 != 3)
 
 
 @pytest.fixture(autouse=True)
@@ -196,6 +204,46 @@ def test_blocklist_still_wins_over_allowlist():
     with pytest.raises(headless.CaptureBlocked):
         headless.perform_capture(cap, app="terminal", blocklist=block_term, allowlist=TERM_ONLY)
     assert cap.captured == []
+
+
+# --- overlap redaction on the no-compositor X11 window grab -----------------
+#
+# Capturing an allowed window on a framebuffer-read backend also reads any window
+# stacked over it. A non-allowlisted window must be painted out, or the allowlist
+# leaks the very apps it exists to keep out.
+
+
+def test_window_capture_redacts_not_allowed_overlap_on_framebuffer_backend():
+    # Terminal is allowed; Safari (not on the allowlist) is stacked over it. The
+    # allowed target is captured, but Safari's overlapping pixels are painted out.
+    cap = FakeCapturer(windows=[TERMINAL, SAFARI], includes_overlaps=True)
+    result, _, _ = headless.perform_capture(cap, window_id=12, blocklist=EMPTY, allowlist=TERM_ONLY)
+    assert cap.captured == [("window", 12)]
+    assert _all_black(result)  # the non-allowed Safari overlap is gone
+
+
+def test_app_capture_redacts_not_allowed_overlap_on_framebuffer_backend():
+    cap = FakeCapturer(windows=[TERMINAL, SAFARI], includes_overlaps=True)
+    result, target, _ = headless.perform_capture(
+        cap, app="terminal", blocklist=EMPTY, allowlist=TERM_ONLY
+    )
+    assert "Terminal" in target
+    assert _all_black(result)
+
+
+def test_window_capture_keeps_overlap_on_surface_backend():
+    # Surface-accurate backend: the grab sees only Terminal's own pixels, so a
+    # non-allowed window over it is irrelevant — nothing is redacted.
+    cap = FakeCapturer(windows=[TERMINAL, SAFARI], includes_overlaps=False)
+    result, _, _ = headless.perform_capture(cap, window_id=12, blocklist=EMPTY, allowlist=TERM_ONLY)
+    assert not _all_black(result)
+
+
+def test_window_capture_ignores_non_overlapping_not_allowed_window():
+    far = WindowInfo(99, "Safari", "x", Rect(500, 500, 80, 60), bundle_id="com.apple.safari")
+    cap = FakeCapturer(windows=[TERMINAL, far], includes_overlaps=True)
+    result, _, _ = headless.perform_capture(cap, window_id=12, blocklist=EMPTY, allowlist=TERM_ONLY)
+    assert not _all_black(result)  # the non-allowed window doesn't intersect the target
 
 
 # --- audit + safety ---------------------------------------------------------
