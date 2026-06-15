@@ -33,7 +33,7 @@ from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
-from shotquill.ui.smart_overlay import SmartOverlay
+from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
 
 
 def _build_icon() -> QIcon:
@@ -303,10 +303,12 @@ class ShotquillApp(QObject):
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
         overlay.destroyed.connect(self._unshelve_settings_dialog)
-        # present() shows the overlay the way the running compositor needs —
-        # fullscreen on Wayland (where stay-on-top + geometry are ignored), a
-        # stay-on-top top-level on X11/macOS — then raises, activates, and focuses.
-        overlay.present()
+        # present_overlay shows the overlay the way the platform needs: one
+        # stay-on-top window spanning the virtual desktop (X11), Wayland
+        # fullscreen, or — on macOS, where a single window sits under the menu
+        # bar and only covers one display — one menu-bar-level window per screen
+        # sharing this overlay as their brain.
+        present_overlay(overlay, self._app)
 
     def _window_preview_image(self, window_id: int) -> QImage | None:
         """One window's un-occluded pixels for the overlay's hover preview.

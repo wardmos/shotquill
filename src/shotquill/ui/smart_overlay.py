@@ -38,10 +38,11 @@ nothing to restore. Region and full-screen modes are unaffected.
 
 from __future__ import annotations
 
+import sys
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -134,6 +135,11 @@ class SmartOverlay(QWidget):
     window_selected = Signal(int, QRect)
     fullscreen_selected = Signal()
     cancelled = Signal()
+    #: Internal: emitted whenever the overlay's state changes and a repaint is
+    #: due. On the single-window path nothing listens (the widget repaints
+    #: itself); the multi-screen controller connects it to repaint every
+    #: per-screen view that mirrors this shared brain.
+    changed = Signal()
     #: Internal: a fetched window preview (null QImage = fetch failed). Emitted
     #: from the fetch thread; the queued delivery hops back to the GUI thread.
     _preview_ready = Signal(int, QImage)
@@ -260,8 +266,19 @@ class SmartOverlay(QWidget):
 
     # --- painting ---------------------------------------------------------
 
+    def _refresh(self) -> None:
+        # Repaint this widget (the single-window path) and signal the
+        # multi-screen controller, if any, to repaint every per-screen view.
+        self.update()
+        self.changed.emit()
+
     def paintEvent(self, event) -> None:
-        painter = QPainter(self)
+        self._paint_all(QPainter(self))
+
+    def _paint_all(self, painter: QPainter) -> None:
+        # Drawn relative to the virtual-desktop origin. A per-screen view calls
+        # this with the painter translated by its screen offset, so the same
+        # code paints each display's slice; the single window calls it untranslated.
         painter.drawPixmap(self.rect(), self._pixmap)
         painter.fillRect(self.rect(), _DIM)
 
@@ -493,7 +510,7 @@ class SmartOverlay(QWidget):
                 dy = pos.y() - self._origin.y()
                 if (dx * dx + dy * dy) ** 0.5 > _DRAG_THRESHOLD:
                     self._dragging = True
-            self.update()
+            self._refresh()
             return
         hover = window_at_point(self._boxes, pos.x(), pos.y())
         previous = self._pending_hover
@@ -509,12 +526,12 @@ class SmartOverlay(QWidget):
             # so moving around inside one window still commits it.
             self._hover_timer.start()
         # The loupe follows every move, so repaint unconditionally.
-        self.update()
+        self._refresh()
 
     def _commit_hover(self) -> None:
         self._hover = self._pending_hover
         self._schedule_preview()
-        self.update()
+        self._refresh()
 
     # --- un-occluded window previews ---------------------------------------
 
@@ -560,7 +577,7 @@ class SmartOverlay(QWidget):
         # painting keeps using the frozen screenshot for that window.
         self._previews[window_id] = None if image.isNull() else QPixmap.fromImage(image)
         if self._hover is not None and self._windows[self._hover].window_id == window_id:
-            self.update()
+            self._refresh()
         else:
             # The pointer moved on while this fetch ran; arm a fetch for the
             # now-hovered window (if any) so it isn't starved by the busy gate.
@@ -576,28 +593,36 @@ class SmartOverlay(QWidget):
 
     def leaveEvent(self, event) -> None:
         self._cursor = None
-        self.update()
+        self._refresh()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.RightButton:
+        self._press(event.position(), event.button())
+
+    def _press(self, pos: QPointF, button) -> None:
+        # ``pos`` is in virtual-desktop coords; a per-screen view translates its
+        # local event before calling this so the shared logic stays coordinate-free.
+        if button == Qt.RightButton:
             self._cancel()
             return
-        if event.button() == Qt.LeftButton:
+        if button == Qt.LeftButton:
             # A quick move-and-click means "the thing under the cursor", even
             # when the debounced highlight hasn't caught up yet (and this is
             # the only way the highlight moves under HOVER_SWITCH_NEVER).
             self._commit_pending_hover()
-            self._origin = event.position()
-            self._current = event.position()
+            self._origin = pos
+            self._current = pos
             self._dragging = False
             self._press_hover = self._hover
-            self.update()
+            self._refresh()
 
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() != Qt.LeftButton or self._origin is None:
+        self._release(event.position(), event.button())
+
+    def _release(self, pos: QPointF, button) -> None:
+        if button != Qt.LeftButton or self._origin is None:
             return
-        self._current = event.position()
+        self._current = pos
         if self._dragging:
             self._accept_region()
         else:
@@ -637,13 +662,20 @@ class SmartOverlay(QWidget):
         dx, dy = _CURSOR_DELTAS[event.key()]
         step = _CURSOR_NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
         base = self._cursor
+        # Pointer state and the warp target are in virtual-desktop coords; map to
+        # global via the desktop origin rather than this widget's own position, so
+        # a headless multi-screen brain (never shown, so mapToGlobal is unusable)
+        # warps the real pointer correctly. On the single window the origin is the
+        # window's position, so this matches the old mapTo/FromGlobal behaviour.
+        origin = self._geometry.topLeft()
         if base is None:  # no pointer event seen yet (keys-first user)
-            base = QPointF(self.mapFromGlobal(QCursor.pos()))
+            global_pos = QCursor.pos()
+            base = QPointF(global_pos.x() - origin.x(), global_pos.y() - origin.y())
         target = QPointF(
-            min(max(base.x() + dx * step, 0.0), self.width() - 1.0),
-            min(max(base.y() + dy * step, 0.0), self.height() - 1.0),
+            min(max(base.x() + dx * step, 0.0), self._geometry.width() - 1.0),
+            min(max(base.y() + dy * step, 0.0), self._geometry.height() - 1.0),
         )
-        QCursor.setPos(self.mapToGlobal(target.toPoint()))
+        QCursor.setPos(QPoint(int(target.x()) + origin.x(), int(target.y()) + origin.y()))
         self._pointer_moved(target)
 
     def _accept_region(self) -> None:
@@ -688,3 +720,173 @@ class SmartOverlay(QWidget):
         self._closed = True  # one outcome only — see _accept_region
         self.cancelled.emit()
         self.close()
+
+
+class _ScreenOverlay(QWidget):
+    """One per-screen window mirroring a shared :class:`SmartOverlay` brain.
+
+    Holds no capture state: it paints the brain's frame translated into its own
+    screen's local space and forwards input (translated to virtual-desktop
+    coords) back to the brain, which owns all selection/hover/loupe logic. The
+    controller creates one per :class:`QScreen` so macOS gets a window on every
+    display — a single virtual-desktop window only composites on one display
+    under per-display Spaces — and each view renders at its own screen's dpr.
+    """
+
+    def __init__(self, brain: SmartOverlay, screen, vorigin: QPoint) -> None:
+        super().__init__()
+        self._brain = brain
+        self._on_focus_change = None  # set by the controller
+        geometry = screen.geometry()
+        # This screen's position within the brain's virtual-desktop coords: add
+        # it to a local point to get the brain coord, subtract it when painting.
+        self._offset = QPointF(geometry.x() - vorigin.x(), geometry.y() - vorigin.y())
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        # Same hidden-cursor + painted-crosshair scheme as the single window.
+        self.setCursor(Qt.BlankCursor)
+        self.setMouseTracking(True)
+        self.setGeometry(geometry)
+
+    def _to_brain(self, pos: QPointF) -> QPointF:
+        return QPointF(pos.x() + self._offset.x(), pos.y() + self._offset.y())
+
+    def present(self) -> None:
+        from shotquill.ui import macos_window
+
+        self.show()
+        self.raise_()
+        # Push the native window above the menu bar and onto every Space so the
+        # overlay covers the whole display (menu bar included) and appears on the
+        # external monitor too. No-op off macOS / without pyobjc.
+        macos_window.raise_above_menubar(self)
+        self.activateWindow()
+        self.setFocus()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        # Brain paints in virtual-desktop coords; shift so this screen's slice
+        # lands at local origin. Everything outside the window is clipped away.
+        painter.translate(-self._offset)
+        self._brain._paint_all(painter)
+
+    def mouseMoveEvent(self, event) -> None:
+        self._brain._pointer_moved(self._to_brain(event.position()))
+
+    def mousePressEvent(self, event) -> None:
+        self._brain._press(self._to_brain(event.position()), event.button())
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._brain._release(self._to_brain(event.position()), event.button())
+
+    def keyPressEvent(self, event) -> None:
+        # Keys carry no position; the brain nudges its own pointer state.
+        self._brain.keyPressEvent(event)
+
+    def changeEvent(self, event) -> None:
+        # The brain's own focus-steal cancel can't run (it is never shown), so
+        # the controller watches activation across all views instead.
+        if event.type() == QEvent.ActivationChange and self._on_focus_change is not None:
+            self._on_focus_change()
+        super().changeEvent(event)
+
+
+class SmartOverlayController:
+    """Drives one :class:`SmartOverlay` brain across one window per screen.
+
+    Used on macOS with more than one display, where a single virtual-desktop
+    window only shows on one of them. The brain is never shown; it holds all
+    state and emits ``changed`` whenever it needs a repaint, which fans out to
+    every per-screen view. A selection started on one display therefore
+    continues onto another, and each view raises its NSWindow above the menu bar.
+
+    Kept alive by the brain (``brain._controller``), so it shares the brain's
+    lifetime: when the brain closes (accept/cancel) the views close with it.
+    """
+
+    def __init__(self, brain: SmartOverlay) -> None:
+        self._brain = brain
+        self._finished = False
+        vorigin = brain._geometry.topLeft()
+        self._views = [_ScreenOverlay(brain, s, vorigin) for s in QGuiApplication.screens()]
+        for view in self._views:
+            view._on_focus_change = self._on_focus_change
+        brain.changed.connect(self._repaint_views)
+        # Mirror every terminal outcome to the views immediately (hide before the
+        # editor opens so a screensaver-level overlay can't flash over it), then
+        # the brain's destruction tears them down for good.
+        for signal in (
+            brain.region_selected,
+            brain.window_selected,
+            brain.fullscreen_selected,
+            brain.cancelled,
+        ):
+            signal.connect(self._finish)
+        brain.destroyed.connect(self._close_views)
+
+    def present(self) -> None:
+        for view in self._live_views():
+            view.present()
+
+    def _live_views(self):
+        # Views are WA_DeleteOnClose top-levels; skip any whose C++ object is
+        # already gone so a late signal (repaint/close after teardown) can't
+        # touch a dangling handle.
+        import shiboken6
+
+        return [v for v in self._views if shiboken6.isValid(v)]
+
+    def _repaint_views(self) -> None:
+        for view in self._live_views():
+            view.update()
+
+    def _finish(self, *args) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        for view in self._live_views():
+            view.hide()
+
+    def _close_views(self) -> None:
+        for view in self._live_views():
+            view.close()
+        self._views = []
+
+    def _on_focus_change(self) -> None:
+        # Cancel if focus left every one of our views (a hot corner, Cmd-Tab, a
+        # click in another app) — the single-window overlay does the same in its
+        # changeEvent. Deferred a tick so focus moving *between* our own views
+        # (clicking from one display to another) doesn't trip it.
+        if self._finished:
+            return
+
+        def check() -> None:
+            # Leans on every accept/cancel path setting ``_closed`` (and _finish
+            # setting ``_finished``) *before* the outcome signal is emitted: the
+            # editor the app opens on accept steals focus and would otherwise
+            # read as an abandon here. Both guards run before this deferred tick.
+            if self._finished or self._brain._closed:
+                return
+            if not any(v.isActiveWindow() for v in self._live_views()):
+                self._brain._cancel()
+
+        QTimer.singleShot(0, check)
+
+
+def present_overlay(overlay: SmartOverlay, app) -> None:
+    """Show the smart-capture overlay so it covers every display in full.
+
+    On macOS a plain stay-on-top window sits *under* the menu bar (so its top
+    strip can't be captured) and, with more than one display, only composites on
+    one of them (per-display Spaces). Both are fixed by driving the overlay
+    through one :class:`SmartOverlayController`-managed window per screen, each
+    raised above the menu bar — so the per-screen path is taken for *all* macOS,
+    single display included. Everywhere else the single stay-on-top (X11) or
+    Wayland-fullscreen window already owns the whole desktop, so present it directly.
+    """
+    if sys.platform == "darwin":
+        controller = SmartOverlayController(overlay)
+        overlay._controller = controller  # share the brain's lifetime
+        controller.present()
+    else:
+        overlay.present()

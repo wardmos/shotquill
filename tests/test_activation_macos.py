@@ -46,6 +46,20 @@ def _smart_overlay(app):
     return next((w for w in app._windows if isinstance(w, SmartOverlay)), None)
 
 
+def _presented_window(overlay):
+    """The window the user actually sees and that takes activation.
+
+    On macOS the overlay is driven by one per-screen view (the tracked
+    ``SmartOverlay`` is a never-shown 'brain'), so it is a view — not the brain —
+    that activates and whose deactivation fires the cancel guard. Off the
+    per-screen path the overlay shows itself.
+    """
+    controller = getattr(overlay, "_controller", None)
+    if controller is not None and controller._views:
+        return controller._views[0]
+    return overlay
+
+
 def test_smart_overlay_survives_the_real_event_loop(qapp, qtbot, config, fakes):
     # Baseline: with nothing else on screen, the overlay's cancel-on-deactivate
     # guard must not fire from ordinary window-server traffic.
@@ -91,15 +105,18 @@ def test_overlay_still_cancels_when_activation_is_genuinely_stolen(qapp, qtbot, 
     # activation (the real-world stand-in for Mission Control / Cmd-Tab), a
     # screen-covering overlay the user can't dismiss must remove itself.
     from PySide6.QtWidgets import QWidget
+    from pytestqt.exceptions import TimeoutError as QtBotTimeoutError
 
     app = _build_app(qapp)
     app._capture_smart()
     overlay = _smart_overlay(app)
     assert overlay is not None
 
+    # The presented per-screen view is what activates; the brain stays hidden.
+    presented = _presented_window(overlay)
     try:
-        qtbot.waitUntil(overlay.isActiveWindow, timeout=3000)
-    except TimeoutError:
+        qtbot.waitUntil(presented.isActiveWindow, timeout=3000)
+    except QtBotTimeoutError:
         overlay.close()
         app.shutdown()
         pytest.skip("window server never activated the overlay; guard not exercisable")
