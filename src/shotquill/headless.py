@@ -376,8 +376,10 @@ def perform_capture(
         if allowlist:
             _enforce_allowlist_window(allowlist, target, window_id, via=via)
         result = capturer.capture_window(window_id)
-        if target is not None and blocklist:
-            result = _redact_window_overlaps(result, capturer, target, windows, blocklist, via=via)
+        if target is not None and (blocklist or allowlist):
+            result = _redact_window_overlaps(
+                result, capturer, target, windows, blocklist, allowlist, via=via
+            )
         return result, f"window {window_id}", 1
     if app:
         windows = capturer.list_windows()
@@ -387,8 +389,10 @@ def perform_capture(
         if allowlist:
             _refuse_if_not_allowed(window, allowlist, via=via)
         result = capturer.capture_window(window.window_id)
-        if blocklist:
-            result = _redact_window_overlaps(result, capturer, window, windows, blocklist, via=via)
+        if blocklist or allowlist:
+            result = _redact_window_overlaps(
+                result, capturer, window, windows, blocklist, allowlist, via=via
+            )
         return result, f"{window.owner} — {window.title}", matched
     # Only whole-screen captures (fullscreen, region, display) remain. The
     # allowlist refuses them all; capture a specific window or app instead.
@@ -520,31 +524,47 @@ def _lookup_window(
     return target, windows
 
 
+def _overlap_must_hide(window: WindowInfo, blocklist, allowlist) -> bool:
+    """Whether ``window``'s pixels must not leak into a capture of another window.
+
+    True when the window is blocklisted, or — when the allowlist is enforcing —
+    not on it. Both lists protect the *captured image*: a blocklisted app must
+    never appear, and under an allowlist only allowed apps may, so an unrelated
+    window stacked over the target is a leak either way.
+    """
+    if blocklist.match(window) is not None:
+        return True
+    return bool(allowlist) and not allowlist.is_allowed(window)
+
+
 def _redact_window_overlaps(
     result: CaptureResult,
     capturer: ScreenCapturer,
     target: WindowInfo,
     windows: list[WindowInfo] | None,
     blocklist,
+    allowlist,
     *,
     via: str,
 ) -> CaptureResult:
-    """Solid-block any blocklisted window overlapping ``target`` when this
-    backend's window grab may include pixels stacked *above* it.
+    """Solid-block any window overlapping ``target`` whose pixels must not leak,
+    when this backend's window grab may include pixels stacked *above* it.
 
-    Only the no-compositor X11 framebuffer read captures an overlapping window's
-    pixels; surface-accurate backends (macOS ScreenCaptureKit, Windows, X11 with
-    a compositor) grab the target's own surface, so this is a no-op for them and
-    never paints a false block over the legitimate capture. The capability is
-    read defensively so a duck-typed capturer that predates it counts as
-    surface-accurate.
+    "Must not leak" means blocklisted, or — with the allowlist on — not allowed:
+    capturing an allowed window must not smuggle in a non-allowed one that sits
+    over it. Only the no-compositor X11 framebuffer read captures an overlapping
+    window's pixels; surface-accurate backends (macOS ScreenCaptureKit, Windows,
+    X11 with a compositor) grab the target's own surface, so this is a no-op for
+    them and never paints a false block over the legitimate capture. The
+    capability is read defensively so a duck-typed capturer that predates it
+    counts as surface-accurate.
 
     X11 stacking order is not always available (the EWMH client-list fallback
-    carries none), so *every* overlapping blocklisted window is redacted rather
-    than only those provably above the target — over-covering a sliver is the
-    safe direction; leaking a password manager is not. ``target.bounds`` (logical
-    points) is the redaction origin, matching the region path, and
-    ``result.scale`` maps those points onto the captured pixels.
+    carries none), so *every* overlapping hidden window is redacted rather than
+    only those provably above the target — over-covering a sliver is the safe
+    direction; leaking a password manager (or a non-allowlisted app) is not.
+    ``target.bounds`` (logical points) is the redaction origin, matching the
+    region path, and ``result.scale`` maps those points onto the captured pixels.
     """
     if windows is None:
         return result
@@ -557,7 +577,7 @@ def _redact_window_overlaps(
         w.bounds
         for w in windows
         if w.window_id != target.window_id
-        and blocklist.match(w) is not None
+        and _overlap_must_hide(w, blocklist, allowlist)
         and redact.rect_intersects(target.bounds, w.bounds)
     ]
     if not overlaps:

@@ -806,6 +806,27 @@ def test_capture_fullscreen_fails_closed_on_corrupt_allowlist(qapp, config, fake
     app.shutdown()
 
 
+def test_capture_window_image_redacts_not_allowed_overlap_on_framebuffer_backend(
+    qapp, config, fakes, monkeypatch
+):
+    # No-compositor X11: grabbing an allowlisted target also reads a non-allowed
+    # window stacked over it — those pixels must be painted out before delivery,
+    # the same protection blocklisted overlaps get.
+    from PySide6.QtCore import QRect
+
+    capturer, _hotkeys, _autostart = fakes
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(capturer, "window_capture_includes_overlaps", lambda: True, raising=False)
+    # 42 (the allowed target) is captured; 99 is not on the allowlist and overlaps.
+    app._not_allowed_windows = {99: WindowInfo(99, "Safari", "", Rect(10, 20, 4, 3))}
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    app._capture_window_image(42, QRect(10, 20, 4, 3))
+    assert len(delivered) == 1
+    assert delivered[0].pixelColor(0, 0).red() == 0  # the non-allowed overlap is redacted
+    app.shutdown()
+
+
 def test_smart_capture_marks_blocklisted_windows(qapp, config, fakes, monkeypatch):
     capturer, _hotkeys, _autostart = fakes
     monkeypatch.setattr(
