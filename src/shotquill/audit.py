@@ -91,6 +91,14 @@ def _to_system_log(line: str) -> None:
         pass
 
 
+def caller_chain() -> list[str]:
+    """Public view of the ancestor process chain (the TCC "responsible process"
+    approximation), so the doctor can name which process to grant Screen
+    Recording. Delegates to ``_caller_chain`` so test monkeypatches still apply.
+    """
+    return _caller_chain()
+
+
 def _caller_chain() -> list[str]:
     """Names of ancestor processes, nearest first (best effort).
 
