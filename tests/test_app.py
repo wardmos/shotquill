@@ -661,6 +661,151 @@ def test_smart_capture_survives_list_windows_unsupported(qapp, config, fakes, mo
     app.shutdown()
 
 
+# --- allowlist enforcement on the GUI path ----------------------------------
+
+
+def _enable_allowlist(*rules):
+    from shotquill import allowlist as al
+
+    al.save(al.Allowlist(enabled=True, rules=rules))
+
+
+def test_capture_fullscreen_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
+    # A whole-screen grab cannot honour "only these apps", so the allowlist
+    # refuses it on the human hotkey path too — no pixels reach the editor.
+    from shotquill import blocklist as bl
+
+    _enable_allowlist(bl.BlockRule(name="terminal"))
+    app = _build_app(qapp, fakes)
+    grabbed, opened, notified = [], [], []
+    monkeypatch.setattr(app, "_grab", lambda *a: grabbed.append(True))
+    monkeypatch.setattr(app, "_open_editor", lambda *a, **k: opened.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_fullscreen()
+    assert grabbed == [] and opened == []  # refused before grabbing
+    assert notified  # user told why
+    app.shutdown()
+
+
+def test_smart_region_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),))
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._smart_screenshot, app._smart_geometry = QImage(), QRect()
+    app._smart_region_selected(QImage(), QRect(0, 0, 2, 2))
+    assert delivered == []
+    assert notified
+    app.shutdown()
+
+
+def test_smart_fullscreen_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),))
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._smart_screenshot, app._smart_geometry = QImage(), QRect()
+    app._smart_fullscreen_selected()
+    assert delivered == []
+    assert notified
+    app.shutdown()
+
+
+def test_smart_region_delivers_when_allowlist_disabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    app._smart_screenshot, app._smart_geometry = QImage(), QRect()
+    app._smart_region_selected(QImage(), QRect(0, 0, 2, 2))
+    assert len(delivered) == 1
+    app.shutdown()
+
+
+def test_capture_window_image_refuses_not_allowed_window(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+
+    app = _build_app(qapp, fakes)
+    app._not_allowed_windows = {42: WindowInfo(42, "Safari", "", Rect(0, 0, 2, 2))}
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_window_image(42, QRect(0, 0, 2, 2))
+    assert delivered == []
+    assert notified  # told it isn't on the allowlist
+    app.shutdown()
+
+
+def test_window_preview_skips_not_allowed_window(qapp, config, fakes):
+    app = _build_app(qapp, fakes)
+    app._not_allowed_windows = {7: WindowInfo(7, "Safari", "", Rect(0, 0, 2, 2))}
+    assert app._window_preview_image(7) is None  # not allowed → no preview pixels
+    assert app._window_preview_image(99) is not None  # an allowed window previews
+    app.shutdown()
+
+
+def test_smart_capture_marks_not_allowed_windows(qapp, config, fakes, monkeypatch):
+    # With the allowlist on, on-screen windows that aren't allowed are marked so
+    # the click/preview paths refuse them — the allowed one is left capturable.
+    from shotquill import blocklist as bl
+
+    capturer, _hotkeys, _autostart = fakes
+    allowed = WindowInfo(1, "Terminal", "zsh", Rect(0, 0, 2, 2))
+    other = WindowInfo(2, "Safari", "GitHub", Rect(0, 0, 2, 2))
+    monkeypatch.setattr(capturer, "list_windows", lambda: [allowed, other])
+    _enable_allowlist(bl.BlockRule(name="terminal"))
+    app = _build_app(qapp, fakes)
+    app._capture_smart()
+    assert set(app._not_allowed_windows) == {2}  # only the non-allowed window
+    assert app._blocked_windows == {}
+    app.shutdown()
+
+
+def test_load_allowlist_returns_none_and_notifies_on_corrupt(qapp, config, fakes, monkeypatch):
+    from shotquill import paths
+
+    paths.allowlist_path().write_text("{ not valid json", encoding="utf-8")
+    app = _build_app(qapp, fakes)
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+    assert app._load_allowlist_or_abort() is None
+    assert notified and "allowlist" in notified[0].casefold()
+    app.shutdown()
+
+
+def test_capture_fullscreen_fails_closed_on_corrupt_allowlist(qapp, config, fakes, monkeypatch):
+    from shotquill import paths
+
+    paths.allowlist_path().write_text("{ not valid json", encoding="utf-8")
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_fullscreen()
+    assert grabbed == []  # aborted before grabbing
+    assert notified
+    app.shutdown()
+
+
 def test_smart_capture_marks_blocklisted_windows(qapp, config, fakes, monkeypatch):
     capturer, _hotkeys, _autostart = fakes
     monkeypatch.setattr(

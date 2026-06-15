@@ -332,6 +332,12 @@ squill allowlist disable                   # back to normal capture
 squill allowlist remove --name firefox
 ```
 
+Enforcement covers the **GUI, CLI, and MCP alike** — the same as the blocklist.
+In the GUI, full-screen capture (and the region / full-screen modes of smart
+capture) are refused with a tray note, and smart capture only lets you pick a
+window that's on the list; non-allowed windows are skipped just like blocklisted
+ones.
+
 When the allowlist is **enabled**:
 
 - a window or app capture is refused unless its target is on the list;

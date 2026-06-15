@@ -37,6 +37,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "无法读取你的排除名单，ShotQuill 不会截图"
         "（它无法判断该保护什么）。请在设置里修复。（{error}）",
     },
+    "notify.capture_not_allowed": {
+        "en": "{app} isn't on your allowlist — ShotQuill only captures allowlisted apps.",
+        "zh": "{app} 不在你的白名单里——ShotQuill 只截白名单内的应用。",
+    },
+    "notify.allowlist_whole_screen": {
+        "en": "Your allowlist is on, so only specific apps can be captured — "
+        "full-screen and region capture are off. Pick an allowlisted window.",
+        "zh": "你的白名单已开启，只能截取指定应用——全屏和区域截图已停用。请选择白名单内的窗口。",
+    },
+    "notify.allowlist_unreadable": {
+        "en": "Your allowlist couldn't be read, so ShotQuill won't capture "
+        "(it can't tell what's permitted). Fix it in Settings. ({error})",
+        "zh": "无法读取你的白名单，ShotQuill 不会截图"
+        "（它无法判断哪些被允许）。请在设置里修复。（{error}）",
+    },
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.open_folder_failed": {
         "en": "Couldn't open the save folder: {error}",

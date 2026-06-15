@@ -21,6 +21,7 @@ from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixm
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from shotquill import __version__, permissions, redact
+from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
 from shotquill.config import Config, human_readable_hotkey
@@ -137,6 +138,17 @@ class ShotquillApp(QObject):
         # Blocklisted windows on screen for the current smart-capture session
         # (id → window); refused on click, skipped in the hover preview.
         self._blocked_windows: dict[int, object] = {}
+        # When the allowlist is enabled, the on-screen windows *not* on it for the
+        # current smart-capture session (id → window); refused on click, skipped
+        # in the hover preview — the same treatment blocklisted windows get, since
+        # an allowlist means "only the listed apps may be captured".
+        self._not_allowed_windows: dict[int, object] = {}
+        # The allowlist in force for the current smart-capture session, so the
+        # region / full-screen selection handlers (which fire later, from overlay
+        # signals) can refuse whole-screen grabs while it is enabled.
+        self._allowlist = al.Allowlist()
+        self._smart_screenshot = None
+        self._smart_geometry = None
 
         self._bridge = _HotkeyBridge()
         # Hotkeys are emitted from pynput's listener thread. Force queued delivery
@@ -254,6 +266,16 @@ class ShotquillApp(QObject):
         if blocklist is None:
             self._unshelve_settings_dialog()
             return
+        allowlist = self._load_allowlist_or_abort()
+        if allowlist is None:
+            self._unshelve_settings_dialog()
+            return
+        if allowlist:
+            # An allowlist restricts capture to specific apps, so a whole-screen
+            # grab cannot be honoured — refuse it (matching the CLI/MCP contract).
+            self._notify(t("notify.allowlist_whole_screen"))
+            self._unshelve_settings_dialog()
+            return
         try:
             screenshot = self._grab(blocklist)
         finally:
@@ -268,6 +290,11 @@ class ShotquillApp(QObject):
         if blocklist is None:
             self._unshelve_settings_dialog()
             return
+        allowlist = self._load_allowlist_or_abort()
+        if allowlist is None:
+            self._unshelve_settings_dialog()
+            return
+        self._allowlist = allowlist
         # Snapshot the window list *before* showing the overlay so our own
         # window isn't a target. An empty/failed list is fine — the overlay
         # then only offers full-screen and region modes.
@@ -278,11 +305,18 @@ class ShotquillApp(QObject):
         # Resolve which on-screen windows are blocklisted up front, so the click
         # and hover-preview paths can refuse / skip them without re-querying.
         self._blocked_windows = {w.window_id: w for w in blocklist.blocked(windows)}
+        # And, when the allowlist is on, which on-screen windows are *not* on it
+        # — those are refused/skipped exactly like blocklisted ones.
+        self._not_allowed_windows = (
+            {w.window_id: w for w in windows if not allowlist.is_allowed(w)} if allowlist else {}
+        )
         screenshot = self._grab(blocklist)
         if screenshot is None:
             self._unshelve_settings_dialog()
             return
         geometry = self._app.primaryScreen().virtualGeometry()
+        self._smart_screenshot = screenshot
+        self._smart_geometry = geometry
         overlay = SmartOverlay(
             screenshot,
             geometry,
@@ -292,13 +326,11 @@ class ShotquillApp(QObject):
         )
         # Region captures carry the full screenshot along so the editor can
         # keep the crop adjustable (arrow-key nudging) until annotation starts.
-        overlay.region_selected.connect(
-            lambda image, rect: self._deliver_capture(
-                image, rect, region=RegionContext(screenshot, geometry)
-            )
-        )
+        # Region and full-screen go through guarded handlers that refuse the
+        # grab when the allowlist is on (only specific apps may be captured).
+        overlay.region_selected.connect(self._smart_region_selected)
         overlay.window_selected.connect(self._capture_window_image)
-        overlay.fullscreen_selected.connect(lambda: self._deliver_capture(screenshot, geometry))
+        overlay.fullscreen_selected.connect(self._smart_fullscreen_selected)
         self._track(overlay)
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
@@ -317,17 +349,39 @@ class ShotquillApp(QObject):
         the window server, which is thread-safe; QImage is GUI-thread-free).
         Returns None on failure — the overlay then keeps the frozen screenshot.
         """
-        if window_id in self._blocked_windows:
-            return None  # never preview a blocklisted window's pixels
+        if window_id in self._blocked_windows or window_id in self._not_allowed_windows:
+            # Never preview a blocklisted window's pixels, nor (when the allowlist
+            # is on) a window that is not allowed to be captured.
+            return None
         try:
             return result_to_qimage(self._capturer.capture_window(window_id))
         except Exception:
             return None
 
+    def _smart_region_selected(self, image: QImage, rect: QRect) -> None:
+        """Deliver a region crop, unless the allowlist forbids whole-screen grabs."""
+        if self._allowlist:
+            self._notify(t("notify.allowlist_whole_screen"))
+            return
+        self._deliver_capture(
+            image, rect, region=RegionContext(self._smart_screenshot, self._smart_geometry)
+        )
+
+    def _smart_fullscreen_selected(self) -> None:
+        """Deliver the full-screen shot, unless the allowlist forbids it."""
+        if self._allowlist:
+            self._notify(t("notify.allowlist_whole_screen"))
+            return
+        self._deliver_capture(self._smart_screenshot, self._smart_geometry)
+
     def _capture_window_image(self, window_id: int, origin: QRect) -> None:
         blocked = self._blocked_windows.get(window_id)
         if blocked is not None:
             self._notify(t("notify.capture_blocked").format(app=blocked.owner))
+            return
+        not_allowed = self._not_allowed_windows.get(window_id)
+        if not_allowed is not None:
+            self._notify(t("notify.capture_not_allowed").format(app=not_allowed.owner))
             return
         try:
             result = self._capturer.capture_window(window_id)
@@ -396,6 +450,20 @@ class ShotquillApp(QObject):
             return bl.load()
         except bl.BlocklistError as exc:
             self._notify(t("notify.blocklist_unreadable").format(error=exc))
+            return None
+
+    def _load_allowlist_or_abort(self) -> al.Allowlist | None:
+        """The allowlist for this capture, or ``None`` when it can't be read.
+
+        A missing file is the disabled empty allowlist (the common case — capture
+        proceeds normally). A present-but-unreadable file fails *closed* exactly
+        like the blocklist: the user opted into a restriction that is now broken,
+        so we notify and abort rather than capture something they meant to keep
+        out. Loaded once per capture so Settings edits take effect immediately."""
+        try:
+            return al.load()
+        except al.AllowlistError as exc:
+            self._notify(t("notify.allowlist_unreadable").format(error=exc))
             return None
 
     def _blocked_on_screen(self, blocklist: bl.Blocklist) -> list:
