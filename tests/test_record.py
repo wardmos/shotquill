@@ -306,6 +306,36 @@ def test_cli_frame_missing_session_is_error(fake_capturer, monkeypatch, capsys):
     assert "no recording session" in capsys.readouterr().err
 
 
+def test_cli_frame_dedup_references_previous(fake_capturer, monkeypatch, capsys, tmp_path):
+    # The FakeCapturer returns identical pixels each call; deterministic encoding
+    # makes them byte-identical, so --dedup files the second frame as a reference.
+    _empty_blocklist(monkeypatch)
+    cli.main(["record", "start", "--id", "conv-dedup"])
+    session_dir = capsys.readouterr().out.strip()
+    cli.main(["record", "frame", "--session", session_dir, "--tool", "a", "--dedup"])
+    cli.main(["record", "frame", "--session", session_dir, "--tool", "b", "--dedup"])
+    capsys.readouterr()
+
+    frames_dir = tmp_path / "records" / "conv-dedup" / "frames"
+    assert (frames_dir / "0001.png").exists()
+    assert not (frames_dir / "0002.png").exists()  # second deduped to the first
+    manifest = json.loads((tmp_path / "records" / "conv-dedup" / "manifest.json").read_text())
+    assert manifest["frames"][1]["deduped"] is True
+
+
+def test_cli_frame_max_dimension_shrinks_the_stored_image(fake_capturer, monkeypatch, capsys):
+    from PySide6.QtGui import QImage
+
+    _empty_blocklist(monkeypatch)
+    cli.main(["record", "start", "--id", "conv-small"])
+    session_dir = capsys.readouterr().out.strip()
+    # FakeCapturer yields a 2x2 frame; cap the long edge to 1 -> a 1x1 archive.
+    cli.main(["record", "frame", "--session", session_dir, "--tool", "a", "--max-dimension", "1"])
+    image_path = capsys.readouterr().out.strip()
+    stored = QImage(image_path)
+    assert (stored.width(), stored.height()) == (1, 1)
+
+
 def test_cli_record_audits_via_record(fake_capturer, monkeypatch, capsys, tmp_path):
     _empty_blocklist(monkeypatch)
     cli.main(["record", "start", "--id", "conv-audit"])

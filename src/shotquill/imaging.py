@@ -43,6 +43,27 @@ def result_to_qimage(result: CaptureResult) -> QImage:
     return image.copy()
 
 
+def downscale_to_max(image: QImage, max_dimension: int) -> QImage:
+    """Shrink ``image`` so its longer side is at most ``max_dimension`` pixels.
+
+    A flight-recorder archive doesn't need native resolution to be reviewable, so
+    capping the long edge trades a little detail for much smaller frames (cost
+    control, D12). Aspect ratio is preserved and the image is only ever scaled
+    *down* — ``max_dimension <= 0`` or an already-small image is returned
+    unchanged, so this is a no-op unless a cap is asked for and exceeded.
+    """
+    if max_dimension <= 0:
+        return image
+    longest = max(image.width(), image.height())
+    if longest <= max_dimension:
+        return image
+    from PySide6.QtCore import Qt
+
+    # KeepAspectRatio fits the image inside the square box, so the longer side
+    # lands exactly on max_dimension and the shorter side scales with it.
+    return image.scaled(max_dimension, max_dimension, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
 def pixelate_except(image: QImage, reveal: list[Rect], scale: float, block: int = BLUR_BLOCK):
     """Mosaic the whole frame, then paint the ``reveal`` rectangles back sharp.
 
