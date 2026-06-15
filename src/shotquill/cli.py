@@ -14,8 +14,8 @@ Contract (agents rely on it):
   options as ``capture`` to recognize straight off the screen in one step.
 - Exit codes: 0 ok, 1 other error, 2 usage, 3 permission denied,
   4 capability unavailable on this platform/session, 5 no window or display
-  matched, 6 blocked by the app blocklist, 7 invalid input. They are printed in
-  every ``--help`` so agents can discover them.
+  matched, 6 blocked by the blocklist or not on the allowlist, 7 invalid input.
+  They are printed in every ``--help`` so agents can discover them.
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ _EXIT_ASSERTION_FAILED = 20
 _EXIT_CODE_EPILOG = (
     "exit codes: 0 ok; errors 1-19 (1 error, 2 usage, 3 permission denied, "
     "4 capability unavailable on this platform/session, 5 no window or display "
-    "matched, 6 blocked by the app blocklist, 7 invalid input); assertion "
-    "results 20+ (20 OCR assertion failed)"
+    "matched, 6 blocked by the blocklist or not on the allowlist, 7 invalid input); "
+    "assertion results 20+ (20 OCR assertion failed)"
 )
 
 
@@ -260,18 +260,44 @@ def _build_parser() -> argparse.ArgumentParser:
     bl_list.set_defaults(func=_cmd_blocklist_list)
 
     bl_add = bl_sub.add_parser("add", help="add a rule")
-    _add_blocklist_selector(bl_add)
+    _add_app_rule_selector(bl_add)
     bl_add.set_defaults(func=_cmd_blocklist_add)
 
     bl_remove = bl_sub.add_parser("remove", help="remove a matching rule")
-    _add_blocklist_selector(bl_remove)
+    _add_app_rule_selector(bl_remove)
     bl_remove.set_defaults(func=_cmd_blocklist_remove)
+
+    allowlist = sub.add_parser(
+        "allowlist",
+        help="manage the capture allowlist (when enabled, ONLY these apps are captured)",
+    )
+    al_sub = allowlist.add_subparsers(dest="allowlist_command", required=True)
+
+    al_list = al_sub.add_parser("list", help="show whether enabled and the current rules")
+    al_list.add_argument("--json", action="store_true", help="machine-readable output")
+    al_list.set_defaults(func=_cmd_allowlist_list)
+
+    al_add = al_sub.add_parser("add", help="add a rule")
+    _add_app_rule_selector(al_add)
+    al_add.set_defaults(func=_cmd_allowlist_add)
+
+    al_remove = al_sub.add_parser("remove", help="remove a matching rule")
+    _add_app_rule_selector(al_remove)
+    al_remove.set_defaults(func=_cmd_allowlist_remove)
+
+    al_enable = al_sub.add_parser(
+        "enable", help="turn the allowlist on (only listed apps can then be captured)"
+    )
+    al_enable.set_defaults(func=_cmd_allowlist_enable)
+
+    al_disable = al_sub.add_parser("disable", help="turn the allowlist off (capture normally)")
+    al_disable.set_defaults(func=_cmd_allowlist_disable)
 
     return parser
 
 
-def _add_blocklist_selector(command: argparse.ArgumentParser) -> None:
-    """The bundle-id / name choice shared by ``blocklist add`` and ``remove``."""
+def _add_app_rule_selector(command: argparse.ArgumentParser) -> None:
+    """The bundle-id / name choice shared by ``blocklist`` and ``allowlist`` add/remove."""
     target = command.add_mutually_exclusive_group(required=True)
     target.add_argument("--bundle-id", help="match the owning app's bundle id exactly")
     target.add_argument("--name", help="match the app name as a case-insensitive substring")
@@ -1041,6 +1067,81 @@ def _cmd_blocklist_remove(args: argparse.Namespace) -> int:
         print(f"squill: {rule.describe()} was not on the blocklist", file=sys.stderr)
         return 0
     bl.save(bl.Blocklist(remaining))
+    return 0
+
+
+def _cmd_allowlist_list(args: argparse.Namespace) -> int:
+    from shotquill import allowlist as al
+
+    allowlist = al.load()
+    if args.json:
+        print(
+            json.dumps(
+                {"enabled": allowlist.enabled, "rules": [r.as_dict() for r in allowlist.rules]},
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    print(f"enabled: {'yes' if allowlist.enabled else 'no'}")
+    if not allowlist.rules:
+        print("(no rules)")
+    else:
+        for rule in allowlist.rules:
+            print(rule.describe())
+    if allowlist.enabled and not allowlist.rules:
+        print("warning: enabled with no rules — nothing can be captured", file=sys.stderr)
+    return 0
+
+
+def _cmd_allowlist_add(args: argparse.Namespace) -> int:
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    rule = bl.BlockRule(bundle_id=args.bundle_id, name=args.name)
+    allowlist = al.load()
+    if rule in allowlist.rules:
+        print(f"squill: {rule.describe()} is already on the allowlist", file=sys.stderr)
+        return 0
+    al.save(al.Allowlist(enabled=allowlist.enabled, rules=allowlist.rules + (rule,)))
+    print(rule.describe())
+    return 0
+
+
+def _cmd_allowlist_remove(args: argparse.Namespace) -> int:
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    rule = bl.BlockRule(bundle_id=args.bundle_id, name=args.name)
+    allowlist = al.load()
+    remaining = tuple(r for r in allowlist.rules if r != rule)
+    if len(remaining) == len(allowlist.rules):
+        print(f"squill: {rule.describe()} was not on the allowlist", file=sys.stderr)
+        return 0
+    al.save(al.Allowlist(enabled=allowlist.enabled, rules=remaining))
+    return 0
+
+
+def _cmd_allowlist_enable(args: argparse.Namespace) -> int:
+    from shotquill import allowlist as al
+
+    allowlist = al.load()
+    al.save(al.Allowlist(enabled=True, rules=allowlist.rules))
+    # Enabling with no rules is a full lockdown — say so rather than let the user
+    # discover it as every capture being refused.
+    if not allowlist.rules:
+        print(
+            "squill: allowlist enabled, but it has no rules — nothing can be captured "
+            "until you `squill allowlist add` an app",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _cmd_allowlist_disable(args: argparse.Namespace) -> int:
+    from shotquill import allowlist as al
+
+    allowlist = al.load()
+    al.save(al.Allowlist(enabled=False, rules=allowlist.rules))
     return 0
 
 

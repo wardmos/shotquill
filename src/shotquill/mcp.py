@@ -201,7 +201,9 @@ _ERROR_HINTS = {
     "unsupported": "call the doctor tool to see what this host supports",
     "no_match": "call list_windows (or list_displays) to see what is actually available",
     "permission": "call the doctor tool for the missing grant and how to fix it",
-    "blocked": "the target app is on the user's blocklist and will not be captured; do not retry",
+    "blocked": "the user's policy forbids this capture (the target is blocklisted, or an "
+    "allowlist is active and the target is not on it, or a whole-screen capture was requested "
+    "while the allowlist restricts to specific apps); do not retry",
     "no_session": "call record_start first, then pass the conversation_id it returns as `session`",
 }
 

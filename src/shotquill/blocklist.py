@@ -105,7 +105,14 @@ class Blocklist:
         return [w for w in windows if self.is_blocked(w)]
 
 
-def _rule_from_dict(raw: object) -> BlockRule:
+def rule_from_dict(raw: object) -> BlockRule:
+    """Parse one ``{"bundle_id": ...}`` / ``{"name": ...}`` rule, validating it.
+
+    Shared with the allowlist (:mod:`shotquill.allowlist`), which round-trips the
+    exact same app-matching rule shape — the validation lives here once so both
+    lists reject the same malformed input. Raises :class:`BlocklistError`; the
+    allowlist re-wraps it as its own error type.
+    """
     if not isinstance(raw, dict):
         raise BlocklistError(f"each rule must be an object, got {type(raw).__name__}")
     bundle_id = raw.get("bundle_id")
@@ -147,7 +154,7 @@ def load(path: Path | None = None) -> Blocklist:
     raw_rules = data.get("rules", [])
     if not isinstance(raw_rules, list):
         raise BlocklistError("'rules' must be a list")
-    return Blocklist(tuple(_rule_from_dict(r) for r in raw_rules))
+    return Blocklist(tuple(rule_from_dict(r) for r in raw_rules))
 
 
 def save(blocklist: Blocklist, path: Path | None = None) -> None:

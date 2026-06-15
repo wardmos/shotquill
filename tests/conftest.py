@@ -155,12 +155,14 @@ class _FakeAutostart:
 
 @pytest.fixture(autouse=True)
 def _isolate_blocklist(monkeypatch, tmp_path):
-    """No test reads or writes the developer's real app blocklist. Default it
-    to a nonexistent temp path — i.e. the empty blocklist — so capture tests
-    keep their old behaviour; blocklist tests write to this path to opt in."""
+    """No test reads or writes the developer's real app blocklist or allowlist.
+    Default both to nonexistent temp paths — i.e. the empty blocklist and the
+    disabled allowlist — so capture tests keep their old behaviour; the
+    blocklist/allowlist tests write to these paths to opt in."""
     from shotquill import paths
 
     monkeypatch.setattr(paths, "blocklist_path", lambda: tmp_path / "blocklist.json")
+    monkeypatch.setattr(paths, "allowlist_path", lambda: tmp_path / "allowlist.json")
 
 
 @pytest.fixture

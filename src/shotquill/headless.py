@@ -260,6 +260,77 @@ def _refuse_if_blocked(window: WindowInfo, blocklist, *, via: str) -> None:
     )
 
 
+def active_allowlist():
+    """Load the user's capture allowlist, failing closed when it cannot be read.
+
+    A missing file is the disabled empty list (the default — no friction). A
+    present-but-corrupt file while the leash is meant to be on means we cannot
+    tell what is permitted, so we refuse to capture rather than guess.
+    """
+    from shotquill import allowlist as al
+
+    try:
+        return al.load()
+    except al.AllowlistError as exc:
+        raise CaptureBlocked(f"allowlist is unreadable, refusing to capture: {exc}") from exc
+
+
+def _refuse_if_not_allowed(window: WindowInfo, allowlist, *, via: str) -> None:
+    """Raise :class:`CaptureBlocked` (and audit it) unless ``window`` is allowed.
+
+    Only called when the allowlist is enforcing; the default (disabled) list
+    never reaches here, so an ordinary capture is untouched.
+    """
+    if allowlist.is_allowed(window):
+        return
+    target = f"{window.owner} — {window.title}" if window.title else window.owner
+    from shotquill import audit
+
+    audit.record("capture_not_allowed", via=via, target=target)
+    # The owner is app-controlled and printed raw by the CLI — strip control
+    # chars, exactly as the blocklist refusal does.
+    raise CaptureBlocked(
+        f"{printable(window.owner)} is not on the capture allowlist; refusing to "
+        "capture it (the allowlist is active, so only listed apps may be captured)"
+    )
+
+
+def _enforce_allowlist_window(allowlist, target: WindowInfo | None, window_id: int, *, via: str):
+    """Apply the enforcing allowlist to a by-id capture, failing closed.
+
+    The allowlist permits by *identity*, so we must positively confirm what this
+    id is. When it cannot be identified — enumeration unavailable on this backend,
+    or the id is not among the enumerable windows — we refuse rather than capture
+    something we could not check against the list.
+    """
+    if target is None:
+        from shotquill import audit
+
+        audit.record("capture_not_allowed", via=via, target=f"window {window_id}")
+        raise CaptureBlocked(
+            f"the capture allowlist is active but window {window_id} cannot be "
+            "identified to check it against the list on this backend; refusing to capture"
+        )
+    _refuse_if_not_allowed(target, allowlist, via=via)
+
+
+def _refuse_whole_screen_under_allowlist(kind: str, *, via: str) -> None:
+    """Refuse a fullscreen / region / display capture while the allowlist enforces.
+
+    A whole-screen grab captures everything, which the allowlist's "only these
+    apps" contract cannot honour, so it is refused outright (cross-platform, no
+    enumeration needed) — the caller must target a specific window or app.
+    """
+    from shotquill import audit
+
+    audit.record("capture_not_allowed", via=via, target=kind)
+    raise CaptureBlocked(
+        f"the capture allowlist is active: only listed apps may be captured, so a "
+        f"{kind} capture is refused — capture a specific window (--window-id) or app "
+        "(--app) instead"
+    )
+
+
 def perform_capture(
     capturer: ScreenCapturer,
     *,
@@ -269,6 +340,7 @@ def perform_capture(
     region: Rect | None = None,
     display: int | None = None,
     blocklist=None,
+    allowlist=None,
     via: str = "cli",
 ) -> tuple[CaptureResult, str, int]:
     """Dispatch one capture and describe what was actually hit.
@@ -281,18 +353,30 @@ def perform_capture(
     A window or app capture that lands on the blocklist raises
     :class:`CaptureBlocked`. An empty blocklist (the default) takes the exact
     same path as before — no extra window enumeration, no new failure modes.
-    Full-screen, display and region captures are not refused here; the
-    sensitive window is one part of the frame and is redacted instead.
+    Full-screen, display and region captures are not refused for the blocklist;
+    the sensitive window is one part of the frame and is redacted instead.
+
+    When the **allowlist** is enabled it inverts that default: a window/app
+    capture is refused unless the target is on the list, and a whole-screen
+    capture (fullscreen, region, display) is refused outright — its "only these
+    apps" contract cannot be honoured for a grab of everything. A disabled
+    allowlist (the default) is inert and changes nothing.
     """
     if blocklist is None:
         blocklist = active_blocklist()
+    if allowlist is None:
+        allowlist = active_allowlist()
 
     if window_id is not None:
-        target, windows = _lookup_window(capturer, window_id, blocklist)
+        target, windows = _lookup_window(
+            capturer, window_id, need_enum=bool(blocklist) or bool(allowlist)
+        )
         if target is not None:
             _refuse_if_blocked(target, blocklist, via=via)
+        if allowlist:
+            _enforce_allowlist_window(allowlist, target, window_id, via=via)
         result = capturer.capture_window(window_id)
-        if target is not None:
+        if target is not None and blocklist:
             result = _redact_window_overlaps(result, capturer, target, windows, blocklist, via=via)
         return result, f"window {window_id}", 1
     if app:
@@ -300,10 +384,22 @@ def perform_capture(
         window, matched = select_window(windows, app, title)
         if blocklist:
             _refuse_if_blocked(window, blocklist, via=via)
+        if allowlist:
+            _refuse_if_not_allowed(window, allowlist, via=via)
         result = capturer.capture_window(window.window_id)
         if blocklist:
             result = _redact_window_overlaps(result, capturer, window, windows, blocklist, via=via)
         return result, f"{window.owner} — {window.title}", matched
+    # Only whole-screen captures (fullscreen, region, display) remain. The
+    # allowlist refuses them all; capture a specific window or app instead.
+    if allowlist:
+        if display is not None:
+            kind = "display"
+        elif region is not None:
+            kind = "region"
+        else:
+            kind = "fullscreen"
+        _refuse_whole_screen_under_allowlist(kind, via=via)
     if display is not None:
         # One display is a rectangle of the virtual desktop, so this rides the
         # region path — including its blocklist redaction — instead of growing
@@ -407,14 +503,14 @@ def _redact_blocked(
 
 
 def _lookup_window(
-    capturer: ScreenCapturer, window_id: int, blocklist
+    capturer: ScreenCapturer, window_id: int, *, need_enum: bool
 ) -> tuple[WindowInfo | None, list[WindowInfo] | None]:
-    """Enumerate windows to find the by-id target, for the blocklist checks.
+    """Enumerate windows to find the by-id target, for the blocklist/allowlist checks.
 
-    Returns ``(target, windows)`` — ``(None, None)`` when there is no blocklist to
-    enforce or enumeration is unavailable, so the capture proceeds unprotected
-    exactly as before (nothing to match against)."""
-    if not blocklist:
+    Returns ``(target, windows)`` — ``(None, None)`` when neither list is
+    enforcing (nothing to match against) or enumeration is unavailable, so the
+    capture proceeds exactly as before."""
+    if not need_enum:
         return None, None
     try:
         windows = capturer.list_windows()
@@ -609,6 +705,7 @@ def doctor_checks() -> list[dict]:
         {"capability": "platform", "available": True, "detail": platform_detail},
         {"capability": "audit_log", "available": True, "detail": str(paths.audit_log_path())},
         _check_blocklist(),
+        _check_allowlist(),
     ]
 
     capture_checks, can_enumerate = _capture_checks()
@@ -792,6 +889,37 @@ def _check_blocklist() -> dict:
     else:
         detail = f"{len(loaded.rules)} rule(s): " + ", ".join(r.describe() for r in loaded.rules)
     return {"capability": "app_blocklist", "available": True, "detail": detail}
+
+
+def _check_allowlist() -> dict:
+    """Report the capture allowlist: whether it is enforcing and what it permits.
+
+    A corrupt file fails closed (every capture refused) just like the blocklist,
+    so surface it here. When enabled, an empty rule set permits nothing — a full
+    lockdown the user should see spelled out rather than discover as blanket
+    refusals."""
+    from shotquill import allowlist as al
+    from shotquill import paths
+
+    path = paths.allowlist_path()
+    try:
+        loaded = al.load(path)
+    except al.AllowlistError as exc:
+        return {"capability": "app_allowlist", "available": False, "detail": f"{path}: {exc}"}
+    if not loaded.enabled:
+        return {"capability": "app_allowlist", "available": True, "detail": f"disabled ({path})"}
+    if not loaded.rules:
+        return {
+            "capability": "app_allowlist",
+            "available": False,
+            "detail": "ENABLED with no rules → nothing can be captured (full lockdown)",
+        }
+    rules = ", ".join(r.describe() for r in loaded.rules)
+    return {
+        "capability": "app_allowlist",
+        "available": True,
+        "detail": f"ENABLED — only these may be captured ({len(loaded.rules)} rule(s)): {rules}",
+    }
 
 
 def _check_screen_recording() -> dict:  # pragma: no cover - macOS only
