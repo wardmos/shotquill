@@ -165,6 +165,8 @@ def test_tools_list_descriptors():
         "record_start",
         "record_frame",
         "record_end",
+        "record_list",
+        "record_prune",
     }
     capture_schema = tools["capture"]["inputSchema"]
     assert "window_id" in capture_schema["properties"]
@@ -574,3 +576,78 @@ def test_record_audits_via_record(fake_capturer, record_root, isolated_audit):
     actions = {e["action"] for e in entries}
     assert {"record_start", "record_frame", "record_end"} <= actions
     assert all(e["via"] == "record" for e in entries if e["action"].startswith("record_"))
+
+
+def test_record_frame_dedup_references_previous(fake_capturer, record_root):
+    call("record_start", {"id": "conv-dd"})
+    call("record_frame", {"session": "conv-dd", "tool": "a", "dedup": True})
+    second = call("record_frame", {"session": "conv-dd", "tool": "b", "dedup": True})["result"]
+    assert second["structuredContent"]["index"] == 2
+    frames_dir = record_root / "conv-dd" / "frames"
+    assert (frames_dir / "0001.png").exists()
+    assert not (frames_dir / "0002.png").exists()  # second deduped to the first
+    manifest = json.loads((record_root / "conv-dd" / "manifest.json").read_text())
+    assert manifest["frames"][1]["deduped"] is True
+    call("record_end", {"session": "conv-dd"})
+
+
+def test_record_frame_max_dimension_shrinks_the_stored_image(fake_capturer, record_root):
+    from PySide6.QtGui import QImage
+
+    call("record_start", {"id": "conv-sm"})
+    res = call("record_frame", {"session": "conv-sm", "tool": "a", "max_dimension": 1})["result"]
+    stored = QImage(res["structuredContent"]["image"])
+    assert (stored.width(), stored.height()) == (1, 1)  # FakeCapturer is 2x2
+    call("record_end", {"session": "conv-sm"})
+
+
+def test_record_frame_rejects_boolean_max_dimension(fake_capturer, record_root):
+    call("record_start", {"id": "conv-bad"})
+    result = call("record_frame", {"session": "conv-bad", "tool": "a", "max_dimension": True})[
+        "result"
+    ]
+    assert result["isError"] is True
+    call("record_end", {"session": "conv-bad"})
+
+
+def _tool_msg(msg_id, name, arguments):
+    params = {"name": name, "arguments": arguments}
+    return {"jsonrpc": "2.0", "id": msg_id, "method": "tools/call", "params": params}
+
+
+def test_capture_dedup_mirrors_observation_without_a_duplicate(fake_capturer, record_root):
+    # The active session that drives the observation mirror lives only for one
+    # connection, so record_start and the captures must share a single run().
+    run(
+        _tool_msg(1, "record_start", {"id": "conv-obs"}),
+        _tool_msg(2, "capture", {"dedup": True}),
+        _tool_msg(3, "capture", {"dedup": True}),  # same screen -> deduped observation
+    )
+    frames_dir = record_root / "conv-obs" / "frames"
+    assert (frames_dir / "0001.png").exists()
+    assert not (frames_dir / "0002.png").exists()
+    manifest = json.loads((record_root / "conv-obs" / "manifest.json").read_text())
+    assert len(manifest["frames"]) == 2
+    assert manifest["frames"][0]["kind"] == "observation"
+    assert manifest["frames"][1]["deduped"] is True
+
+
+def test_record_list_and_prune(fake_capturer, record_root):
+    for sid in ("conv-1", "conv-2"):
+        call("record_start", {"id": sid})
+        call("record_frame", {"session": sid, "tool": "a"})
+        call("record_end", {"session": sid})
+
+    listed = call("record_list")["result"]["structuredContent"]["sessions"]
+    assert {s["conversation_id"] for s in listed} == {"conv-1", "conv-2"}
+    assert all(s["size_bytes"] > 0 for s in listed)
+
+    pruned = call("record_prune", {"max_sessions": 1})["result"]["structuredContent"]
+    assert pruned["count"] == 1
+    remaining = call("record_list")["result"]["structuredContent"]["sessions"]
+    assert len(remaining) == 1
+
+
+def test_record_prune_requires_a_limit(record_root):
+    result = call("record_prune", {})["result"]
+    assert result["isError"] is True

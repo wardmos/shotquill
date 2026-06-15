@@ -141,6 +141,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "(handle from `record start`)",
     )
     capture.add_argument(
+        "--dedup",
+        action="store_true",
+        help="when filing the observation frame (with --session), reference the "
+        "previous frame instead of writing a duplicate if the screen is unchanged",
+    )
+    capture.add_argument(
         "--mask",
         action="append",
         metavar="X,Y,W,H",
@@ -538,7 +544,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         from shotquill import record
 
         try:
-            recorded = _mirror_capture_observation(args.session, image, target)
+            recorded = _mirror_capture_observation(args.session, image, target, dedup=args.dedup)
         except record.RecordError as exc:
             print(f"squill: {exc}", file=sys.stderr)
             return 1
@@ -581,7 +587,9 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
-def _mirror_capture_observation(session_handle: str, image, target: str) -> dict:
+def _mirror_capture_observation(
+    session_handle: str, image, target: str, *, dedup: bool = False
+) -> dict:
     """File an observation frame for a CLI `capture --session`; returns its meta."""
     from shotquill import record
 
@@ -589,11 +597,14 @@ def _mirror_capture_observation(session_handle: str, image, target: str) -> dict
     blocklist = headless.active_blocklist()
     frame = record.record_frame(
         session,
-        image_bytes=headless.encode_qimage(image, "png"),
+        # Deterministic so an unchanged screen archives byte-identically and
+        # --dedup can spot a repeated glance (the prime dedup target).
+        image_bytes=headless.encode_qimage(image, "png", deterministic=True),
         tool="observe",
         target=target,
         redacted=bool(blocklist),
         kind=record.KIND_OBSERVATION,
+        dedup=dedup,
     )
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_observation", via="record", target=target, dest=dest)

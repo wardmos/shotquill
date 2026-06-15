@@ -270,6 +270,21 @@ def _parse_rects(args: dict, key: str) -> list[Rect]:
     return rects
 
 
+def _positive_int_or_zero(value, name: str) -> int:
+    """Validate an optional non-negative integer arg (0/absent = the feature is off).
+
+    ``bool`` is an ``int`` subclass, so without the explicit guard ``True`` would
+    slip through as 1 — reject it like the ``max_width`` check does.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
 def _capture_image(args: dict, masks: list[Rect] | None = None, reveal: list[Rect] | None = None):
     """Capture per the shared target args and return (QImage, target, matched).
 
@@ -332,7 +347,7 @@ def _tool_capture(args: dict):
     # record=false to skip a one-off. The model still gets the (possibly
     # downscaled) image above; the archived copy goes through the record path.
     if args.get("record") is not False:
-        recorded = _mirror_observation(image, target)
+        recorded = _mirror_observation(image, target, dedup=bool(args.get("dedup")))
         if recorded is not None:
             meta["recorded"] = recorded
 
@@ -344,7 +359,7 @@ def _tool_capture(args: dict):
     ], meta
 
 
-def _mirror_observation(image, target: str) -> dict | None:
+def _mirror_observation(image, target: str, *, dedup: bool = False) -> dict | None:
     """File a passive ``observation`` frame into the active session, if any.
 
     Best-effort: a recording problem must not fail the agent's capture (its
@@ -357,11 +372,14 @@ def _mirror_observation(image, target: str) -> dict | None:
         blocklist = headless.active_blocklist()
         frame = record.record_frame(
             session,
-            image_bytes=headless.encode_qimage(image, "png"),
+            # Deterministic so a repeated glance archives byte-identically and
+            # `dedup` can reference the previous frame instead of duplicating it.
+            image_bytes=headless.encode_qimage(image, "png", deterministic=True),
             tool="observe",
             target=target,
             redacted=bool(blocklist),
             kind=record.KIND_OBSERVATION,
+            dedup=dedup,
         )
     except record.RecordError as exc:
         return {"error": str(exc)}
@@ -504,10 +522,16 @@ def _tool_record_frame(args: dict):
     # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
     # from the assertion, not just the archived frame.
     result = headless.apply_masks(result, masks)
-    from shotquill.imaging import pixelate_except, result_to_qimage
+    from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal, result.scale)
-    image_bytes = headless.encode_qimage(image, "png")
+    # Cap the long edge before OCR/encoding so the assertion and the archived
+    # frame read the same (possibly shrunk) pixels.
+    max_dim = _positive_int_or_zero(args.get("max_dimension"), "max_dimension")
+    image = downscale_to_max(image, max_dim)
+    # Deterministic so an unchanged screen encodes byte-identically and `dedup`
+    # can reference the previous frame instead of writing a duplicate.
+    image_bytes = headless.encode_qimage(image, "png", deterministic=True)
 
     assertions = None
     if asserting:
@@ -529,6 +553,7 @@ def _tool_record_frame(args: dict):
         label=args.get("label"),
         redacted=bool(blocklist),
         assertions=assertions,
+        dedup=bool(args.get("dedup")),
     )
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_frame", via="record", target=target, dest=dest)
@@ -565,6 +590,54 @@ def _tool_record_end(args: dict):
         "filmstrip": html_path,
         "otlp": str(session.otlp_path.resolve()),
         "frames": len(manifest.get("frames", [])),
+    }
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_record_list(args: dict):
+    sessions = [
+        {
+            "conversation_id": s.id,
+            "dir": str(s.dir.resolve()),
+            "started_at": s.started_at,
+            "status": s.status,
+            "frames": s.frame_count,
+            "size_bytes": s.size_bytes,
+        }
+        for s in record.list_sessions()
+    ]
+    audit.record("record_list", via="mcp", target=f"{len(sessions)} sessions")
+    payload = {"sessions": sessions}
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_record_prune(args: dict):
+    max_age_days = args.get("max_age_days")
+    max_sessions = args.get("max_sessions")
+    if max_age_days is None and max_sessions is None:
+        raise ValueError("record_prune needs max_age_days and/or max_sessions")
+    if max_sessions is not None and (
+        isinstance(max_sessions, bool) or not isinstance(max_sessions, int) or max_sessions < 0
+    ):
+        raise ValueError("max_sessions must be a non-negative integer")
+    if max_age_days is not None and (
+        isinstance(max_age_days, bool)
+        or not isinstance(max_age_days, (int, float))
+        or max_age_days < 0
+    ):
+        raise ValueError("max_age_days must be a non-negative number")
+
+    dry_run = bool(args.get("dry_run"))
+    removed = record.prune_sessions(
+        max_age_days=max_age_days, max_sessions=max_sessions, dry_run=dry_run
+    )
+    if not dry_run:
+        audit.record("record_prune", via="mcp", target=f"{len(removed)} sessions")
+    payload = {
+        "removed": [s.id for s in removed],
+        "count": len(removed),
+        "freed_bytes": sum(s.size_bytes for s in removed),
+        "dry_run": dry_run,
     }
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
@@ -742,6 +815,15 @@ _TOOLS = {
                             "When a session is recording, also file this capture as "
                             "an observation frame in the trace. Pass false to skip a "
                             "one-off (no effect when not recording)."
+                        ),
+                    },
+                    "dedup": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "When mirroring into a session, reference the previous "
+                            "frame instead of writing a duplicate if the screen is "
+                            "unchanged (cost control for repeated glances)."
                         ),
                     },
                     **_MASK_PROPERTY,
@@ -971,6 +1053,21 @@ _TOOLS = {
                         "default": False,
                         "description": "Make contains/matches case-insensitive.",
                     },
+                    "dedup": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "If this frame is identical to the previous one, reference "
+                            "it instead of writing a duplicate image (cost control)."
+                        ),
+                    },
+                    "max_dimension": {
+                        "type": "integer",
+                        "description": (
+                            "Cap the frame's longer edge to this many pixels before "
+                            "filing (0/absent = keep native size)."
+                        ),
+                    },
                     **_MASK_PROPERTY,
                     **_REVEAL_PROPERTY,
                     **_TARGET_PROPERTIES,
@@ -1049,6 +1146,83 @@ _TOOLS = {
                     "frames": {"type": "integer"},
                 },
                 "required": ["conversation_id", "dir", "manifest", "filmstrip", "otlp", "frames"],
+            },
+        },
+    },
+    "record_list": {
+        "handler": _tool_record_list,
+        "descriptor": {
+            "name": "record_list",
+            "description": (
+                "List recorded sessions, newest first: conversation_id, directory, "
+                "start time, status, frame count, and on-disk size in bytes. Use it "
+                "to find sessions to prune."
+            ),
+            "annotations": _read_only("List recorded sessions"),
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "sessions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "conversation_id": {"type": "string"},
+                                "dir": {"type": "string"},
+                                "started_at": {"type": ["string", "null"]},
+                                "status": {"type": ["string", "null"]},
+                                "frames": {"type": "integer"},
+                                "size_bytes": {"type": "integer"},
+                            },
+                            "required": ["conversation_id", "dir", "frames", "size_bytes"],
+                        },
+                    }
+                },
+                "required": ["sessions"],
+            },
+        },
+    },
+    "record_prune": {
+        "handler": _tool_record_prune,
+        "descriptor": {
+            "name": "record_prune",
+            "description": (
+                "Delete old recorded sessions to cap disk cost. Give max_age_days "
+                "and/or max_sessions (at least one); only completed sessions are "
+                "eligible, so a live recording is never removed. Pass dry_run to see "
+                "what would go without deleting."
+            ),
+            # Deletes files: not readOnlyHint, so a host can gate it.
+            "annotations": {"title": "Prune old recordings", "openWorldHint": False},
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "max_age_days": {
+                        "type": "number",
+                        "description": "Remove sessions started more than this many days ago.",
+                    },
+                    "max_sessions": {
+                        "type": "integer",
+                        "description": "Keep only the newest this-many sessions.",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Report what would be removed without deleting anything.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "removed": {"type": "array", "items": {"type": "string"}},
+                    "count": {"type": "integer"},
+                    "freed_bytes": {"type": "integer"},
+                    "dry_run": {"type": "boolean"},
+                },
+                "required": ["removed", "count", "freed_bytes", "dry_run"],
             },
         },
     },
