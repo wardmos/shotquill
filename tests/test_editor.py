@@ -582,6 +582,70 @@ def test_arrows_do_nothing_without_region_context(qtbot, config):
     assert window._origin == origin
 
 
+# --- crop edge adjustment (full-desktop overlay) -----------------------------
+
+
+def test_edge_press_opens_adjust_overlay_seeded_with_selection(qtbot, config):
+    from shotquill.ui.region_adjust import RegionAdjustOverlay
+
+    window = _region_editor(qtbot, config)  # selection is (10, 10, 30, 20)
+    window._open_adjust_overlay("right")
+    overlay = window._adjust_overlay
+    assert isinstance(overlay, RegionAdjustOverlay)
+    assert overlay._selection_global() == QRect(10, 10, 30, 20)
+    overlay.close()
+
+
+def test_overlay_commit_recrops_to_the_new_selection(qtbot, config):
+    window = _region_editor(qtbot, config)
+    window._open_adjust_overlay("right")
+    # The overlay hands back a new selection in global logical points.
+    window._on_adjust_committed(QRect(10, 10, 50, 20))
+    # The re-crop is deferred a tick (so it runs after the overlay tears down).
+    qtbot.waitUntil(lambda: window._origin == QRect(10, 10, 50, 20))
+    background = window._canvas.background_image()
+    assert (background.width(), background.height()) == (50, 20)
+
+
+def test_adjust_button_opens_overlay_for_region_capture(qtbot, config):
+    window = _region_editor(qtbot, config)
+    assert window._adjust_action is not None  # region captures get the button
+    window._on_adjust_clicked()
+    assert window._adjust_overlay is not None
+    window._adjust_overlay.close()
+
+
+def test_adjust_button_disabled_once_the_crop_freezes(qtbot, config):
+    from PySide6.QtGui import QUndoCommand
+
+    window = _region_editor(qtbot, config)
+    assert window._adjust_action.isEnabled()
+    window._canvas.undo_stack().push(QUndoCommand())  # first annotation
+    assert not window._adjust_action.isEnabled()
+
+
+def test_non_region_editor_has_no_adjust_button(qtbot, config):
+    window = _editor(qtbot, config)  # full-screen capture: no RegionContext
+    assert window._adjust_action is None
+
+
+def test_overlay_not_opened_after_annotation(qtbot, config):
+    from PySide6.QtGui import QUndoCommand
+
+    window = _region_editor(qtbot, config)
+    window._canvas.undo_stack().push(QUndoCommand())  # crop is frozen
+    window._open_adjust_overlay("right")
+    assert window._adjust_overlay is None
+
+
+def test_overlay_close_clears_the_reference(qtbot, config):
+    window = _region_editor(qtbot, config)
+    window._open_adjust_overlay("right")
+    assert window._adjust_overlay is not None
+    window._adjust_overlay.close()
+    qtbot.waitUntil(lambda: window._adjust_overlay is None)
+
+
 def test_adjust_hint_shown_until_first_annotation(qtbot, config):
     from PySide6.QtGui import QUndoCommand
 

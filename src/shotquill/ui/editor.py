@@ -21,10 +21,11 @@ crop — its pixels must not shift under placed shapes.
 
 from __future__ import annotations
 
+import sys
 import threading
 from typing import TYPE_CHECKING, NamedTuple
 
-from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -41,6 +42,7 @@ from shotquill.i18n import adjust_hint_key, key_display_name, t
 from shotquill.ocr import get_recognizer
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.geometry import scale_rect_edges
+from shotquill.ui.region_adjust import RegionAdjustOverlay
 from shotquill.ui.toolbar import create_toolbar
 
 if TYPE_CHECKING:
@@ -210,6 +212,8 @@ class EditorWindow(QMainWindow):
         # desktop exactly like the capture overlay showed it.
         self._backdrop: _EditorBackdrop | None = None
         self._status_badge: QLabel | None = None
+        # The full-desktop overlay opened to re-adjust the crop, while it is up.
+        self._adjust_overlay: RegionAdjustOverlay | None = None
         if config.editor_backdrop():
             self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
             self._backdrop = _EditorBackdrop()
@@ -238,6 +242,10 @@ class EditorWindow(QMainWindow):
             self._ocr if self._recognizer is not None else None,
             self._pin,
             style=config.toolbar_style(),
+            # Region captures get an "Adjust" button to reopen the crop overlay;
+            # a button (not the window edge) because the editor window's edges
+            # contend with the OS window resize on macOS.
+            on_adjust=self._on_adjust_clicked if self._region is not None else None,
         )
         # The toolbar lands in the corner nearest the pointer (e.g. the
         # bottom-right after a region drag towards the bottom of the screen),
@@ -250,6 +258,7 @@ class EditorWindow(QMainWindow):
         self.addToolBar(area, toolbar)
         self._copy_action = toolbar.copy_action
         self._save_action = toolbar.save_action
+        self._adjust_action = toolbar.adjust_action  # None for non-region captures
         # Resolves the (configurable, possibly disabled) finish keys and sets
         # the matching tooltips; re-run by the app whenever Settings changes.
         self.reload_finish_keys()
@@ -271,9 +280,18 @@ class EditorWindow(QMainWindow):
         self._hint_showing = False
         if self._can_adjust():
             # Make the merged adjust+annotate mode discoverable; the hint is
-            # retired once the first annotation freezes the crop.
+            # retired once the first annotation freezes the crop. The "Adjust"
+            # toolbar button opens the full-desktop overlay. Off macOS the
+            # window's own edges are also grabbable (the canvas gates this on
+            # pristineness); on macOS those edges contend with the OS resize, so
+            # the button is the only trigger there.
+            if sys.platform != "darwin":
+                self._canvas.enable_crop_adjust(self._open_adjust_overlay)
             self._canvas.undo_stack().indexChanged.connect(self._retire_adjust_hint)
             self._show_adjust_hint()
+
+    def _on_adjust_clicked(self, _checked: bool = False) -> None:
+        self._open_adjust_overlay(None)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -313,6 +331,10 @@ class EditorWindow(QMainWindow):
             self._backdrop.close()
             self._backdrop.deleteLater()
             self._backdrop = None
+        if self._adjust_overlay is not None:
+            # Drop our ref first so the destroyed handler can't fire mid-teardown.
+            overlay, self._adjust_overlay = self._adjust_overlay, None
+            overlay.close()
         super().closeEvent(event)
 
     def resizeEvent(self, event) -> None:
@@ -414,6 +436,52 @@ class EditorWindow(QMainWindow):
         self._selection = sel
         self._apply_selection()
 
+    def _open_adjust_overlay(self, edge: str | None = None) -> None:
+        """Open the full-desktop overlay to re-adjust the crop (region captures).
+
+        Re-cropping inside the editor's own window is fragile — it is sized and
+        placed to sit exactly over the shot, so changing the crop means moving
+        that window under the pointer or letterboxing the shot inside it. The
+        overlay sidesteps both: it covers the whole desktop, dims everything but
+        the selection, and lets the user drag an edge against the live context
+        (with a pixel loupe), exactly like the capture overlay. On confirm the
+        editor re-crops once.
+        """
+        if not self._can_adjust() or self._adjust_overlay is not None:
+            return
+        selection = QRect(
+            int(self._selection.x()),
+            int(self._selection.y()),
+            int(self._selection.width()),
+            int(self._selection.height()),
+        )
+        overlay = RegionAdjustOverlay(
+            self._region.screenshot, self._region.geometry, selection, edge
+        )
+        overlay.committed.connect(self._on_adjust_committed)
+        overlay.destroyed.connect(self._on_adjust_overlay_closed)
+        self._adjust_overlay = overlay
+        # A single full-desktop window (see RegionAdjustOverlay.present) — not the
+        # capture overlay's per-screen controller, which is heavy and fragile on
+        # macOS. It covers the display the shot is on, which is all adjusting needs.
+        overlay.present()
+
+    def _on_adjust_committed(self, rect: QRect) -> None:
+        # The overlay returns the new selection in global logical points; re-crop
+        # to it (still only while pristine — an annotation could have raced in).
+        if not self._can_adjust():
+            return
+        self._selection = QRectF(rect)
+        # Defer the re-crop (which moves/resizes this window via _place_over_origin)
+        # to the next tick, so it runs *after* the overlay has finished tearing
+        # down. Moving the editor window while the still-shown full-desktop overlay
+        # covers it deadlocks the macOS window server (the overlay then can't close
+        # and the screen stays dimmed grey).
+        QTimer.singleShot(0, self._apply_selection)
+
+    def _on_adjust_overlay_closed(self) -> None:
+        self._adjust_overlay = None
+
     def _apply_selection(self) -> None:
         """Re-crop the adjusted selection and keep the window sitting over it."""
         region = self._region
@@ -443,8 +511,12 @@ class EditorWindow(QMainWindow):
         self._hint_showing = True
 
     def _retire_adjust_hint(self) -> None:
-        # The first annotation freezes the crop; take the stale hint down with
-        # it — unless OCR or another status has already replaced it.
+        # The first annotation freezes the crop: grey out the Adjust button (the
+        # overlay also refuses to open once non-pristine).
+        if not self._canvas.is_pristine() and self._adjust_action is not None:
+            self._adjust_action.setEnabled(False)
+        # Take the stale hint down with it — unless OCR or another status has
+        # already replaced it.
         if not self._hint_showing or self._canvas.is_pristine():
             return
         self._hint_showing = False

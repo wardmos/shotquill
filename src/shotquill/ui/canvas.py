@@ -48,6 +48,8 @@ _NEGLIGIBLE = 3.0
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
+# How close (viewport pixels) the pointer must be to a crop edge to grab it.
+_EDGE_GRAB = 8
 # Pixelating the whole selection on every mouse move is expensive on big
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
@@ -121,6 +123,10 @@ class AnnotationCanvas(QGraphicsView):
         # again under a half-finished annotation. See ``is_pristine``.
         self._text_started = False
         self._closing = False  # set on teardown; stops late focus-out commits
+        # Crop-edge adjustment (region captures): the editor installs a callback
+        # via ``enable_crop_adjust`` that opens the adjust overlay when an edge
+        # is pressed; None when this editor has no adjustable crop.
+        self._crop_adjust = None
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -141,6 +147,19 @@ class AnnotationCanvas(QGraphicsView):
         self._background_pixmap = background
         self._background.setPixmap(background)
         self._scene.setSceneRect(QRectF(background.rect()))
+
+    def enable_crop_adjust(self, callback) -> None:
+        """Let the user grab a screenshot edge to re-adjust the crop.
+
+        ``callback(edge)`` (``edge`` is one of "left"/"right"/"top"/"bottom")
+        runs when the pointer presses on that edge; the editor responds by
+        opening the full-desktop adjust overlay. Hovering an edge shows a
+        resize cursor as the affordance. Only offered while the canvas is
+        pristine and the SELECT tool is active (see ``_edge_at``), so it never
+        fights annotation drawing — and stops once the first annotation freezes
+        the crop.
+        """
+        self._crop_adjust = callback
 
     def is_pristine(self) -> bool:
         """True while nothing has been annotated: no undo history, no text edit
@@ -177,6 +196,41 @@ class AnnotationCanvas(QGraphicsView):
 
     # --- internals --------------------------------------------------------
 
+    def _edge_at(self, pos) -> str | None:
+        """Which crop edge (if any) the viewport point is close enough to grab.
+
+        Returns None unless an edge adjuster is installed, the SELECT tool is
+        active, and the canvas is still pristine — the same gate the editor's
+        keyboard adjustment uses. At a corner the nearer edge wins.
+        """
+        if self._crop_adjust is None or self._tool != Tool.SELECT or not self.is_pristine():
+            return None
+        rect = self.viewport().rect()
+        near = []
+        if abs(pos.x() - rect.left()) <= _EDGE_GRAB:
+            near.append(("left", abs(pos.x() - rect.left())))
+        if abs(pos.x() - rect.right()) <= _EDGE_GRAB:
+            near.append(("right", abs(pos.x() - rect.right())))
+        if abs(pos.y() - rect.top()) <= _EDGE_GRAB:
+            near.append(("top", abs(pos.y() - rect.top())))
+        if abs(pos.y() - rect.bottom()) <= _EDGE_GRAB:
+            near.append(("bottom", abs(pos.y() - rect.bottom())))
+        if not near:
+            return None
+        return min(near, key=lambda item: item[1])[0]
+
+    def _refresh_edge_cursor(self, pos) -> None:
+        """Show a resize cursor while hovering a grabbable crop edge."""
+        if self._crop_adjust is None:
+            return
+        edge = self._edge_at(pos)
+        if edge in ("left", "right"):
+            self.viewport().setCursor(Qt.SizeHorCursor)
+        elif edge in ("top", "bottom"):
+            self.viewport().setCursor(Qt.SizeVerCursor)
+        else:
+            self.viewport().unsetCursor()
+
     def _apply_drag_mode(self) -> None:
         if self._tool == Tool.SELECT:
             self.setDragMode(QGraphicsView.RubberBandDrag)
@@ -209,6 +263,13 @@ class AnnotationCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        # A press on a crop edge opens the adjust overlay instead of starting a
+        # rubber band / annotation.
+        if event.button() == Qt.LeftButton:
+            edge = self._edge_at(event.position().toPoint())
+            if edge is not None:
+                self._crop_adjust(edge)
+                return
         if event.button() != Qt.LeftButton or self._tool == Tool.SELECT:
             super().mousePressEvent(event)
             return
@@ -254,6 +315,8 @@ class AnnotationCanvas(QGraphicsView):
 
     def mouseMoveEvent(self, event) -> None:
         if self._temp_item is None:
+            if event.buttons() == Qt.NoButton:
+                self._refresh_edge_cursor(event.position().toPoint())
             super().mouseMoveEvent(event)
             return
 

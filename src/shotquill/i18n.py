@@ -72,14 +72,19 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · 方向键/WASD 微移光标 · Esc 取消",
     },
     "editor.adjust_hint": {
-        "en": "Arrows move crop · ⌥ resizes · ⇧ ×10 · until first annotation",
-        "zh": "方向键微调选区 · ⌥ 调大小 · ⇧ ×10 · 开始标注后固定",
+        "en": "Adjust to resize · arrows nudge · ⇧ ×10 · until first annotation",
+        "zh": "点「调整范围」改大小 · 方向键微调 · ⇧ ×10 · 开始标注后固定",
+    },
+    # Shown across the bottom of the full-desktop crop-adjust overlay.
+    "adjust.overlay_hint": {
+        "en": "Drag an edge to resize · let go to apply · Esc cancels",
+        "zh": "拖动边缘调整范围 · 松手即应用 · Esc 取消",
     },
     # Linux/X11 variant: ⌥/⇧ are macOS keycap glyphs that speak Mac convention.
     # The editor picks this variant off-darwin so the hint reads natively.
     "editor.adjust_hint_text": {
-        "en": "Arrows move crop · Alt resizes · Shift ×10 · until first annotation",
-        "zh": "方向键微调选区 · Alt 调大小 · Shift ×10 · 开始标注后固定",
+        "en": "Drag an edge or Adjust to resize · arrows nudge · until first annotation",
+        "zh": "拖动边缘或点「调整范围」改大小 · 方向键微调 · 开始标注后固定",
     },
     # System-tray missing dialog (shown when QSystemTrayIcon.isSystemTrayAvailable
     # is false — GNOME 42+ shipped without legacy tray support is the common case).
@@ -135,6 +140,11 @@ _STRINGS: dict[str, dict[str, str]] = {
     "toolbar.redo": {"en": "Redo", "zh": "重做"},
     "toolbar.ocr": {"en": "Copy Text", "zh": "取字"},
     "toolbar.ocr_tip": {"en": "Recognize and copy text (OCR)", "zh": "识别图中文字并复制（OCR）"},
+    "toolbar.adjust": {"en": "Adjust", "zh": "调整范围"},
+    "toolbar.adjust_tip": {
+        "en": "Resize the capture: drag an edge against the desktop",
+        "zh": "调整截图范围:在桌面上拖动边缘",
+    },
     "toolbar.pin": {"en": "Pin", "zh": "钉屏"},
     "toolbar.pin_tip": {
         "en": "Pin this shot on top of the screen",

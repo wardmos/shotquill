@@ -298,3 +298,50 @@ def test_mosaic_drag_throttles_live_updates_but_release_renders_final_rect(qtbot
     assert len(updates) == 2
     assert updates[-1].width() > updates[0].width()
     assert canvas.undo_stack().count() == 1
+
+
+# --- crop edge dragging ------------------------------------------------------
+
+
+def test_edge_detected_only_when_adjuster_installed(qtbot):
+    canvas = _canvas(qtbot, 120, 90)
+    viewport = canvas.viewport()
+    # No adjuster yet: edges are inert.
+    assert canvas._edge_at(QPoint(0, 45)) is None
+    canvas.enable_crop_adjust(lambda *a: None)
+    assert canvas._edge_at(QPoint(0, 45)) == "left"
+    assert canvas._edge_at(QPoint(viewport.width() - 1, 45)) == "right"
+    assert canvas._edge_at(QPoint(60, 0)) == "top"
+    assert canvas._edge_at(QPoint(60, viewport.height() - 1)) == "bottom"
+    assert canvas._edge_at(QPoint(60, 45)) is None  # the interior
+
+
+def test_edge_not_grabbed_after_annotation(qtbot):
+    from PySide6.QtGui import QUndoCommand
+
+    canvas = _canvas(qtbot)
+    canvas.enable_crop_adjust(lambda *a: None)
+    canvas.undo_stack().push(QUndoCommand())  # crop is frozen
+    assert canvas._edge_at(QPoint(0, 45)) is None
+
+
+def test_edge_press_triggers_crop_callback_not_an_annotation(qtbot):
+    canvas = _canvas(qtbot, 120, 90)
+    calls = []
+    canvas.enable_crop_adjust(calls.append)  # callback(edge)
+    viewport = canvas.viewport()
+    edge_x = viewport.width() - 1
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(edge_x, 45))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(edge_x, 45))
+    assert calls == ["right"]  # one trigger on the press; no annotation drawn
+    assert canvas.undo_stack().count() == 0
+
+
+def test_interior_press_does_not_trigger_crop_callback(qtbot):
+    canvas = _canvas(qtbot)
+    calls = []
+    canvas.enable_crop_adjust(lambda *a: calls.append(a))
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(60, 45))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(60, 45))
+    assert calls == []

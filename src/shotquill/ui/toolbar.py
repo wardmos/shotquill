@@ -106,6 +106,7 @@ def create_toolbar(
     on_ocr: Callable[[], None] | None,
     on_pin: Callable[[], None],
     style: str = DEFAULT_TOOLBAR_STYLE,
+    on_adjust: Callable[[], None] | None = None,
 ) -> QToolBar:
     toolbar = QToolBar()
     toolbar.setToolButtonStyle(_BUTTON_STYLES.get(style, _BUTTON_STYLES[DEFAULT_TOOLBAR_STYLE]))
@@ -221,6 +222,19 @@ def create_toolbar(
     toolbar.addAction(redo_action)
 
     toolbar.addSeparator()
+
+    # Adjust the capture range (region captures only, until the first
+    # annotation freezes the crop): opens the full-desktop overlay. Offered as a
+    # button because grabbing the editor window's own edge contends with the OS
+    # window resize on macOS. Disabled by the editor once the crop is frozen.
+    adjust_action = None
+    if on_adjust is not None:
+        adjust_action = QAction(sized_icon("crop"), t("toolbar.adjust"), toolbar)
+        adjust_action.setToolTip(t("toolbar.adjust_tip"))
+        adjust_action.triggered.connect(on_adjust)
+        toolbar.addAction(adjust_action)
+        toolbar.addSeparator()
+    toolbar.adjust_action = adjust_action
 
     # OCR is platform-gated: only shown when an on-device recognizer exists
     # (macOS Vision today). On Linux there's no backend, so the button is

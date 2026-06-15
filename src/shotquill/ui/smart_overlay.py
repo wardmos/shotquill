@@ -739,11 +739,14 @@ class _ScreenOverlay(QWidget):
     NSWindow above the menu bar.
     """
 
-    def __init__(self, brain: SmartOverlay, screen, vorigin: QPoint, *, fullscreen=False) -> None:
+    def __init__(
+        self, brain, screen, vorigin: QPoint, *, fullscreen=False, hide_cursor=True
+    ) -> None:
         super().__init__()
         self._brain = brain
         self._screen = screen
         self._fullscreen = fullscreen
+        self._hide_cursor = hide_cursor
         self._on_focus_change = None  # set by the controller
         geometry = screen.geometry()
         # This screen's position within the brain's virtual-desktop coords: add
@@ -751,8 +754,12 @@ class _ScreenOverlay(QWidget):
         self._offset = QPointF(geometry.x() - vorigin.x(), geometry.y() - vorigin.y())
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        # Same hidden-cursor + painted-crosshair scheme as the single window.
-        self.setCursor(Qt.BlankCursor)
+        # The capture overlay hides the OS cursor and paints its own crosshair
+        # (the keyboard nudge can't move the real pointer everywhere). A brain
+        # that wants real cursors (the crop-adjust overlay's resize arrows) opts
+        # out with hide_cursor=False and drives the shape via ``_cursor_shape``.
+        if hide_cursor:
+            self.setCursor(Qt.BlankCursor)
         self.setMouseTracking(True)
         self.setGeometry(geometry)
 
@@ -791,13 +798,25 @@ class _ScreenOverlay(QWidget):
         self._brain._paint_all(painter)
 
     def mouseMoveEvent(self, event) -> None:
-        self._brain._pointer_moved(self._to_brain(event.position()))
+        brain_pos = self._to_brain(event.position())
+        self._brain._pointer_moved(brain_pos)
+        if not self._hide_cursor:
+            shape = self._brain._cursor_shape(brain_pos)
+            if shape is not None:
+                self.setCursor(shape)
 
     def mousePressEvent(self, event) -> None:
         self._brain._press(self._to_brain(event.position()), event.button())
 
     def mouseReleaseEvent(self, event) -> None:
         self._brain._release(self._to_brain(event.position()), event.button())
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        # Only some brains accept a double-click (the crop-adjust overlay commits
+        # on it); the capture brain has no such handler, so forward only if present.
+        handler = getattr(self._brain, "_double_click", None)
+        if handler is not None:
+            handler(self._to_brain(event.position()), event.button())
 
     def keyPressEvent(self, event) -> None:
         # Keys carry no position; the brain nudges its own pointer state.
@@ -826,12 +845,12 @@ class SmartOverlayController:
     lifetime: when the brain closes (accept/cancel) the views close with it.
     """
 
-    def __init__(self, brain: SmartOverlay, *, fullscreen=False) -> None:
+    def __init__(self, brain, *, fullscreen=False, hide_cursor=True, terminal_signals=None) -> None:
         self._brain = brain
         self._finished = False
         vorigin = brain._geometry.topLeft()
         self._views = [
-            _ScreenOverlay(brain, s, vorigin, fullscreen=fullscreen)
+            _ScreenOverlay(brain, s, vorigin, fullscreen=fullscreen, hide_cursor=hide_cursor)
             for s in QGuiApplication.screens()
         ]
         for view in self._views:
@@ -839,13 +858,16 @@ class SmartOverlayController:
         brain.changed.connect(self._repaint_views)
         # Mirror every terminal outcome to the views immediately (hide before the
         # editor opens so a screensaver-level overlay can't flash over it), then
-        # the brain's destruction tears them down for good.
-        for signal in (
-            brain.region_selected,
-            brain.window_selected,
-            brain.fullscreen_selected,
-            brain.cancelled,
-        ):
+        # the brain's destruction tears them down for good. The capture brain has
+        # four outcomes; another brain (the crop-adjust overlay) passes its own.
+        if terminal_signals is None:
+            terminal_signals = (
+                brain.region_selected,
+                brain.window_selected,
+                brain.fullscreen_selected,
+                brain.cancelled,
+            )
+        for signal in terminal_signals:
             signal.connect(self._finish)
         brain.destroyed.connect(self._close_views)
 
@@ -886,11 +908,17 @@ class SmartOverlayController:
             return
 
         def check() -> None:
+            import shiboken6
+
             # Leans on every accept/cancel path setting ``_closed`` (and _finish
             # setting ``_finished``) *before* the outcome signal is emitted: the
             # editor the app opens on accept steals focus and would otherwise
             # read as an abandon here. Both guards run before this deferred tick.
-            if self._finished or self._brain._closed:
+            # The brain may also be gone entirely — the editor closes the
+            # crop-adjust overlay via close() (not _cancel), so a tick scheduled
+            # just before teardown can land after the brain's C++ object is
+            # deleted; touching it then would raise.
+            if self._finished or not shiboken6.isValid(self._brain) or self._brain._closed:
                 return
             if not any(v.isActiveWindow() for v in self._live_views()):
                 self._brain._cancel()
@@ -898,8 +926,8 @@ class SmartOverlayController:
         QTimer.singleShot(0, check)
 
 
-def present_overlay(overlay: SmartOverlay, app) -> None:
-    """Show the smart-capture overlay so it covers every display in full.
+def present_overlay(overlay, app, *, hide_cursor=True, terminal_signals=None) -> None:
+    """Show a full-desktop overlay so it covers every display in full.
 
     On macOS a plain stay-on-top window sits *under* the menu bar (so its top
     strip can't be captured) and, with more than one display, only composites on
@@ -913,13 +941,21 @@ def present_overlay(overlay: SmartOverlay, app) -> None:
     gives each output its own fullscreen view. A single-output Wayland session,
     and X11 (one window already spans the whole virtual desktop), present the
     single window directly.
+
+    ``hide_cursor`` and ``terminal_signals`` are forwarded to the controller so
+    the same machinery drives the capture overlay (hidden cursor, four outcomes)
+    and the crop-adjust overlay (real resize cursors, commit/cancel).
     """
     if sys.platform == "darwin":
-        controller = SmartOverlayController(overlay)
+        controller = SmartOverlayController(
+            overlay, hide_cursor=hide_cursor, terminal_signals=terminal_signals
+        )
         overlay._controller = controller  # share the brain's lifetime
         controller.present()
     elif _compositor_prefers_fullscreen() and len(app.screens()) > 1:
-        controller = SmartOverlayController(overlay, fullscreen=True)
+        controller = SmartOverlayController(
+            overlay, fullscreen=True, hide_cursor=hide_cursor, terminal_signals=terminal_signals
+        )
         overlay._controller = controller  # share the brain's lifetime
         controller.present()
     else:

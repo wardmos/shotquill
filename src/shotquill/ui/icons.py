@@ -220,8 +220,18 @@ def _draw_save(p: QPainter) -> None:
     p.drawPath(path)
 
 
+def _draw_crop(p: QPainter) -> None:
+    # Crop marks: a top-left and a bottom-right L-bracket overlapping into a
+    # frame — the classic "adjust the crop" glyph.
+    p.drawLine(QPointF(7, 3), QPointF(7, 17))  # left edge of the top-left bracket
+    p.drawLine(QPointF(3, 7), QPointF(17, 7))  # top edge of the top-left bracket
+    p.drawLine(QPointF(17, 7), QPointF(17, 21))  # right edge of the bottom-right bracket
+    p.drawLine(QPointF(7, 17), QPointF(21, 17))  # bottom edge of the bottom-right bracket
+
+
 _GLYPHS: dict[str, Callable[[QPainter], None]] = {
     "select": _draw_select,
+    "crop": _draw_crop,
     "rect": _draw_rect,
     "ellipse": _draw_ellipse,
     "arrow": _draw_arrow,
