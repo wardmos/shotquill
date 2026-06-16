@@ -502,7 +502,8 @@ def _tool_record_frame(args: dict):
     contains = tuple(args.get("contains") or ())
     matches = tuple(args.get("matches") or ())
     asserting = bool(contains or matches)
-    recognizer = headless.get_recognizer() if asserting else None
+    scanning = bool(args.get("scan_pii"))
+    recognizer = headless.get_recognizer() if (asserting or scanning) else None
     masks = _parse_rects(args, "mask")
     reveal = _parse_rects(args, "reveal")
 
@@ -535,17 +536,27 @@ def _tool_record_frame(args: dict):
     # can reference the previous frame instead of writing a duplicate.
     image_bytes = headless.encode_qimage(image, "png", deterministic=True)
 
+    # OCR once and share the lines between the assertion and the PII scan.
+    recognized = recognizer.recognize(image) if recognizer is not None else []
     assertions = None
     if asserting:
         from shotquill import textassert
 
         checks = textassert.evaluate(
-            recognizer.recognize(image),
+            recognized,
             contains=contains,
             matches=matches,
             ignore_case=bool(args.get("ignore_case")),
         )
         assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
+
+    # Best-effort residual-risk flag (D15 layer 6): kind + count only, never the
+    # value. Does not mask pixels — that needs OCR boxes (D11), still pending.
+    pii_findings = None
+    if scanning:
+        from shotquill import pii
+
+        pii_findings = [{"kind": f.kind, "count": f.count} for f in pii.scan(recognized)]
 
     frame = record.record_frame(
         session,
@@ -555,6 +566,7 @@ def _tool_record_frame(args: dict):
         label=args.get("label"),
         redacted=bool(blocklist),
         assertions=assertions,
+        pii=pii_findings,
         dedup=bool(args.get("dedup")),
     )
     dest = str((session.dir / frame.image).resolve())
@@ -570,6 +582,8 @@ def _tool_record_frame(args: dict):
     if assertions is not None:
         payload["assertions"] = assertions
         payload["assertion_passed"] = frame.assertion_passed
+    if pii_findings is not None:
+        payload["pii"] = pii_findings
     if matched > 1:
         payload["matched_windows"] = matched
         payload["note"] = "captured the front-most match; use window_id for an exact pick"
@@ -1055,6 +1069,15 @@ _TOOLS = {
                         "default": False,
                         "description": "Make contains/matches case-insensitive.",
                     },
+                    "scan_pii": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "OCR the frame and flag likely PII kinds + counts on it "
+                            "(best-effort, not a guarantee; records kind/count only, "
+                            "never the value)."
+                        ),
+                    },
                     "dedup": {
                         "type": "boolean",
                         "default": False,
@@ -1105,6 +1128,21 @@ _TOOLS = {
                                 "passed": {"type": "boolean"},
                             },
                             "required": ["kind", "pattern", "passed"],
+                        },
+                    },
+                    "pii": {
+                        "type": "array",
+                        "description": (
+                            "Present when scan_pii was set: best-effort PII flags, "
+                            "kind + count only (not a guarantee, never the value)."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string"},
+                                "count": {"type": "integer"},
+                            },
+                            "required": ["kind", "count"],
                         },
                     },
                     "matched_windows": {"type": "integer"},

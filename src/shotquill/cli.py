@@ -378,6 +378,12 @@ def _add_record_parser(sub) -> None:
         help="mosaic the whole frame, keeping only these rectangle(s) sharp; repeatable",
     )
     frame.add_argument(
+        "--scan-pii",
+        action="store_true",
+        help="OCR the frame and flag likely PII kinds + counts on it (best-effort, "
+        "not a guarantee; records the kind/count only, never the value)",
+    )
+    frame.add_argument(
         "--dedup",
         action="store_true",
         help="if this frame is identical to the previous one, reference it instead "
@@ -688,7 +694,7 @@ def _cmd_record_start(args: argparse.Namespace) -> int:
 
 
 def _cmd_record_frame(args: argparse.Namespace) -> int:
-    from shotquill import record, textassert
+    from shotquill import pii, record, textassert
 
     try:
         session = record.resolve_session(args.session)
@@ -705,7 +711,8 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     # becomes a frame in the trace. Resolve the recognizer first, so a host
     # without OCR fails before the capture rather than after.
     asserting = bool(args.contains or args.matches)
-    recognizer = headless.get_recognizer() if asserting else None
+    scanning = bool(args.scan_pii)
+    recognizer = headless.get_recognizer() if (asserting or scanning) else None
 
     # Redaction stays on for the record path: the blocklist is loaded and applied
     # by perform_capture, and a non-empty list means protection was in force for
@@ -744,12 +751,15 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
 
     # Assert on the very pixels being filed (post-redaction), so the recorded
     # frame and its verdict always agree.
+    # OCR once and share the lines between the assertion and the PII scan, so a
+    # frame that both asserts and scans reads the very same recognized text.
+    recognized = recognizer.recognize(image) if recognizer is not None else []
     checks: list[textassert.Check] = []
     assertions = None
     if asserting:
         try:
             checks = textassert.evaluate(
-                recognizer.recognize(image),
+                recognized,
                 contains=tuple(args.contains or ()),
                 matches=tuple(args.matches or ()),
                 ignore_case=args.ignore_case,
@@ -757,6 +767,14 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         except ValueError as exc:
             return _usage_error(str(exc))  # a broken regex is the caller's bug
         assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
+
+    # Best-effort residual-risk flag (D15 layer 6): kind + count only, never the
+    # value. Does not mask pixels — that needs OCR boxes (D11), still pending.
+    findings: list[pii.Finding] = []
+    pii_findings = None
+    if scanning:
+        findings = pii.scan(recognized)
+        pii_findings = [{"kind": f.kind, "count": f.count} for f in findings]
 
     frame = record.record_frame(
         session,
@@ -766,6 +784,7 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         label=args.label,
         redacted=bool(blocklist),
         assertions=assertions,
+        pii=pii_findings,
         dedup=args.dedup,
     )
     dest = str((session.dir / frame.image).resolve())
@@ -782,11 +801,15 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         if assertions is not None:
             payload["assertions"] = assertions
             payload["assertion_passed"] = frame.assertion_passed
+        if pii_findings is not None:
+            payload["pii"] = pii_findings
         print(json.dumps(payload, ensure_ascii=False))
     else:
         print(dest)
         for check in checks:
             print(textassert.describe(check), file=sys.stderr)
+        if scanning:
+            print(pii.describe(findings), file=sys.stderr)
 
     # A failed assertion is a result, not an error: the frame is still recorded
     # (capturing the failure is the point); the exit code carries the verdict.

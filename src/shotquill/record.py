@@ -233,6 +233,7 @@ def record_frame(
     redacted: bool = False,
     kind: str = KIND_ACTION,
     assertions: list[dict] | None = None,
+    pii: list[dict] | None = None,
     image_ext: str = "png",
     dedup: bool = False,
     now: dt.datetime | None = None,
@@ -245,7 +246,10 @@ def record_frame(
     passively mirrored capture. ``assertions`` is an optional list of
     already-evaluated OCR checks (each a ``{"kind", "pattern", "passed"}`` dict);
     when given, the frame records whether they all held, so a failed test becomes
-    a frame in the trace. Not safe to call concurrently for one session — a trace
+    a frame in the trace. ``pii`` is an optional list of best-effort PII findings
+    (each a ``{"kind", "count"}`` dict from :mod:`pii`) — kind and count only,
+    never the value — recorded as a residual-risk flag on the frame. Not safe to
+    call concurrently for one session — a trace
     is one agent's linear run, and the next index is read from the manifest on
     each call.
 
@@ -293,6 +297,8 @@ def record_frame(
         entry["deduped"] = True
     if assertions:
         entry["assertions"] = [dict(check) for check in assertions]
+    if pii:
+        entry["pii"] = [dict(finding) for finding in pii]
     manifest["frames"].append(entry)
     _write_manifest(session.manifest_path, manifest)
     return frame
