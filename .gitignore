@@ -146,3 +146,4 @@ tmp/
 !/README.md
 !/skills/**/*.md
 !/docs/**/*.md
+!/examples/**/*.md

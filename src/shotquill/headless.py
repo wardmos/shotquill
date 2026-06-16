@@ -942,22 +942,43 @@ def _check_allowlist() -> dict:
     }
 
 
+def screen_recording_detail(granted: bool, responsible: list[str]) -> str | None:
+    """Build the ``screen_recording`` check detail (pure, so it is testable).
+
+    When denied, name the **responsible process** — the parent macOS attributes
+    Screen Recording to — because the #1 mistake is granting Terminal when the
+    real controller is something else (an agent host, or in CI the runner agent
+    that spawned ``squill``). A correct grant follows that process, not Terminal.
+    Returns ``None`` when granted (nothing to report).
+
+    Process names are app-influenced (argv[0]/``PR_SET_NAME``), so strip control
+    characters before they reach the terminal — the same ANSI-injection guard the
+    blocklist/allowlist hints apply to window titles.
+    """
+    if granted:
+        return None
+    names = [printable(name) for name in responsible]
+    who = " ← ".join(names) if names else "the process that ran squill"
+    return (
+        "denied. macOS attributes Screen Recording to the responsible process — "
+        f"grant it to that, not Terminal. Caller chain (nearest first): {who}. "
+        "In CI/VMs grant it non-interactively (MDM PPPC profile, or a "
+        "pre-authorized VM template); a GitHub-hosted runner can't. Settings pane: "
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+    )
+
+
 def _check_screen_recording() -> dict:  # pragma: no cover - macOS only
     """TCC preflight: a denied grant fails silently at capture time, so the
-    doctor surfaces it with a deep link instead of letting agents see black
-    frames."""
+    doctor surfaces it — and names which process to grant — instead of letting
+    agents see black frames."""
     try:
         from Quartz import CGPreflightScreenCaptureAccess
 
         granted = bool(CGPreflightScreenCaptureAccess())
     except Exception as exc:
         return {"capability": "screen_recording", "available": False, "detail": f"probe: {exc}"}
-    detail = (
-        None
-        if granted
-        else (
-            "grant Screen Recording to the invoking app (e.g. your terminal): "
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        )
-    )
+    from shotquill import audit
+
+    detail = screen_recording_detail(granted, audit.caller_chain())
     return {"capability": "screen_recording", "available": granted, "detail": detail}

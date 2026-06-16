@@ -1,0 +1,5 @@
+# Extra dependency for this example only (ShotQuill itself makes no network calls).
+# ShotQuill provides the `squill` CLI the adapter drives: `pip install shotquill`
+# (or `pip install -e ../..` from this directory for the local checkout).
+anthropic>=0.40
+openai>=1.59
