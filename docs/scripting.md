@@ -180,9 +180,12 @@ squill record end --session "$DIR"                                # prints the H
   audit-logged with `via: "record"`.
 
 The MCP server exposes the same loop as `record_start` / `record_frame` /
-`record_end` (below). For agents,
-[`skills/flight-recorder/SKILL.md`](../skills/flight-recorder/SKILL.md) is the
-recipe for *when* to capture and *how* to label, layered on top of those tools.
+`record_end` (below). Two recipes layer on top of those tools, by agent shape:
+[`skills/flight-recorder/SKILL.md`](../skills/flight-recorder/SKILL.md) for an
+agent **driving** a GUI step by step (an action frame per step), and
+[`skills/visual-checkpoints/SKILL.md`](../skills/visual-checkpoints/SKILL.md) for
+a **coding** agent that mostly edits code and only verifies a result on screen at
+a few checkpoints.
 
 ---
 
