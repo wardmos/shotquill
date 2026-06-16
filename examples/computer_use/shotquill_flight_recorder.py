@@ -200,14 +200,19 @@ def _openai_click(name: str, tool_input: Mapping[str, Any], _redact_typed: bool)
     return Frame(tool="click", label=f"{prefix}{verb} at {_openai_coord(tool_input)}")
 
 
-def _openai_move(_name: str, tool_input: Mapping[str, Any], _redact_typed: bool) -> Frame:
-    return Frame(tool="move", label=f"move cursor to {_openai_coord(tool_input)}")
+def _openai_point(point: Any) -> str:
+    """Render one drag-path point — an ``{x, y}`` object (the real shape) or ``[x, y]``."""
+    if isinstance(point, Mapping):
+        return _openai_coord(point)
+    return _coord(point)
 
 
 def _openai_drag(_name: str, tool_input: Mapping[str, Any], _redact_typed: bool) -> Frame:
     path = tool_input.get("path")
     if isinstance(path, Sequence) and not isinstance(path, str) and len(path) >= 2:
-        return Frame(tool="drag", label=f"drag from {_coord(path[0])} to {_coord(path[-1])}")
+        return Frame(
+            tool="drag", label=f"drag from {_openai_point(path[0])} to {_openai_point(path[-1])}"
+        )
     return _drag(_name, tool_input, _redact_typed)
 
 
@@ -235,11 +240,13 @@ OPENAI_COMPUTER_USE = ActionMap(
         "double_click": _openai_click,
         "drag": _openai_drag,
         "keypress": _openai_keypress,
-        "move": _openai_move,
         "scroll": _openai_scroll,
         "type": _type,
     },
-    observations=frozenset({"screenshot", "wait"}),
+    # `move` (cursor move) is perception, not a state change — skip it, as the
+    # Anthropic map skips `mouse_move`. Recording every move would spam the trace
+    # and trigger a full capture per move.
+    observations=frozenset({"screenshot", "wait", "move"}),
 )
 
 

@@ -149,15 +149,18 @@ def test_openai_action_map_keypress_list():
 
 
 def test_openai_action_map_drag_path():
+    # OpenAI's drag `path` is a list of {x, y} objects, not [x, y] pairs.
     frame = OPENAI_COMPUTER_USE.describe(
         "drag",
-        {"path": [[1, 2], [10, 20], [30, 40]]},
+        {"path": [{"x": 1, "y": 2}, {"x": 10, "y": 20}, {"x": 30, "y": 40}]},
     )
     assert frame == Frame(tool="drag", label="drag from (1, 2) to (30, 40)")
 
 
 def test_openai_observation_is_not_recorded():
     assert OPENAI_COMPUTER_USE.describe("screenshot", {}) is None
+    # Cursor moves are perception, not state changes — skipped like Anthropic's.
+    assert OPENAI_COMPUTER_USE.describe("move", {"x": 1, "y": 2}) is None
 
 
 def test_recorder_uses_injected_map():
@@ -319,14 +322,16 @@ def test_openai_computer_call_output_contains_screenshot_data_url():
     assert output["acknowledged_safety_checks"] == [
         {"id": "safe_1", "code": "test", "message": "ok"}
     ]
-    assert output["output"] == {"type": "input_image", "image_url": "data:image/png;base64,cG5n"}
-
-
-def test_openai_computer_call_output_falls_back_to_text_error():
-    call = {"id": "item_1"}
-    output = _computer_call_output(call, Outcome(error="screenshot failed"))
-    assert output == {
-        "type": "computer_call_output",
-        "call_id": "item_1",
-        "output": {"type": "input_text", "text": "screenshot failed"},
+    assert output["output"] == {
+        "type": "computer_screenshot",
+        "image_url": "data:image/png;base64,cG5n",
+        "detail": "original",
     }
+
+
+def test_openai_computer_call_output_requires_a_screenshot():
+    # A computer_call has no valid text-error reply — without a screenshot the
+    # helper fails loudly rather than sending an item the API would reject.
+    call = {"id": "item_1"}
+    with pytest.raises(RuntimeError, match="screenshot failed"):
+        _computer_call_output(call, Outcome(error="screenshot failed"))

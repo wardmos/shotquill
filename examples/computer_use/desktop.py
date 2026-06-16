@@ -61,7 +61,8 @@ class DryRunExecutor:
         self._target = dict(target or {})
 
     def execute(self, tool_input: Mapping[str, Any]) -> Outcome:
-        action = tool_input.get("action", "")
+        # Anthropic keys the verb under `action`, OpenAI under `type`.
+        action = tool_input.get("action") or tool_input.get("type") or ""
         if action != "screenshot":
             print(f"  [dry-run] would {action}: {dict(tool_input)}", file=sys.stderr)
         try:

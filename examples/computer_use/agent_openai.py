@@ -60,16 +60,28 @@ def _data_url(png: bytes) -> str:
 
 
 def _computer_call_output(call: Any, outcome: Outcome) -> dict[str, Any]:
-    """Build the Responses API input item for one computer-use result."""
+    """Build the Responses API input item for one computer-use result.
+
+    A ``computer_call`` must be answered with a screenshot — the ``output``
+    field's only valid form is a ``computer_screenshot``; there is no text-error
+    variant. If the capture failed there is nothing valid to send, so fail loudly.
+    """
     call_id = str(_get(call, "call_id") or _get(call, "id"))
+    if outcome.screenshot_png is None:
+        raise RuntimeError(outcome.error or "computer action produced no screenshot")
     item: dict[str, Any] = {"type": "computer_call_output", "call_id": call_id}
     pending_safety_checks = _get(call, "pending_safety_checks")
     if pending_safety_checks:
-        item["acknowledged_safety_checks"] = pending_safety_checks
-    if outcome.screenshot_png is not None:
-        item["output"] = {"type": "input_image", "image_url": _data_url(outcome.screenshot_png)}
-    else:
-        item["output"] = {"type": "input_text", "text": outcome.error or outcome.text or ""}
+        # NOTE: this acknowledges every pending safety check so the loop proceeds.
+        # OpenAI raises these to gate risky or injected actions — a real
+        # integration should review them, not blanket-acknowledge. Convert SDK
+        # objects to plain dicts so they serialize inside the input item.
+        item["acknowledged_safety_checks"] = [_as_dict(check) for check in pending_safety_checks]
+    item["output"] = {
+        "type": "computer_screenshot",
+        "image_url": _data_url(outcome.screenshot_png),
+        "detail": "original",
+    }
     return item
 
 
