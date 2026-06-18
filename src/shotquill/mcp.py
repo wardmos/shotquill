@@ -247,8 +247,7 @@ def _parse_rects(args: dict, key: str) -> list[Rect]:
     """Parse an optional array of ``{x, y, width, height}`` into logical rects.
 
     Coordinates are image-relative (the captured frame's own point space). Used
-    for ``mask`` (blank these — D14) and ``reveal`` (keep only these sharp — D15
-    layer 4).
+    for ``mask`` (blank these) and ``reveal`` (keep only these sharp).
     """
     raw = args.get(key) or []
     if not isinstance(raw, list):
@@ -360,7 +359,7 @@ def _tool_capture(args: dict):
         meta["saved_path"] = dest = str(path.resolve())
 
     # While a session is active, a capture the agent did to *see* the screen also
-    # mirrors into the trace as an observation frame (D3). Default-on; pass
+    # mirrors into the trace as an observation frame. Default-on; pass
     # record=false to skip a one-off. The model still gets the (possibly
     # downscaled) image above; the archived copy goes through the record path.
     if args.get("record") is not False:
@@ -508,7 +507,7 @@ def _tool_record_start(args: dict):
         agent_id=args.get("agent_id"),
         label=args.get("label"),
     )
-    # Subsequent captures mirror into this session until record_end (D3).
+    # Subsequent captures mirror into this session until record_end.
     _active_session = session
     audit.record("record_start", via="record", target=session.id, dest=str(session.dir))
     payload = {
@@ -609,6 +608,7 @@ def _tool_record_frame(args: dict):
         redacted=bool(blocklist),
         assertions=assertions,
         pii=pii_findings,
+        phase=args.get("phase"),
         dedup=bool(args.get("dedup")),
     )
     dest = str((session.dir / frame.image).resolve())
@@ -626,6 +626,9 @@ def _tool_record_frame(args: dict):
         payload["assertion_passed"] = frame.assertion_passed
     if pii_findings is not None:
         payload["pii"] = pii_findings
+    if frame.phase is not None:
+        payload["phase"] = frame.phase
+        payload["pair_id"] = frame.pair_id
     if matched > 1:
         payload["matched_windows"] = matched
         payload["note"] = "captured the front-most match; use window_id for an exact pick"
@@ -1173,6 +1176,16 @@ _TOOLS = {
                             "never the value)."
                         ),
                     },
+                    "phase": {
+                        "type": "string",
+                        "enum": ["before", "after"],
+                        "description": (
+                            "File this frame as one half of a before/after pair around an "
+                            "action: 'before' opens a pair, 'after' joins the most recent "
+                            "open one (a lone 'after' is an error). Lets a reviewer diff "
+                            "what changed when the agent acted."
+                        ),
+                    },
                     "dedup": {
                         "type": "boolean",
                         "default": False,
@@ -1240,6 +1253,15 @@ _TOOLS = {
                             },
                             "required": ["kind", "count"],
                         },
+                    },
+                    "phase": {
+                        "type": "string",
+                        "enum": ["before", "after"],
+                        "description": "Present when this frame is half of a before/after pair.",
+                    },
+                    "pair_id": {
+                        "type": "string",
+                        "description": "Links the two halves of a before/after pair.",
                     },
                     "matched_windows": {"type": "integer"},
                     "note": {"type": "string"},

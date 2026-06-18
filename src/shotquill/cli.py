@@ -401,6 +401,21 @@ def _add_record_parser(sub) -> None:
         help="OCR the frame and mask the pixels of any likely PII before filing "
         "(best-effort, not a guarantee); the redacted frame is what gets asserted/scanned",
     )
+    phase = frame.add_mutually_exclusive_group()
+    phase.add_argument(
+        "--before",
+        dest="phase",
+        action="store_const",
+        const="before",
+        help="file this frame as the 'before' half of a before/after pair around an action",
+    )
+    phase.add_argument(
+        "--after",
+        dest="phase",
+        action="store_const",
+        const="after",
+        help="file this frame as the 'after' half, paired with the most recent --before",
+    )
     frame.add_argument(
         "--dedup",
         action="store_true",
@@ -605,7 +620,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         image = headless.downscale_to_width(image, args.max_width)
 
     # An explicit `--session` files this capture as an observation frame in that
-    # recording session (D3). The CLI keeps the handle explicit — no ambient
+    # recording session. The CLI keeps the handle explicit — no ambient
     # "current session" — so concurrent agents and CI stay safe.
     recorded = None
     if args.session:
@@ -784,7 +799,7 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
 
     image = pixelate_except(result_to_qimage(result), reveal, result.scale)
     # Cap the long edge before OCR/encoding so the archived frame and the
-    # assertion read the very same (possibly shrunk) pixels (D12 cost control).
+    # assertion read the very same (possibly shrunk) pixels (cost control).
     image = downscale_to_max(image, args.max_dimension)
     # Deterministic encoding (pinned DPI, no volatile PNG chunks) so an unchanged
     # screen encodes byte-for-byte the same and `--dedup` can spot it.
@@ -817,17 +832,23 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
         findings = pii.scan(recognized)
         pii_findings = [{"kind": f.kind, "count": f.count} for f in findings]
 
-    frame = record.record_frame(
-        session,
-        image_bytes=image_bytes,
-        tool=args.tool,
-        target=target,
-        label=args.label,
-        redacted=bool(blocklist),
-        assertions=assertions,
-        pii=pii_findings,
-        dedup=args.dedup,
-    )
+    try:
+        frame = record.record_frame(
+            session,
+            image_bytes=image_bytes,
+            tool=args.tool,
+            target=target,
+            label=args.label,
+            redacted=bool(blocklist),
+            assertions=assertions,
+            pii=pii_findings,
+            phase=args.phase,
+            dedup=args.dedup,
+        )
+    except record.RecordError as exc:
+        # e.g. an --after with no open --before — the caller's sequencing mistake.
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_frame", via="record", target=target, dest=dest)
     if args.json:
@@ -844,6 +865,9 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
             payload["assertion_passed"] = frame.assertion_passed
         if pii_findings is not None:
             payload["pii"] = pii_findings
+        if frame.phase is not None:
+            payload["phase"] = frame.phase
+            payload["pair_id"] = frame.pair_id
         print(json.dumps(payload, ensure_ascii=False))
     else:
         print(dest)

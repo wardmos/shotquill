@@ -30,8 +30,7 @@ not expose a way to turn it off mid-trace), so a blocked app cannot be filed
 into an archive by an agent that "forgot" to mask it. The honest limit still
 holds: redaction only covers *known* apps, so the manifest's ``redacted`` flag
 means "blocklist protection was in force for this frame", not "this frame is
-free of user content" — agent actions and user pixels are the same pixels. See
-shotquill_docs/feature-agent-flight-recorder.md (D15).
+free of user content" — agent actions and user pixels are the same pixels.
 """
 
 from __future__ import annotations
@@ -65,6 +64,12 @@ STATUS_COMPLETE = "complete"
 KIND_ACTION = "action"
 KIND_OBSERVATION = "observation"
 
+# A frame can optionally be one half of a before/after pair around a single
+# action, so a reviewer can diff "what changed when the agent did X". The two
+# frames share a ``pair_id``; ``phase`` says which side this frame is.
+PHASE_BEFORE = "before"
+PHASE_AFTER = "after"
+
 
 class RecordError(Exception):
     """A flight-recorder operation failed (bad/missing session, corrupt manifest)."""
@@ -89,6 +94,10 @@ class FrameRecord:
     # None when the frame carried no assertion; otherwise whether every OCR
     # check on it held — this is what makes a failed test a frame in the trace.
     assertion_passed: bool | None = None
+    # before/after pairing: ``phase`` is "before"/"after" (or None for a lone
+    # frame); ``pair_id`` links the two halves of one action.
+    phase: str | None = None
+    pair_id: str | None = None
 
     def as_manifest_entry(self, *, tool_call_id: str) -> dict:
         """Serialize with OTel-derived field names (see module docstring)."""
@@ -106,6 +115,10 @@ class FrameRecord:
         }
         if self.assertion_passed is not None:
             entry["assertion_passed"] = self.assertion_passed
+        if self.phase is not None:
+            entry["phase"] = self.phase
+        if self.pair_id is not None:
+            entry["pair_id"] = self.pair_id
         return entry
 
 
@@ -223,6 +236,24 @@ def load_manifest(session: Session) -> dict:
     return _read_manifest(session.manifest_path)
 
 
+def open_before_pair_id(frames: list[dict]) -> str | None:
+    """The ``pair_id`` of the most recent ``before`` frame still awaiting its ``after``.
+
+    A trace is one agent's linear run, so before/after pairs nest like brackets:
+    each ``before`` opens a pair and the next ``after`` closes the most recent
+    open one. Returns ``None`` when nothing is open (an ``after`` with no matching
+    ``before``). Pure — it reads only the manifest's frame list.
+    """
+    open_pairs: list[str] = []
+    for frame in frames:
+        phase = frame.get("phase")
+        if phase == PHASE_BEFORE and frame.get("pair_id"):
+            open_pairs.append(frame["pair_id"])
+        elif phase == PHASE_AFTER and open_pairs:
+            open_pairs.pop()
+    return open_pairs[-1] if open_pairs else None
+
+
 def record_frame(
     session: Session,
     *,
@@ -234,6 +265,7 @@ def record_frame(
     kind: str = KIND_ACTION,
     assertions: list[dict] | None = None,
     pii: list[dict] | None = None,
+    phase: str | None = None,
     image_ext: str = "png",
     dedup: bool = False,
     now: dt.datetime | None = None,
@@ -248,10 +280,12 @@ def record_frame(
     when given, the frame records whether they all held, so a failed test becomes
     a frame in the trace. ``pii`` is an optional list of best-effort PII findings
     (each a ``{"kind", "count"}`` dict from :mod:`pii`) — kind and count only,
-    never the value — recorded as a residual-risk flag on the frame. Not safe to
-    call concurrently for one session — a trace
-    is one agent's linear run, and the next index is read from the manifest on
-    each call.
+    never the value — recorded as a residual-risk flag on the frame. ``phase`` is
+    ``"before"`` / ``"after"`` to file this frame as one half of a before/after
+    pair around an action (an ``"after"`` joins the most recent open ``"before"``;
+    a lone ``"after"`` raises). Not safe to call concurrently for one session — a
+    trace is one agent's linear run, and the next index is read from the manifest
+    on each call.
 
     ``dedup`` drops the cost of an unchanged screen: when the new bytes are
     identical to the previous frame's image, the new frame *references* that same
@@ -261,8 +295,19 @@ def record_frame(
     encoded deterministically (the CLI record path does); without that, an
     unchanged screen may still differ byte-wise and simply won't be deduped.
     """
+    if phase not in (None, PHASE_BEFORE, PHASE_AFTER):
+        raise RecordError(f"phase must be {PHASE_BEFORE!r} or {PHASE_AFTER!r}, got {phase!r}")
     manifest = _load_open_manifest(session)
     index = len(manifest["frames"]) + 1
+    # Resolve before/after pairing: a 'before' opens a new pair, an 'after' joins
+    # the most recent still-open one (a lone 'after' is the caller's mistake).
+    pair_id: str | None = None
+    if phase == PHASE_BEFORE:
+        pair_id = f"{session.id}/pair/{index}"
+    elif phase == PHASE_AFTER:
+        pair_id = open_before_pair_id(manifest["frames"])
+        if pair_id is None:
+            raise RecordError("no open '--before' frame to pair this '--after' with")
     digest = hashlib.sha256(image_bytes).hexdigest()
     rel_image = f"{FRAMES_SUBDIR}/{index:04d}.{image_ext}"
     deduped = False
@@ -286,6 +331,8 @@ def record_frame(
         redacted=redacted,
         kind=kind,
         assertion_passed=passed,
+        phase=phase,
+        pair_id=pair_id,
     )
     # A traceable call id without the OTel SDK: a frame is uniquely the Nth tool
     # call of this conversation.
@@ -505,6 +552,7 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
 .badge.pass { background: #234a2f; color: #9e9; }
 .badge.fail { background: #5a2533; color: #f9a; }
 .badge.obs { background: #33384a; color: #abd; }
+.badge.phase { background: #4a3f23; color: #ed9; }
 .empty { color: #888; }
 """
 
@@ -536,6 +584,9 @@ def render_filmstrip(manifest: dict) -> str:
         badges = []
         if is_observation:
             badges.append('<span class="badge obs">observation</span>')
+        phase = entry.get("phase")
+        if phase in (PHASE_BEFORE, PHASE_AFTER):
+            badges.append(f'<span class="badge phase">{esc(phase)}</span>')
         if entry.get("redacted"):
             badges.append('<span class="badge redacted">redacted</span>')
         passed = entry.get("assertion_passed")

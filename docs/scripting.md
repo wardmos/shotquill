@@ -154,6 +154,8 @@ DIR=$(squill record start --agent builder --label "login flow")  # prints the se
 squill record frame --session "$DIR" --tool click --label "click submit"
 squill record frame --session "$DIR" --tool type  --label "enter email" --app safari
 squill record frame --session "$DIR" --tool assert --contains "Welcome"  # OCR + assert (exit 20 if absent)
+squill record frame --session "$DIR" --tool click --before   # snapshot before an action…
+squill record frame --session "$DIR" --tool click --after    # …and after, paired for a diff
 squill record end --session "$DIR"                                # prints the HTML filmstrip path
 ```
 
@@ -175,6 +177,13 @@ squill record end --session "$DIR"                                # prints the H
   so the egress decision, and the credentials for it, stay yours. The GenAI
   semantic conventions are still experimental; the version the fields track is
   recorded on the trace's resource.
+- **Pair a before and after frame around an action.** `record frame --before`
+  snapshots the screen before a step; after the action, `record frame --after`
+  files the result and links the two (they share a `pair_id`; `phase` says which
+  is which). Pairs nest like brackets — each `--after` closes the most recent open
+  `--before` — and a lone `--after` is an error. A reviewer (or a diff tool) can
+  then see *what changed* when the agent acted, not just the end state. The MCP
+  `record_frame` tool takes the same as `phase: "before" | "after"`.
 - **Redaction is on by default and cannot be turned off mid-trace**, so a
   blocklisted app cannot be filed into an archive by an agent that "forgot" to
   mask it. The manifest's `redacted` flag means *blocklist protection was in
