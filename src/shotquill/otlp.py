@@ -12,7 +12,7 @@ to a collector, point your own OTel Collector at the file (the ``otlpjson`` /
 ``filelog`` receivers read exactly this), so the egress decision stays the
 user's, made with their tools, not ShotQuill's.
 
-Mapping (see shotquill_docs/feature-agent-flight-recorder.md):
+Mapping:
 
 - session  → one ``invoke_agent`` root span; ``gen_ai.conversation.id`` is the
   session id, ``gen_ai.agent.name`` / ``.id`` carry the agent.
@@ -138,6 +138,10 @@ def _frame_event(entry: dict, at_nanos: str) -> dict:
         event_attrs.append(_str_attr("shotquill.frame.label", entry["label"]))
     if entry.get("target"):
         event_attrs.append(_str_attr("shotquill.frame.target", entry["target"]))
+    if entry.get("phase"):
+        event_attrs.append(_str_attr("shotquill.frame.phase", entry["phase"]))
+    if entry.get("pair_id"):
+        event_attrs.append(_str_attr("shotquill.frame.pair_id", entry["pair_id"]))
     assertion_passed = entry.get("assertion_passed")
     if assertion_passed is not None:
         event_attrs.append(_bool_attr("shotquill.frame.assertion.passed", assertion_passed))

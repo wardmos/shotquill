@@ -191,6 +191,84 @@ def test_filmstrip_handles_empty_session():
     assert "No frames recorded." in html
 
 
+# --- before/after pairing (pure) --------------------------------------------
+
+
+def test_before_opens_a_pair_and_after_joins_it(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-pair")
+    before = record.record_frame(
+        session, image_bytes=_FAKE_PNG, tool="click", target="t", phase="before"
+    )
+    after = record.record_frame(
+        session, image_bytes=b"different", tool="click", target="t", phase="after"
+    )
+    assert before.phase == "before" and after.phase == "after"
+    assert before.pair_id == after.pair_id  # two halves, one pair
+    frames = record.load_manifest(session)["frames"]
+    assert [f.get("phase") for f in frames] == ["before", "after"]
+    assert frames[0]["pair_id"] == frames[1]["pair_id"]
+
+
+def test_lone_after_without_a_before_raises(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-lone")
+    with pytest.raises(record.RecordError, match="no open '--before'"):
+        record.record_frame(session, image_bytes=_FAKE_PNG, tool="x", target="t", phase="after")
+
+
+def test_pairs_nest_like_brackets(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-nest")
+    outer_b = record.record_frame(session, image_bytes=b"1", tool="t", target="x", phase="before")
+    inner_b = record.record_frame(session, image_bytes=b"2", tool="t", target="x", phase="before")
+    inner_a = record.record_frame(session, image_bytes=b"3", tool="t", target="x", phase="after")
+    outer_a = record.record_frame(session, image_bytes=b"4", tool="t", target="x", phase="after")
+    # The first 'after' closes the most recent open 'before' (inner), the next the outer.
+    assert inner_a.pair_id == inner_b.pair_id
+    assert outer_a.pair_id == outer_b.pair_id
+    assert inner_b.pair_id != outer_b.pair_id
+
+
+def test_open_before_pair_id_is_pure_over_frames():
+    frames = [
+        {"phase": "before", "pair_id": "p1"},
+        {"phase": "after"},
+        {"phase": "before", "pair_id": "p2"},
+    ]
+    assert record.open_before_pair_id(frames) == "p2"  # p1 closed, p2 still open
+    assert record.open_before_pair_id([]) is None
+
+
+def test_unpaired_frame_has_no_phase_field(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-plain")
+    record.record_frame(session, image_bytes=_FAKE_PNG, tool="click", target="t")
+    entry = record.load_manifest(session)["frames"][0]
+    assert "phase" not in entry and "pair_id" not in entry
+
+
+def test_filmstrip_renders_phase_badge():
+    manifest = {
+        "shotquill_manifest_version": 1,
+        "conversation_id": "conv-ph",
+        "agent": {"name": None, "id": None},
+        "status": "complete",
+        "started_at": "2026-06-13T10:00:00",
+        "ended_at": None,
+        "frames": [
+            {
+                "span": {"tool_name": "click", "tool_call_id": "conv-ph/frame/1"},
+                "at": "2026-06-13T10:00:03",
+                "label": None,
+                "image": "frames/0001.png",
+                "target": "fullscreen",
+                "redacted": False,
+                "phase": "before",
+                "pair_id": "conv-ph/pair/1",
+            }
+        ],
+    }
+    html = record.render_filmstrip(manifest)
+    assert '<span class="badge phase">before</span>' in html
+
+
 # --- CLI round trip ---------------------------------------------------------
 
 
@@ -277,6 +355,49 @@ def test_cli_round_trip(fake_capturer, monkeypatch, capsys, tmp_path):
     assert manifest["status"] == "complete"
     assert len(manifest["frames"]) == 1
     assert manifest["frames"][0]["redacted"] is False  # empty blocklist
+
+
+def test_cli_before_after_pairs_frames(fake_capturer, monkeypatch, capsys, tmp_path):
+    _empty_blocklist(monkeypatch)
+    cli.main(["record", "start", "--id", "conv-ba"])
+    capsys.readouterr()
+
+    assert (
+        cli.main(
+            ["record", "frame", "--session", "conv-ba", "--tool", "click", "--before", "--json"]
+        )
+        == 0
+    )
+    before = json.loads(capsys.readouterr().out)
+    assert (
+        cli.main(
+            ["record", "frame", "--session", "conv-ba", "--tool", "click", "--after", "--json"]
+        )
+        == 0
+    )
+    after = json.loads(capsys.readouterr().out)
+    assert before["phase"] == "before" and after["phase"] == "after"
+    assert before["pair_id"] == after["pair_id"]
+
+
+def test_cli_lone_after_is_an_error(fake_capturer, monkeypatch, capsys):
+    _empty_blocklist(monkeypatch)
+    cli.main(["record", "start", "--id", "conv-lone-cli"])
+    capsys.readouterr()
+    rc = cli.main(["record", "frame", "--session", "conv-lone-cli", "--tool", "click", "--after"])
+    assert rc == 1
+    assert "no open '--before'" in capsys.readouterr().err
+
+
+def test_cli_before_and_after_are_mutually_exclusive(fake_capturer, monkeypatch, capsys):
+    _empty_blocklist(monkeypatch)
+    cli.main(["record", "start", "--id", "conv-excl"])
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            ["record", "frame", "--session", "conv-excl", "--tool", "click", "--before", "--after"]
+        )
+    assert exc.value.code == 2  # argparse usage error
 
 
 def test_cli_frame_resolves_id_against_default_root(fake_capturer, monkeypatch, capsys):

@@ -78,6 +78,16 @@ def test_frame_span_is_execute_tool_child_with_frame_event():
     assert event_attrs["shotquill.frame.target"] == "window 33"
 
 
+def test_frame_event_carries_phase_and_pair_id():
+    manifest = _manifest()
+    manifest["frames"][0]["phase"] = "before"
+    manifest["frames"][0]["pair_id"] = "conv-otlp-1/pair/1"
+    (event,) = _spans(otlp.manifest_to_otlp(manifest))[1]["events"]
+    event_attrs = _attrs(event["attributes"])
+    assert event_attrs["shotquill.frame.phase"] == "before"
+    assert event_attrs["shotquill.frame.pair_id"] == "conv-otlp-1/pair/1"
+
+
 def test_ids_are_valid_hex_and_deterministic():
     first = otlp.manifest_to_otlp(_manifest())
     second = otlp.manifest_to_otlp(_manifest())

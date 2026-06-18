@@ -57,7 +57,7 @@ def test_frame_without_assertions_has_no_verdict(tmp_path):
     assert "assertion_passed" not in entry and "assertions" not in entry
 
 
-# --- store: PII findings on a frame (D15 layer 6) ---------------------------
+# --- store: PII findings on a frame -----------------------------------------
 
 
 def test_record_frame_stores_pii_findings(tmp_path):
@@ -375,3 +375,33 @@ def test_mcp_record_frame_redact_pii_masks_filed_frame(fakes, monkeypatch, tmp_p
     img = QImage(str(session_dir / manifest["frames"][0]["image"]))
     assert img.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)
     assert img.pixelColor(1, 1).getRgb()[:3] == (255, 0, 0)
+
+
+# --- before/after pairing over MCP -------------------------------------------
+
+
+def test_mcp_record_frame_before_after_pairs(fakes):
+    import json as _json
+
+    def serve_call(name, arguments):
+        raw = _json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+        fout = io.StringIO()
+        mcp.serve(stdin=io.StringIO(raw + "\n"), stdout=fout)
+        return _json.loads(fout.getvalue())["result"]["structuredContent"]
+
+    serve_call("record_start", {"id": "conv-mcp-ba"})
+    before = serve_call(
+        "record_frame", {"session": "conv-mcp-ba", "tool": "click", "phase": "before"}
+    )
+    after = serve_call(
+        "record_frame", {"session": "conv-mcp-ba", "tool": "click", "phase": "after"}
+    )
+    assert before["phase"] == "before" and after["phase"] == "after"
+    assert before["pair_id"] == after["pair_id"]
