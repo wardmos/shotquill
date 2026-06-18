@@ -160,6 +160,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="mosaic the whole frame, keeping only these rectangle(s) sharp; "
         "repeatable. Minimizes exposure to just the action (image-relative coords).",
     )
+    capture.add_argument(
+        "--redact-pii",
+        action="store_true",
+        help="OCR the frame and mask the pixels of any likely PII (email, card, "
+        "SSN, …) before output; best-effort, not a guarantee",
+    )
     capture.set_defaults(func=_cmd_capture)
 
     windows = sub.add_parser(
@@ -209,6 +215,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ignore-case",
         action="store_true",
         help="make --contains / --matches case-insensitive (OCR case is noisy)",
+    )
+    ocr.add_argument(
+        "--boxes",
+        action="store_true",
+        help="print each line as 'x,y,w,h<TAB>text' (pixel box in the image) and "
+        "report where any --contains / --matches landed",
     )
     ocr.set_defaults(func=_cmd_ocr)
 
@@ -384,6 +396,12 @@ def _add_record_parser(sub) -> None:
         "not a guarantee; records the kind/count only, never the value)",
     )
     frame.add_argument(
+        "--redact-pii",
+        action="store_true",
+        help="OCR the frame and mask the pixels of any likely PII before filing "
+        "(best-effort, not a guarantee); the redacted frame is what gets asserted/scanned",
+    )
+    frame.add_argument(
         "--dedup",
         action="store_true",
         help="if this frame is identical to the previous one, reference it instead "
@@ -508,7 +526,12 @@ def _parse_reveal(args: argparse.Namespace):
 
 
 def _capture_image(
-    args: argparse.Namespace, region, include_cursor: bool = False, masks=(), reveal=()
+    args: argparse.Namespace,
+    region,
+    include_cursor: bool = False,
+    masks=(),
+    reveal=(),
+    redact_pii_recognizer=None,
 ):
     """Run one capture and return ``(QImage, target, matched)``; warn on stderr
     when an app/title match was ambiguous, mirroring the MCP metadata.
@@ -516,7 +539,10 @@ def _capture_image(
     ``masks`` are caller-supplied rectangles painted out before the frame leaves
     the raw-pixel stage, so the masked region never reaches the QImage, the
     file, or a recorded copy. ``reveal`` mosaics the whole frame, keeping only
-    those rectangles sharp (minimize exposure to just the action)."""
+    those rectangles sharp (minimize exposure to just the action). When
+    ``redact_pii_recognizer`` is given, likely PII is OCR'd and masked after the
+    caller masks but before the reveal mosaic, so the redaction joins the same
+    raw-pixel stage."""
     capturer = headless.get_capturer(include_cursor=include_cursor)
     result, target, matched = headless.perform_capture(
         capturer,
@@ -535,6 +561,8 @@ def _capture_image(
         )
 
     result = headless.apply_masks(result, list(masks))
+    if redact_pii_recognizer is not None:
+        result = headless.redact_pii(result, redact_pii_recognizer)
     from shotquill.imaging import pixelate_except, result_to_qimage
 
     return pixelate_except(result_to_qimage(result), list(reveal), result.scale), target, matched
@@ -555,12 +583,20 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     # --deterministic forces the cursor off so the same scene always encodes the
     # same way; --include-cursor is rejected above, so this just stays the default.
     include_cursor = args.include_cursor and not args.deterministic
+    # Resolve the recognizer up front when redacting PII, so a host without OCR
+    # fails fast (exit 4) before the capture rather than after.
+    recognizer = headless.get_recognizer() if args.redact_pii else None
     try:
         region = _validate_target(args)
         masks = _parse_masks(args)
         reveal = _parse_reveal(args)
         image, target, matched = _capture_image(
-            args, region, include_cursor=include_cursor, masks=masks, reveal=reveal
+            args,
+            region,
+            include_cursor=include_cursor,
+            masks=masks,
+            reveal=reveal,
+            redact_pii_recognizer=recognizer,
         )
     except _UsageError as exc:
         return _usage_error(str(exc))
@@ -712,7 +748,8 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     # without OCR fails before the capture rather than after.
     asserting = bool(args.contains or args.matches)
     scanning = bool(args.scan_pii)
-    recognizer = headless.get_recognizer() if (asserting or scanning) else None
+    redacting = bool(args.redact_pii)
+    recognizer = headless.get_recognizer() if (asserting or scanning or redacting) else None
 
     # Redaction stays on for the record path: the blocklist is loaded and applied
     # by perform_capture, and a non-empty list means protection was in force for
@@ -739,6 +776,10 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
     # from the assertion, not just the archived frame.
     result = headless.apply_masks(result, masks)
+    # Mask likely PII before the frame is filed (and before the assert/scan OCR
+    # below), so the redacted pixels are what gets archived, asserted, and scanned.
+    if redacting:
+        result = headless.redact_pii(result, recognizer)
     from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal, result.scale)
@@ -768,8 +809,8 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
             return _usage_error(str(exc))  # a broken regex is the caller's bug
         assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
 
-    # Best-effort residual-risk flag (D15 layer 6): kind + count only, never the
-    # value. Does not mask pixels — that needs OCR boxes (D11), still pending.
+    # Best-effort residual-risk flag: kind + count only, never the value. This
+    # only flags; pass --redact-pii to also mask the matched pixels (done above).
     findings: list[pii.Finding] = []
     pii_findings = None
     if scanning:
@@ -1001,14 +1042,18 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
         # instead of `capture -o - | ocr -`, same as the MCP ocr tool.
         image, source, _matched = _capture_image(args, region)
 
-    lines = recognizer.recognize(image)
-    for line in lines:
+    # --boxes asks for per-line pixel boxes (and where assertions land); without
+    # it the command keeps its plain text-lines contract.
+    boxes = recognizer.recognize_boxes(image) if args.boxes else []
+    lines = [box.text for box in boxes] if args.boxes else recognizer.recognize(image)
+    for i, line in enumerate(lines):
         # OCR text is app-controlled (it's literally pixels off the screen), so
         # an attacker who owns what's on screen could smuggle terminal control
         # sequences through it — strip them like the windows table does before
         # printing. The raw `lines` still feed --contains/--matches below, and
         # the MCP path is JSON-escaped already.
-        print(_printable(line))
+        safe = _printable(line)
+        print("{},{},{},{}\t{}".format(*boxes[i].as_rect(), safe) if args.boxes else safe)
     audit.record("ocr", via="cli", target=source)
 
     # No --contains/--matches → the command just prints text (back-compat). With
@@ -1018,12 +1063,22 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
     from shotquill import textassert
 
     try:
-        checks = textassert.evaluate(
-            lines,
-            contains=tuple(args.contains or ()),
-            matches=tuple(args.matches or ()),
-            ignore_case=args.ignore_case,
-        )
+        # With --boxes, assert over the boxes so each verdict reports where it
+        # landed; otherwise the text-only path.
+        if args.boxes:
+            checks = textassert.evaluate_boxes(
+                boxes,
+                contains=tuple(args.contains or ()),
+                matches=tuple(args.matches or ()),
+                ignore_case=args.ignore_case,
+            )
+        else:
+            checks = textassert.evaluate(
+                lines,
+                contains=tuple(args.contains or ()),
+                matches=tuple(args.matches or ()),
+                ignore_case=args.ignore_case,
+            )
     except ValueError as exc:
         return _usage_error(str(exc))  # a broken regex is the caller's bug
     for check in checks:

@@ -9,6 +9,7 @@ the scanner never returns the matched value, so neither do these tests.
 from __future__ import annotations
 
 from shotquill import pii
+from shotquill.ocr.base import TextBox
 
 
 def _kinds(text):
@@ -75,6 +76,36 @@ def test_overlapping_match_resolved_by_priority():
 def test_accepts_line_list_like_a_recognizer():
     # scan() takes the list[str] a recognizer returns, joined with newlines.
     assert _kinds(["name: Ada", "email: ada@example.com"]) == {"email"}
+
+
+# --- redaction_rects: spans -> pixel rects to mask ---------------------------
+
+
+def test_redaction_rects_masks_the_box_carrying_pii():
+    boxes = [
+        TextBox("Welcome, Ada", 0, 0, 120, 10),
+        TextBox("card 4111111111111111", 0, 20, 200, 10),
+    ]
+    # Only the second box carries PII; returned as (x0,y0,x1,y1) corners.
+    assert pii.redaction_rects(boxes) == [(0, 20, 200, 30)]
+
+
+def test_redaction_rects_empty_when_no_pii():
+    assert pii.redaction_rects([TextBox("Dashboard", 0, 0, 80, 10)]) == []
+
+
+def test_redaction_rects_handles_no_boxes():
+    assert pii.redaction_rects([]) == []
+
+
+def test_redaction_rects_masks_each_pii_box_in_reading_order():
+    boxes = [
+        TextBox("ada@example.com", 0, 0, 100, 10),
+        TextBox("just a heading", 0, 20, 100, 10),
+        TextBox("ssn 078-05-1120", 0, 40, 100, 10),
+    ]
+    # Two separate findings on lines 0 and 2; the middle box is left alone.
+    assert pii.redaction_rects(boxes) == [(0, 0, 100, 10), (0, 40, 100, 50)]
 
 
 # --- describe ---------------------------------------------------------------

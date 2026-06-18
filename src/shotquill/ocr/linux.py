@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from shotquill.ocr.base import TextRecognizer
+from shotquill.ocr.base import TextBox, TextRecognizer
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
@@ -77,12 +77,92 @@ def _installed_languages(binary: str) -> set[str]:
     return langs
 
 
+# The TSV columns Tesseract emits with the ``tsv`` config, in fixed order. We
+# look them up by name from the header rather than by position, so a layout
+# change in some build degrades to "no boxes" instead of misreading coordinates.
+_TSV_COLUMNS = (
+    "level",
+    "block_num",
+    "par_num",
+    "line_num",
+    "word_num",
+    "left",
+    "top",
+    "width",
+    "height",
+    "conf",
+    "text",
+)
+
+# Tesseract's hierarchy level for a single word row; only these carry text and a
+# tight box. Page/block/paragraph/line rows (levels 1–4) have empty text, so we
+# rebuild each line by grouping its word rows.
+_TSV_LEVEL_WORD = "5"
+
+
+def boxes_from_tsv(tsv: str) -> list[TextBox]:
+    """Parse Tesseract ``tsv`` output into per-line :class:`TextBox` spans (pure).
+
+    Word rows are grouped back into lines by their ``(block, par, line)`` key, the
+    words joined in ``word_num`` order, and the line box taken as the union of its
+    word boxes — so the text matches what the plain-text output would give while
+    the box locates it. Rows with negative confidence (Tesseract's marker for "no
+    word here") or empty text are dropped. Lines come back in reading order
+    (top-to-bottom, then left-to-right). An unrecognized header degrades to ``[]``.
+    """
+    rows = tsv.splitlines()
+    if not rows:
+        return []
+    header = rows[0].split("\t")
+    try:
+        idx = {name: header.index(name) for name in _TSV_COLUMNS}
+    except ValueError:
+        return []  # unexpected TSV shape — better no boxes than wrong ones
+
+    # Group word rows into lines, preserving first-seen order for a stable result.
+    grouped: dict[tuple[str, str, str], list[tuple[int, str, int, int, int, int]]] = {}
+    order: list[tuple[str, str, str]] = []
+    for row in rows[1:]:
+        cols = row.split("\t")
+        if len(cols) <= idx["text"] or cols[idx["level"]] != _TSV_LEVEL_WORD:
+            continue
+        text = cols[idx["text"]].strip()
+        if not text:
+            continue
+        try:
+            conf = float(cols[idx["conf"]])
+            word_num = int(cols[idx["word_num"]])
+            left, top = int(cols[idx["left"]]), int(cols[idx["top"]])
+            width, height = int(cols[idx["width"]]), int(cols[idx["height"]])
+        except ValueError:
+            continue
+        if conf < 0:
+            continue
+        key = (cols[idx["block_num"]], cols[idx["par_num"]], cols[idx["line_num"]])
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append((word_num, text, left, top, width, height))
+
+    boxes: list[TextBox] = []
+    for key in order:
+        words = sorted(grouped[key])
+        text = " ".join(w[1] for w in words)
+        x0 = min(w[2] for w in words)
+        y0 = min(w[3] for w in words)
+        x1 = max(w[2] + w[4] for w in words)
+        y1 = max(w[3] + w[5] for w in words)
+        boxes.append(TextBox(text=text, x=x0, y=y0, width=x1 - x0, height=y1 - y0))
+    boxes.sort(key=lambda b: (b.y, b.x))
+    return boxes
+
+
 class TesseractTextRecognizer(TextRecognizer):
     """Recognise text by piping a PNG of the image through ``tesseract``."""
 
     backend_name = "Tesseract"
 
-    def recognize(self, image: QImage) -> list[str]:
+    def recognize_boxes(self, image: QImage) -> list[TextBox]:
         from shotquill.headless import CapabilityUnsupported
 
         binary = tesseract_path()
@@ -108,6 +188,9 @@ class TesseractTextRecognizer(TextRecognizer):
         wanted = [lang for lang in _DEFAULT_LANGUAGES if lang in installed]
         if wanted:
             args += ["-l", "+".join(wanted)]
+        # The ``tsv`` config asks Tesseract for per-word boxes + confidence instead
+        # of plain text. It must follow the options, so it goes last.
+        args.append("tsv")
 
         try:
             proc = subprocess.run(
@@ -122,7 +205,4 @@ class TesseractTextRecognizer(TextRecognizer):
             detail = proc.stderr.decode("utf-8", "replace").strip() or "unknown error"
             raise RuntimeError(f"tesseract failed: {detail}")
 
-        text = proc.stdout.decode("utf-8", "replace")
-        # Tesseract emits text already in reading order (top-to-bottom); drop the
-        # blank lines and trailing form feed it pads pages with.
-        return [line.strip() for line in text.splitlines() if line.strip()]
+        return boxes_from_tsv(proc.stdout.decode("utf-8", "replace"))
