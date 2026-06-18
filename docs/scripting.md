@@ -43,6 +43,7 @@ squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
 squill capture --reveal 40,12,180,20 -o shot.png # mosaic all but this rectangle
+squill capture --redact-pii -o shot.png   # OCR and mask likely PII before output
 squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
@@ -76,6 +77,15 @@ The parts agents rely on:
   average of its source block (a lone pixel can't survive), so it isn't
   reversible, though the revealed window stays fully readable. Same coordinates,
   same `reveal` arg on the MCP tools; composes with `mask`.
+- **Or let it find the PII for you.** `--redact-pii` OCRs the frame and masks the
+  pixels of any text that looks like PII (email, credit card, SSN, IBAN, IPv4,
+  phone) before output — you don't have to know the coordinates. It reuses the
+  same hardened fill as `--mask`, layers on the blocklist, and applies before
+  `--reveal`; on `record frame` the redacted pixels are what gets archived,
+  asserted, and scanned. The MCP `capture` and `record_frame` tools take the same
+  `redact_pii`. **Best-effort, not a guarantee** — it can only mask what OCR
+  reads and the detectors catch; for a field you already know holds a secret,
+  `--mask` is the certain tool.
 - **OCR reads the screen directly.** `squill ocr --app safari` (or
   `--window-id`, `--region`, or nothing for the full screen) captures and
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
@@ -184,14 +194,16 @@ squill record end --session "$DIR"                                # prints the H
   OTLP span to error — while still recording the frame, so the failure is
   replayable. This is where the screenshot backend and the flight recorder meet:
   the failing step of a test *is* a frame in the trace.
-- **A frame can flag likely PII (best-effort, not a guarantee).** Add
-  `--scan-pii` to `record frame` (or `scan_pii: true` on the MCP tool) and it
+- **A frame can flag likely PII, or redact it (best-effort, not a guarantee).**
+  Add `--scan-pii` to `record frame` (or `scan_pii: true` on the MCP tool) and it
   OCRs the frame and records which kinds of sensitive value likely appear and how
   many — **kind and count only, never the value** — as a residual-risk flag on
-  the frame (e.g. for an export gate). It does **not** mask pixels: locating PII
-  on screen needs OCR bounding boxes, which the backends do not yet surface. This
-  is the weakest privacy layer; treat it as "this frame probably carries a card
-  number", not as redaction.
+  the frame (e.g. for an export gate). Add `--redact-pii` (or `redact_pii: true`)
+  to go further and **mask the matched pixels** before the frame is filed, so the
+  redacted frame is what gets archived, asserted, and scanned. Both are
+  best-effort — they can only act on what OCR reads and the detectors catch — so
+  treat a flagged-but-not-redacted frame as "this probably carries a card
+  number", and for a field you already know holds a secret use `--mask`.
 - `--json` on any of the three prints a machine-readable object; every step is
   audit-logged with `via: "record"`.
 

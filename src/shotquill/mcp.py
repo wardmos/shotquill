@@ -287,12 +287,19 @@ def _positive_int_or_zero(value, name: str) -> int:
     return value
 
 
-def _capture_image(args: dict, masks: list[Rect] | None = None, reveal: list[Rect] | None = None):
+def _capture_image(
+    args: dict,
+    masks: list[Rect] | None = None,
+    reveal: list[Rect] | None = None,
+    redact_pii_recognizer=None,
+):
     """Capture per the shared target args and return (QImage, target, matched).
 
     ``masks`` are caller rectangles painted out before the raw pixels become a
     QImage; ``reveal`` mosaics the whole frame, keeping only those rectangles
-    sharp — so a hidden region never reaches the model, a file, or a frame."""
+    sharp — so a hidden region never reaches the model, a file, or a frame. When
+    ``redact_pii_recognizer`` is given, likely PII is OCR'd and masked after the
+    caller masks but before the reveal mosaic."""
     region = _validate_target(args)
     capturer = headless.get_capturer()
     result, target, matched = headless.perform_capture(
@@ -305,6 +312,8 @@ def _capture_image(args: dict, masks: list[Rect] | None = None, reveal: list[Rec
         via="mcp",
     )
     result = headless.apply_masks(result, masks or [])
+    if redact_pii_recognizer is not None:
+        result = headless.redact_pii(result, redact_pii_recognizer)
     from shotquill.imaging import pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal or [], result.scale)
@@ -315,8 +324,14 @@ def _tool_capture(args: dict):
     fmt = args.get("format") or "png"
     if fmt not in ("png", "jpg", "jpeg"):
         raise ValueError(f"format must be png or jpg — got {fmt!r}")
+    # Resolve the recognizer up front when redacting PII, so a host without OCR
+    # fails fast before the capture.
+    recognizer = headless.get_recognizer() if args.get("redact_pii") else None
     image, target, matched = _capture_image(
-        args, _parse_rects(args, "mask"), _parse_rects(args, "reveal")
+        args,
+        _parse_rects(args, "mask"),
+        _parse_rects(args, "reveal"),
+        redact_pii_recognizer=recognizer,
     )
 
     max_width = args.get("max_width")
@@ -525,7 +540,8 @@ def _tool_record_frame(args: dict):
     matches = tuple(args.get("matches") or ())
     asserting = bool(contains or matches)
     scanning = bool(args.get("scan_pii"))
-    recognizer = headless.get_recognizer() if (asserting or scanning) else None
+    redacting = bool(args.get("redact_pii"))
+    recognizer = headless.get_recognizer() if (asserting or scanning or redacting) else None
     masks = _parse_rects(args, "mask")
     reveal = _parse_rects(args, "reveal")
 
@@ -547,6 +563,10 @@ def _tool_record_frame(args: dict):
     # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
     # from the assertion, not just the archived frame.
     result = headless.apply_masks(result, masks)
+    # Mask likely PII before the frame is filed (and before the assert/scan OCR),
+    # so the redacted pixels are what gets archived, asserted, and scanned.
+    if redacting:
+        result = headless.redact_pii(result, recognizer)
     from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal, result.scale)
@@ -572,8 +592,8 @@ def _tool_record_frame(args: dict):
         )
         assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
 
-    # Best-effort residual-risk flag (D15 layer 6): kind + count only, never the
-    # value. Does not mask pixels — that needs OCR boxes (D11), still pending.
+    # Best-effort residual-risk flag: kind + count only, never the value. This
+    # only flags; pass redact_pii to also mask the matched pixels (done above).
     pii_findings = None
     if scanning:
         from shotquill import pii
@@ -726,6 +746,20 @@ _REVEAL_PROPERTY = {
     },
 }
 
+_REDACT_PII_PROPERTY = {
+    "redact_pii": {
+        "type": "boolean",
+        "default": False,
+        "description": (
+            "OCR the frame and mask the pixels of any likely PII (email, credit "
+            "card, SSN, IBAN, IPv4, phone) before the frame is used anywhere. "
+            "Best-effort, not a guarantee — it can only mask what OCR reads and "
+            "the detectors catch. Layered on the blocklist and mask; applied "
+            "before reveal."
+        ),
+    },
+}
+
 _TARGET_PROPERTIES = {
     "window_id": {
         "type": "integer",
@@ -866,6 +900,7 @@ _TOOLS = {
                     },
                     **_MASK_PROPERTY,
                     **_REVEAL_PROPERTY,
+                    **_REDACT_PII_PROPERTY,
                 },
                 "additionalProperties": False,
             },
@@ -1155,6 +1190,7 @@ _TOOLS = {
                     },
                     **_MASK_PROPERTY,
                     **_REVEAL_PROPERTY,
+                    **_REDACT_PII_PROPERTY,
                     **_TARGET_PROPERTIES,
                 },
                 "required": ["session", "tool"],

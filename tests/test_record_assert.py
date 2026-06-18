@@ -314,3 +314,64 @@ def test_mcp_record_frame_scan_pii(fakes, monkeypatch):
         "structuredContent"
     ]
     assert structured["pii"] == [{"kind": "email", "count": 1}]
+
+
+# --- redact: mask the PII pixels before filing the frame ---------------------
+
+
+class _BoxRecognizer:
+    """OCR fake that returns a fixed PII box at (0,0,1,1), masking that corner."""
+
+    def recognize_boxes(self, image):
+        from shotquill.ocr.base import TextBox
+
+        return [TextBox("ada@example.com", 0, 0, 1, 1)]
+
+    def recognize(self, image):
+        return ["ada@example.com"]
+
+
+def test_cli_record_frame_redact_pii_masks_filed_frame(fakes, monkeypatch, capsys):
+    from PySide6.QtGui import QImage
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _BoxRecognizer())
+    cli.main(["record", "start", "--id", "conv-redact"])
+    capsys.readouterr()
+    rc = cli.main(
+        ["record", "frame", "--session", "conv-redact", "--tool", "verify", "--redact-pii"]
+    )
+    assert rc == 0
+    dest = capsys.readouterr().out.strip()
+    img = QImage(dest)
+    assert img.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)  # PII box → masked
+    assert img.pixelColor(1, 1).getRgb()[:3] == (255, 0, 0)  # rest of frame intact
+
+
+def test_mcp_record_frame_redact_pii_masks_filed_frame(fakes, monkeypatch, tmp_path):
+    import json as _json
+
+    from PySide6.QtGui import QImage
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _BoxRecognizer())
+
+    def serve_call(name, arguments):
+        raw = _json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+        fout = io.StringIO()
+        mcp.serve(stdin=io.StringIO(raw + "\n"), stdout=fout)
+        return _json.loads(fout.getvalue())["result"]
+
+    serve_call("record_start", {"id": "conv-mcp-redact"})
+    serve_call("record_frame", {"session": "conv-mcp-redact", "tool": "verify", "redact_pii": True})
+
+    session_dir = tmp_path / "records" / "conv-mcp-redact"
+    manifest = _json.loads((session_dir / "manifest.json").read_text())
+    img = QImage(str(session_dir / manifest["frames"][0]["image"]))
+    assert img.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)
+    assert img.pixelColor(1, 1).getRgb()[:3] == (255, 0, 0)

@@ -28,6 +28,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from shotquill.ocr.base import TextBox
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,40 @@ def find_spans(lines: str | Iterable[str]) -> list[tuple[str, int, int]]:
             spans.append((detector.kind, start, end))
     spans.sort(key=lambda span: span[1])
     return spans
+
+
+def redaction_rects(boxes: list[TextBox]) -> list[tuple[int, int, int, int]]:
+    """Pixel corner-rects ``(x0, y0, x1, y1)`` of recognized boxes that carry PII.
+
+    The step from *flag* to *mask*: scan the boxes' text, then return the pixel
+    rectangles of every box a detected span overlaps — the ``(x0, y0, x1, y1)``
+    corner form :func:`shotquill.redact.fill_rects` masks (note: corners, not
+    ``x,y,w,h``). A box is masked whole if any span touches it, so a redacted card
+    number can't leave a sliver behind. Rects come back in reading order, deduped.
+
+    Best-effort, not a guarantee — it can only mask what OCR read and the
+    detectors flagged (same caveats as :func:`scan`). Boxes carry image-pixel
+    coordinates, so the rects land in the same space ``fill_rects`` edits.
+    """
+    spans = find_spans([box.text for box in boxes])
+    if not spans:
+        return []
+    # Char range each box occupies in the newline-joined text, mirroring how
+    # find_spans joined the lines, so a span maps back to the box(es) it covers.
+    offsets: list[tuple[int, int]] = []
+    pos = 0
+    for box in boxes:
+        offsets.append((pos, pos + len(box.text)))
+        pos += len(box.text) + 1  # +1 for the joining "\n"
+    hit: set[int] = set()
+    for _kind, start, end in spans:
+        for i, (bstart, bend) in enumerate(offsets):
+            if bstart < end and start < bend:
+                hit.add(i)
+    return [
+        (boxes[i].x, boxes[i].y, boxes[i].x + boxes[i].width, boxes[i].y + boxes[i].height)
+        for i in sorted(hit)
+    ]
 
 
 def scan(lines: str | Iterable[str]) -> list[Finding]:

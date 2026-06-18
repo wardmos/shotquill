@@ -264,6 +264,33 @@ def test_capture_returns_image_and_metadata(fake_capturer, isolated_audit):
     assert entry["dest"] == "inline"
 
 
+def test_capture_redact_pii_masks_the_matched_box(fake_capturer, monkeypatch):
+    from PySide6.QtGui import QImage
+
+    from shotquill.ocr.base import TextBox
+
+    class _Recognizer:
+        def recognize_boxes(self, image):
+            return [TextBox("ada@example.com", 0, 0, 1, 1)]
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _Recognizer())
+    result = call("capture", {"redact_pii": True})["result"]
+    png = base64.b64decode(result["content"][0]["data"])
+    img = QImage.fromData(png)
+    assert img.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)  # PII box → masked
+    assert img.pixelColor(1, 1).getRgb()[:3] == (200, 200, 200)  # rest intact
+
+
+def test_capture_redact_pii_unsupported_is_in_band_error(fake_capturer, monkeypatch):
+    def _nope():
+        raise headless.CapabilityUnsupported("ocr", "requires macOS Vision")
+
+    monkeypatch.setattr(headless, "get_recognizer", _nope)
+    result = call("capture", {"redact_pii": True})["result"]
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "unsupported"
+
+
 def test_capture_app_reports_ambiguity(fake_capturer):
     result = call("capture", {"app": "safari"})["result"]
     meta = json.loads(result["content"][1]["text"])

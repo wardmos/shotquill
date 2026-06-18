@@ -606,6 +606,23 @@ def apply_masks(result: CaptureResult, masks: list[Rect]) -> CaptureResult:
     return masked
 
 
+def redact_pii(result: CaptureResult, recognizer: TextRecognizer) -> CaptureResult:
+    """Mask the pixels of any likely-PII text in ``result`` (best-effort).
+
+    The content-level redaction layer: OCR the frame, find which recognized boxes
+    carry likely PII, and fill those pixel rectangles with the same hardened path
+    the blocklist and caller masks use — so a card number or email is gone from
+    the bytes, not just flagged. Best-effort, **not a guarantee**: it can only
+    mask what OCR reads and the detectors catch. Returns the input unchanged when
+    nothing is flagged.
+    """
+    from shotquill import pii, redact
+    from shotquill.imaging import result_to_qimage
+
+    rects = pii.redaction_rects(recognizer.recognize_boxes(result_to_qimage(result)))
+    return redact.fill_rects(result, rects) if rects else result
+
+
 def windows_payload(windows: list[WindowInfo]) -> list[dict]:
     """The machine-readable window list shared by ``--json`` and MCP."""
     return [
