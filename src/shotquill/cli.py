@@ -210,6 +210,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="make --contains / --matches case-insensitive (OCR case is noisy)",
     )
+    ocr.add_argument(
+        "--boxes",
+        action="store_true",
+        help="print each line as 'x,y,w,h<TAB>text' (pixel box in the image) and "
+        "report where any --contains / --matches landed",
+    )
     ocr.set_defaults(func=_cmd_ocr)
 
     doctor = sub.add_parser(
@@ -1001,14 +1007,18 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
         # instead of `capture -o - | ocr -`, same as the MCP ocr tool.
         image, source, _matched = _capture_image(args, region)
 
-    lines = recognizer.recognize(image)
-    for line in lines:
+    # --boxes asks for per-line pixel boxes (and where assertions land); without
+    # it the command keeps its plain text-lines contract.
+    boxes = recognizer.recognize_boxes(image) if args.boxes else []
+    lines = [box.text for box in boxes] if args.boxes else recognizer.recognize(image)
+    for i, line in enumerate(lines):
         # OCR text is app-controlled (it's literally pixels off the screen), so
         # an attacker who owns what's on screen could smuggle terminal control
         # sequences through it — strip them like the windows table does before
         # printing. The raw `lines` still feed --contains/--matches below, and
         # the MCP path is JSON-escaped already.
-        print(_printable(line))
+        safe = _printable(line)
+        print("{},{},{},{}\t{}".format(*boxes[i].as_rect(), safe) if args.boxes else safe)
     audit.record("ocr", via="cli", target=source)
 
     # No --contains/--matches → the command just prints text (back-compat). With
@@ -1018,12 +1028,22 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
     from shotquill import textassert
 
     try:
-        checks = textassert.evaluate(
-            lines,
-            contains=tuple(args.contains or ()),
-            matches=tuple(args.matches or ()),
-            ignore_case=args.ignore_case,
-        )
+        # With --boxes, assert over the boxes so each verdict reports where it
+        # landed; otherwise the text-only path.
+        if args.boxes:
+            checks = textassert.evaluate_boxes(
+                boxes,
+                contains=tuple(args.contains or ()),
+                matches=tuple(args.matches or ()),
+                ignore_case=args.ignore_case,
+            )
+        else:
+            checks = textassert.evaluate(
+                lines,
+                contains=tuple(args.contains or ()),
+                matches=tuple(args.matches or ()),
+                ignore_case=args.ignore_case,
+            )
     except ValueError as exc:
         return _usage_error(str(exc))  # a broken regex is the caller's bug
     for check in checks:

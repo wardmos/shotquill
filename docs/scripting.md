@@ -47,6 +47,7 @@ squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
 squill ocr --window-id 42 --contains Login # assert text is on screen (exit 20 if not)
+squill ocr --app safari --boxes           # each line as 'x,y,w,h<TAB>text' (pixel box)
 squill doctor                             # capability & permission report
 ```
 
@@ -88,6 +89,13 @@ The parts agents rely on:
   text still prints on stdout; the per-check result goes to stderr. The MCP
   `ocr` tool takes the same `contains`/`matches` and returns a structured
   `passed`.
+- **OCR can locate text, not just read it.** `--boxes` adds each line's pixel
+  bounding box: stdout becomes `x,y,w,h<TAB>text` (image pixels, top-left
+  origin — the same coordinates `--mask` redacts), and any `--contains` /
+  `--matches` reports *where* it landed on stderr (`ok: text contains 'Login'
+  at 40,12,180,20`). The MCP `ocr` tool takes a `boxes` flag and returns a
+  `boxes` array plus a `box` on each located assertion — for highlighting a
+  match, or masking it.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.

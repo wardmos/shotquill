@@ -429,9 +429,18 @@ def _tool_ocr(args: dict):
         # Capture-and-recognize in memory: only text reaches the agent, so a
         # "what does the screen say" question costs zero image tokens.
         image, source, _matched = _capture_image(args)
-    lines = recognizer.recognize(image)
+    # `boxes` adds per-line pixel boxes (and locates any assertion); without it
+    # the tool stays text-only, as before.
+    want_boxes = bool(args.get("boxes"))
+    text_boxes = recognizer.recognize_boxes(image) if want_boxes else []
+    lines = [b.text for b in text_boxes] if want_boxes else recognizer.recognize(image)
     audit.record("ocr", via="mcp", target=source)
     structured = {"lines": lines, "source": source}
+    if want_boxes:
+        structured["boxes"] = [
+            {"text": b.text, "x": b.x, "y": b.y, "width": b.width, "height": b.height}
+            for b in text_boxes
+        ]
 
     # Optional assertions: turn "read the screen" into "check the screen". The
     # agent branches on structured `passed`, the way the CLI branches on its
@@ -441,12 +450,25 @@ def _tool_ocr(args: dict):
     if contains or matches:
         from shotquill import textassert
 
-        checks = textassert.evaluate(
-            lines, contains=contains, matches=matches, ignore_case=bool(args.get("ignore_case"))
-        )
-        structured["assertions"] = [
-            {"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks
-        ]
+        ignore_case = bool(args.get("ignore_case"))
+        if want_boxes:
+            checks = textassert.evaluate_boxes(
+                text_boxes, contains=contains, matches=matches, ignore_case=ignore_case
+            )
+        else:
+            checks = textassert.evaluate(
+                lines, contains=contains, matches=matches, ignore_case=ignore_case
+            )
+        assertions = []
+        for c in checks:
+            entry = {"kind": c.kind, "pattern": c.pattern, "passed": c.passed}
+            # Where the match landed, as the same {x,y,w,h} a box reports — present
+            # only when located (--boxes) and the check passed.
+            rect = textassert.union_rect(c.boxes)
+            if rect is not None:
+                entry["box"] = {"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]}
+            assertions.append(entry)
+        structured["assertions"] = assertions
         structured["passed"] = textassert.all_passed(checks)
 
     # OCR'd text is attacker-controllable (it comes off the screen) and an MCP
@@ -946,6 +968,15 @@ _TOOLS = {
                         "default": False,
                         "description": "Make contains/matches case-insensitive.",
                     },
+                    "boxes": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Also return each line's pixel bounding box in the image, and "
+                            "locate where any contains/matches landed (for highlighting or "
+                            "masking). Coordinates are image pixels, top-left origin."
+                        ),
+                    },
                     **_TARGET_PROPERTIES,
                 },
                 "additionalProperties": False,
@@ -954,6 +985,21 @@ _TOOLS = {
                 "type": "object",
                 "properties": {
                     "lines": {"type": "array", "items": {"type": "string"}},
+                    "boxes": {
+                        "type": "array",
+                        "description": "Present when `boxes` was set: one pixel box per line.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "width": {"type": "integer"},
+                                "height": {"type": "integer"},
+                            },
+                            "required": ["text", "x", "y", "width", "height"],
+                        },
+                    },
                     "source": {
                         "type": "string",
                         "description": "The file or capture target the text came from.",
@@ -970,6 +1016,20 @@ _TOOLS = {
                                 "kind": {"type": "string", "enum": ["contains", "matches"]},
                                 "pattern": {"type": "string"},
                                 "passed": {"type": "boolean"},
+                                "box": {
+                                    "type": "object",
+                                    "description": (
+                                        "Where the match landed (pixels); present only with "
+                                        "`boxes` set and the check passed."
+                                    ),
+                                    "properties": {
+                                        "x": {"type": "integer"},
+                                        "y": {"type": "integer"},
+                                        "width": {"type": "integer"},
+                                        "height": {"type": "integer"},
+                                    },
+                                    "required": ["x", "y", "width", "height"],
+                                },
                             },
                             "required": ["kind", "pattern", "passed"],
                         },

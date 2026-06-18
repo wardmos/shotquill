@@ -8,9 +8,10 @@ imports cleanly on other platforms (e.g. for the CI smoke test).
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
-from shotquill.ocr.base import TextRecognizer
+from shotquill.ocr.base import TextBox, TextRecognizer
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
@@ -18,10 +19,33 @@ if TYPE_CHECKING:
 _DEFAULT_LANGUAGES = ("zh-Hans", "en")
 
 
+def pixel_box(
+    nx: float, ny: float, nw: float, nh: float, image_w: int, image_h: int
+) -> tuple[int, int, int, int]:
+    """Vision's normalized ``boundingBox`` to a pixel ``(x, y, w, h)`` (pure).
+
+    Vision reports boxes normalized to ``[0, 1]`` with a **bottom-left** origin;
+    we want pixels with a **top-left** origin, the space the image (and
+    ``redact.fill_rects``) uses. Flip the y axis and scale by the image size.
+    Edges are floored/ceiled outward — like :func:`shotquill.redact.pixel_rect` —
+    so a box fully covers its glyphs rather than leaving a one-pixel seam, then
+    clamped to the image so it never reaches past the bounds.
+    """
+    left = math.floor(nx * image_w)
+    right = math.ceil((nx + nw) * image_w)
+    top = math.floor((1.0 - ny - nh) * image_h)
+    bottom = math.ceil((1.0 - ny) * image_h)
+    left = max(0, min(left, image_w))
+    right = max(0, min(right, image_w))
+    top = max(0, min(top, image_h))
+    bottom = max(0, min(bottom, image_h))
+    return (left, top, max(0, right - left), max(0, bottom - top))
+
+
 class VisionTextRecognizer(TextRecognizer):
     backend_name = "Apple Vision"
 
-    def recognize(self, image: QImage) -> list[str]:
+    def recognize_boxes(self, image: QImage) -> list[TextBox]:
         import Quartz
         import Vision
         from Foundation import NSData
@@ -60,16 +84,21 @@ class VisionTextRecognizer(TextRecognizer):
         if not ok:
             return []
 
-        # Vision returns observations in detection order; sort top-to-bottom,
-        # then left-to-right (boundingBox origin is bottom-left, so larger y is
-        # higher up). Without the x tiebreak, same-row text keeps detection
-        # order, which can jumble a multi-column layout the assertions read.
-        observations = list(request.results() or [])
-        observations.sort(key=lambda obs: (-obs.boundingBox().origin.y, obs.boundingBox().origin.x))
-
-        lines = []
-        for obs in observations:
+        # Vision returns observations in detection order, each with a normalized
+        # boundingBox. Convert to pixel boxes (see pixel_box) and sort top-to-
+        # bottom then left-to-right — without the x tiebreak, same-row text keeps
+        # detection order, which can jumble a multi-column layout the assertions
+        # read.
+        width, height = image.width(), image.height()
+        boxes: list[TextBox] = []
+        for obs in request.results() or []:
             candidates = obs.topCandidates_(1)
-            if candidates and candidates.count() > 0:
-                lines.append(str(candidates.objectAtIndex_(0).string()))
-        return lines
+            if not candidates or candidates.count() == 0:
+                continue
+            text = str(candidates.objectAtIndex_(0).string())
+            bbox = obs.boundingBox()
+            origin, size = bbox.origin, bbox.size
+            x, y, w, h = pixel_box(origin.x, origin.y, size.width, size.height, width, height)
+            boxes.append(TextBox(text=text, x=x, y=y, width=w, height=h))
+        boxes.sort(key=lambda b: (b.y, b.x))
+        return boxes

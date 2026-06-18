@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from shotquill.ocr.base import TextRecognizer
+from shotquill.ocr.base import TextBox, TextRecognizer
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
@@ -69,25 +69,50 @@ def is_available() -> bool:
     return True
 
 
-def lines_from_result(result) -> list[str]:
-    """Extract ordered, non-empty text lines from a WinRT ``OcrResult``.
+def boxes_from_result(result) -> list[TextBox]:
+    """Extract ordered text spans with pixel boxes from a WinRT ``OcrResult``.
 
     ``OcrResult.lines`` already comes back in reading order (top-to-bottom,
-    left-to-right), so this just pulls each line's ``.text`` and drops blanks —
-    the one decision worth testing without a live engine. Defensive against a
-    ``None`` line list (an image with no text yields an empty result)."""
-    out: list[str] = []
+    left-to-right). WinRT puts the bounding rectangle on each ``OcrWord``, not the
+    line, so a line's box is the union of its words' ``BoundingRect`` (pixels,
+    top-left origin — already the space we mask in). A line with no usable word
+    rects still contributes its text with a zero box rather than vanishing.
+    Defensive against a ``None`` line list (an image with no text). This is the one
+    decision worth testing without a live engine."""
+    out: list[TextBox] = []
     for line in getattr(result, "lines", None) or []:
         text = (getattr(line, "text", "") or "").strip()
-        if text:
-            out.append(text)
+        if not text:
+            continue
+        rects = [
+            rect
+            for word in getattr(line, "words", None) or []
+            if (rect := getattr(word, "bounding_rect", None)) is not None
+        ]
+        if rects:
+            x0 = min(r.x for r in rects)
+            y0 = min(r.y for r in rects)
+            x1 = max(r.x + r.width for r in rects)
+            y1 = max(r.y + r.height for r in rects)
+            out.append(
+                TextBox(text=text, x=int(x0), y=int(y0), width=int(x1 - x0), height=int(y1 - y0))
+            )
+        else:
+            out.append(TextBox(text=text, x=0, y=0, width=0, height=0))
     return out
+
+
+def lines_from_result(result) -> list[str]:
+    """Ordered, non-empty text lines from a WinRT ``OcrResult`` (text-only view)."""
+    return [box.text for box in boxes_from_result(result)]
 
 
 class WindowsOcrRecognizer(TextRecognizer):
     backend_name = "Windows OCR"
 
-    def recognize(self, image: QImage) -> list[str]:  # pragma: no cover - needs Windows + WinRT
+    def recognize_boxes(
+        self, image: QImage
+    ) -> list[TextBox]:  # pragma: no cover - needs Windows + WinRT
         import asyncio
 
         # OCR runs on a worker thread (the editor offloads it), so there is no
@@ -98,7 +123,7 @@ class WindowsOcrRecognizer(TextRecognizer):
             result = asyncio.run(self._recognize_async(image))
         except Exception:
             return []
-        return lines_from_result(result)
+        return boxes_from_result(result)
 
     async def _recognize_async(self, image: QImage):  # pragma: no cover - needs Windows + WinRT
         root = _load_ocr_namespace()

@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import sys
 
-from shotquill.ocr.base import TextRecognizer
+from shotquill.ocr.base import TextBox, TextRecognizer
+
+__all__ = ["TextBox", "TextRecognizer", "get_recognizer"]
 
 
 def get_recognizer() -> TextRecognizer | None:
