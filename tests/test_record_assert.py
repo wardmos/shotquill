@@ -57,6 +57,22 @@ def test_frame_without_assertions_has_no_verdict(tmp_path):
     assert "assertion_passed" not in entry and "assertions" not in entry
 
 
+# --- store: PII findings on a frame (D15 layer 6) ---------------------------
+
+
+def test_record_frame_stores_pii_findings(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-pii-store")
+    findings = [{"kind": "email", "count": 2}, {"kind": "credit_card", "count": 1}]
+    record.record_frame(session, image_bytes=_FAKE_PNG, tool="verify", target="t", pii=findings)
+    assert record.load_manifest(session)["frames"][0]["pii"] == findings
+
+
+def test_frame_without_pii_has_no_pii_field(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-no-pii")
+    record.record_frame(session, image_bytes=_FAKE_PNG, tool="click", target="t")
+    assert "pii" not in record.load_manifest(session)["frames"][0]
+
+
 # --- OTLP: failed assertion -> error span -----------------------------------
 
 
@@ -241,3 +257,60 @@ def test_mcp_record_frame_assertion(fakes):
     ]
     assert structured["assertion_passed"] is True
     assert structured["assertions"][0]["pattern"] == "Login"
+
+
+def test_cli_record_frame_scan_pii(fakes, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(
+        headless,
+        "get_recognizer",
+        lambda: _Recognizer(["email ada@example.com", "card 4111111111111111"]),
+    )
+    cli.main(["record", "start", "--id", "conv-pii"])
+    capsys.readouterr()
+    rc = cli.main(["record", "frame", "--session", "conv-pii", "--tool", "verify", "--scan-pii"])
+    assert rc == 0
+    assert "pii scan: likely" in capsys.readouterr().err
+
+    entry = json.loads((tmp_path / "records" / "conv-pii" / "manifest.json").read_text())["frames"][
+        0
+    ]
+    assert {f["kind"] for f in entry["pii"]} == {"email", "credit_card"}
+    # The matched values are never written to the manifest — kind + count only.
+    assert "ada@example.com" not in json.dumps(entry)
+    assert "4111111111111111" not in json.dumps(entry)
+
+
+def test_mcp_record_frame_scan_pii(fakes, monkeypatch):
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _Recognizer(["ada@example.com"]))
+
+    def call(args):
+        raw = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "record_frame", "arguments": args},
+            }
+        )
+        fout = io.StringIO()
+        mcp.serve(stdin=io.StringIO(raw + "\n"), stdout=fout)
+        return json.loads(fout.getvalue())["result"]
+
+    mcp.serve(
+        stdin=io.StringIO(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "record_start", "arguments": {"id": "conv-mcp-pii"}},
+                }
+            )
+            + "\n"
+        ),
+        stdout=io.StringIO(),
+    )
+    structured = call({"session": "conv-mcp-pii", "tool": "verify", "scan_pii": True})[
+        "structuredContent"
+    ]
+    assert structured["pii"] == [{"kind": "email", "count": 1}]

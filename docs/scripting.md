@@ -176,6 +176,14 @@ squill record end --session "$DIR"                                # prints the H
   OTLP span to error — while still recording the frame, so the failure is
   replayable. This is where the screenshot backend and the flight recorder meet:
   the failing step of a test *is* a frame in the trace.
+- **A frame can flag likely PII (best-effort, not a guarantee).** Add
+  `--scan-pii` to `record frame` (or `scan_pii: true` on the MCP tool) and it
+  OCRs the frame and records which kinds of sensitive value likely appear and how
+  many — **kind and count only, never the value** — as a residual-risk flag on
+  the frame (e.g. for an export gate). It does **not** mask pixels: locating PII
+  on screen needs OCR bounding boxes, which the backends do not yet surface. This
+  is the weakest privacy layer; treat it as "this frame probably carries a card
+  number", not as redaction.
 - `--json` on any of the three prints a machine-readable object; every step is
   audit-logged with `via: "record"`.
 
