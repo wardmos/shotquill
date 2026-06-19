@@ -201,9 +201,10 @@ _ERROR_HINTS = {
     "unsupported": "call the doctor tool to see what this host supports",
     "no_match": "call list_windows (or list_displays) to see what is actually available",
     "permission": "call the doctor tool for the missing grant and how to fix it",
-    "blocked": "the user's policy forbids this capture (the target is blocklisted, or an "
+    "blocked": "the user's policy forbids this (the target is blocklisted, or an "
     "allowlist is active and the target is not on it, or a whole-screen capture was requested "
-    "while the allowlist restricts to specific apps); do not retry",
+    "while the allowlist restricts to specific apps, or an export was gated on residual PII); "
+    "do not retry",
     "no_session": "call record_start first, then pass the conversation_id it returns as `session`",
 }
 
@@ -658,6 +659,37 @@ def _tool_record_end(args: dict):
         "otlp": str(session.otlp_path.resolve()),
         "frames": len(manifest.get("frames", [])),
     }
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_record_export(args: dict):
+    session = _require_session(args)
+    manifest = record.load_manifest(session)
+    fmt = args.get("format") or "tar.gz"
+    if fmt not in ("tar.gz", "zip"):
+        raise ValueError(f"format must be tar.gz or zip — got {fmt!r}")
+
+    # Privacy gate (opt-in): refuse to bundle a trace that still carries residual
+    # PII flags, so a flagged session isn't shared off the machine by accident.
+    pii_totals = record.aggregate_pii(manifest)
+    if bool(args.get("fail_on_pii")) and pii_totals:
+        summary = ", ".join(f"{count} {kind}" for kind, count in sorted(pii_totals.items()))
+        raise headless.CaptureBlocked(
+            f"refusing to export: frames carry likely PII ({summary}); re-record with redaction"
+        )
+
+    out = args.get("output")
+    archive = record.export_session(session, Path(str(out)).expanduser() if out else None, fmt=fmt)
+    dest = str(archive.resolve())
+    audit.record("record_export", via="record", target=session.id, dest=dest)
+    payload = {
+        "conversation_id": session.id,
+        "archive": dest,
+        "format": fmt,
+        "frames": len(manifest.get("frames", [])),
+    }
+    if pii_totals:
+        payload["pii"] = pii_totals
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
@@ -1310,6 +1342,65 @@ _TOOLS = {
                     "frames": {"type": "integer"},
                 },
                 "required": ["conversation_id", "dir", "manifest", "filmstrip", "otlp", "frames"],
+            },
+        },
+    },
+    "record_export": {
+        "handler": _tool_record_export,
+        "descriptor": {
+            "name": "record_export",
+            "description": (
+                "Bundle a session into one shareable archive (manifest + frames + "
+                "filmstrip + OTLP). Set fail_on_pii to refuse when any frame carries "
+                "a best-effort PII flag. Returns the archive path; the result also "
+                "reports any residual PII so you can decide before sharing."
+            ),
+            "annotations": {"title": "Export a recording session", "openWorldHint": False},
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "conversation_id (or directory) from record_start.",
+                    },
+                    "output": {
+                        "type": "string",
+                        "description": "Archive path to write (default: beside the session).",
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["tar.gz", "zip"],
+                        "default": "tar.gz",
+                        "description": "Archive format.",
+                    },
+                    "fail_on_pii": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Refuse to export if any frame carries a PII flag.",
+                    },
+                },
+                "required": ["session"],
+                "additionalProperties": False,
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {"type": "string"},
+                    "archive": {
+                        "type": "string",
+                        "description": "Path the archive was written to.",
+                    },
+                    "format": {"type": "string"},
+                    "frames": {"type": "integer"},
+                    "pii": {
+                        "type": "object",
+                        "description": (
+                            "Residual best-effort PII flags by kind (present only when any)."
+                        ),
+                        "additionalProperties": {"type": "integer"},
+                    },
+                },
+                "required": ["conversation_id", "archive", "format", "frames"],
             },
         },
     },

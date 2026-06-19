@@ -474,6 +474,32 @@ def _add_record_parser(sub) -> None:
     prune.add_argument("--json", action="store_true", help="machine-readable output")
     prune.set_defaults(func=_cmd_record_prune)
 
+    export = rec_sub.add_parser(
+        "export",
+        help="bundle a session into one shareable archive (manifest + frames + filmstrip)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    export.add_argument("session", help="session id or directory (from `record start`)")
+    export.add_argument(
+        "-o",
+        "--output",
+        help="archive path to write (default: <session-id>.<ext> next to the session)",
+    )
+    export.add_argument(
+        "--format",
+        choices=("tar.gz", "zip"),
+        default="tar.gz",
+        help="archive format (default: tar.gz)",
+    )
+    export.add_argument(
+        "--fail-on-pii",
+        action="store_true",
+        help="refuse to export (exit 6) if any frame carries a best-effort PII flag "
+        "(from `record frame --scan-pii`)",
+    )
+    export.add_argument("--json", action="store_true", help="machine-readable output")
+    export.set_defaults(func=_cmd_record_export)
+
 
 def _add_target_options(command: argparse.ArgumentParser) -> None:
     """The shared what-to-capture options (`capture` and screen-`ocr`)."""
@@ -917,6 +943,52 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
         )
     else:
         print(html_path)
+    return 0
+
+
+def _cmd_record_export(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    try:
+        session = record.resolve_session(args.session)
+        manifest = record.load_manifest(session)
+    except record.RecordError as exc:
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
+
+    # Privacy gate (opt-in): refuse to bundle a trace that still carries residual
+    # PII flags, so a flagged session isn't shared off the machine by accident.
+    pii_totals = record.aggregate_pii(manifest)
+    if args.fail_on_pii and pii_totals:
+        summary = ", ".join(f"{count} {kind}" for kind, count in sorted(pii_totals.items()))
+        print(
+            f"squill: refusing to export: frames carry likely PII ({summary}); "
+            "re-record with --redact-pii or drop --fail-on-pii to override",
+            file=sys.stderr,
+        )
+        return headless.EXIT_BLOCKED
+
+    try:
+        out_path = record.export_session(
+            session, Path(args.output).expanduser() if args.output else None, fmt=args.format
+        )
+    except record.RecordError as exc:
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
+    dest = str(out_path.resolve())
+    audit.record("record_export", via="record", target=session.id, dest=dest)
+    if args.json:
+        payload = {
+            "conversation_id": session.id,
+            "archive": dest,
+            "format": args.format,
+            "frames": len(manifest.get("frames", [])),
+        }
+        if pii_totals:
+            payload["pii"] = pii_totals
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(dest)
     return 0
 
 
