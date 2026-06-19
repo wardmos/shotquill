@@ -39,6 +39,8 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QWidget
 
 from shotquill.i18n import adjust_hint_key, key_display_name, t
 from shotquill.ocr import get_recognizer
+from shotquill.ui import macos_window
+from shotquill.ui._debug import crop_log
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.geometry import scale_rect_edges
 from shotquill.ui.toolbar import create_toolbar
@@ -335,9 +337,16 @@ class EditorWindow(QMainWindow):
         super().closeEvent(event)
 
     def resizeEvent(self, event) -> None:
-        # Keep the whole image fitted as the user resizes — with scrollbars off
-        # there is no other way to reach content outside the viewport.
+        # Keep the whole image fitted as the window is (re-)sized — with
+        # scrollbars off there is no other way to reach content outside the
+        # viewport.
         super().resizeEvent(event)
+        crop_log(f"resizeEvent size={event.size()} crop_overlay={self._crop_overlay is not None}")
+        # While the full-screen adjust surface is up, never re-fit: a stray
+        # resize must not scale the frozen shot under the user (the surface owns
+        # the live preview, and the editor re-crops once on apply).
+        if self._crop_overlay is not None:
+            return
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
 
     def _place_over_origin(self) -> None:
@@ -349,6 +358,15 @@ class EditorWindow(QMainWindow):
         so the toolbar and window edges stay reachable. Runs on first show —
         only then are the toolbar and frame dimensions known.
         """
+        if self._backdrop is not None:
+            # Frameless spotlight window: stop the user from drag-resizing it.
+            # Resizing only scales the shot via fitInView (never useful) and, on
+            # macOS, the OS treats the frameless edges as resize handles — so an
+            # edge drag meant to adjust the crop is hijacked as a window resize
+            # and never reaches the canvas. Clearing the resizable style mask
+            # removes that zone (the program still re-places the window itself).
+            # Done before the move below so any AppKit frame nudge is corrected.
+            macos_window.set_resizable(self, False)
         self.layout().activate()  # settle toolbar/central layout before measuring
         viewport = self._canvas.viewport()
         screen = QGuiApplication.screenAt(self._origin.center())
@@ -431,6 +449,7 @@ class EditorWindow(QMainWindow):
 
         from shotquill.ui.smart_overlay import CropAdjustOverlay, present_overlay
 
+        crop_log(f"enter_crop_adjust edges={edges} origin={self._origin}")
         if self._crop_overlay is not None:  # a session is already up
             return
         overlay = CropAdjustOverlay(self._region.screenshot, self._region.geometry, self._origin)
@@ -452,6 +471,7 @@ class EditorWindow(QMainWindow):
     def _crop_adjusted(self, image: QImage, rect: QRect) -> None:
         # Re-crop from the original full-desktop screenshot via the same path the
         # arrow keys use, so a single source of truth places the window once.
+        crop_log(f"_crop_adjusted rect={rect}")
         self._selection = QRectF(rect)
         self._apply_selection()
 

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from shotquill.ui._debug import crop_log
 from shotquill.ui.geometry import crop_edge_hits
 from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
@@ -272,6 +273,11 @@ class AnnotationCanvas(QGraphicsView):
         # full-screen adjust surface instead of starting a rubber-band select.
         if event.button() == Qt.LeftButton:
             edges = self._crop_edges_at(event.position())
+            crop_log(
+                f"canvas.press pos={event.position().toPoint()} "
+                f"vp=({self.viewport().width()},{self.viewport().height()}) "
+                f"host={self._crop_host is not None} tool={self._tool} edges={edges}"
+            )
             if any(edges):
                 self._crop_host.enter_crop_adjust(edges)
                 return

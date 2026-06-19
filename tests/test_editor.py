@@ -736,6 +736,48 @@ def test_canvas_edge_press_inert_after_first_annotation(qtbot, config):
     assert calls == []  # no longer adjustable, so the edge press does nothing
 
 
+def test_spotlight_editor_disables_user_window_resize(qtbot, config, monkeypatch):
+    # The frameless spotlight editor must not be user-resizable: on macOS the
+    # window's resize edges otherwise hijack the crop-edge drag (and scale the
+    # shot via fitInView) before it can reach the canvas. The AppKit call is a
+    # no-op off macOS, so assert it is wired (not its effect).
+    from shotquill.ui import macos_window
+
+    calls = []
+    monkeypatch.setattr(macos_window, "set_resizable", lambda w, r: calls.append(r))
+    screenshot = _image(400, 300)
+    geometry = QRect(0, 0, 400, 300)
+    origin = QRect(120, 80, 200, 100)
+    window = EditorWindow(
+        screenshot.copy(origin), config, origin, RegionContext(screenshot, geometry)
+    )
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    assert window._backdrop is not None  # spotlight (frameless) mode
+    assert calls and calls[-1] is False  # the frameless window is made non-resizable
+
+
+def test_framed_editor_keeps_default_resizability(qtbot, config, monkeypatch):
+    # With the spotlight backdrop off the editor is a normal titled window; its
+    # OS resize border is expected, so we must not disable it.
+    from shotquill.ui import macos_window
+
+    config.set_editor_backdrop(False)
+    calls = []
+    monkeypatch.setattr(macos_window, "set_resizable", lambda w, r: calls.append(r))
+    window = EditorWindow(_image(), config, QRect(120, 80, 60, 40))
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    assert window._backdrop is None  # framed mode
+    assert calls == []
+
+
 def test_editor_toolbar_style_follows_config(qtbot, config):
     from PySide6.QtWidgets import QToolBar
 

@@ -23,6 +23,33 @@ _NS_SCREENSAVER_LEVEL = 1000
 _NS_CAN_JOIN_ALL_SPACES = 1 << 0
 _NS_STATIONARY = 1 << 4
 _NS_FULLSCREEN_AUXILIARY = 1 << 8
+# NSWindowStyleMaskResizable: when set, the OS treats the window's edges as
+# resize handles. Cleared on the frameless editor so an edge drag adjusts the
+# crop instead of being hijacked as a window resize.
+_NS_RESIZABLE = 1 << 3
+
+
+def set_resizable(widget, resizable: bool) -> bool:  # pragma: no cover - macOS/AppKit only
+    """Toggle whether the user can drag-resize ``widget``'s NSWindow.
+
+    Returns True on success, False if the AppKit bridge is unavailable (the
+    caller then keeps Qt's default, user-resizable window). Only the user-facing
+    resize affordance changes — the program can still resize the window via
+    ``QWidget.resize`` / ``move`` regardless. Must be called after the window has
+    a valid ``winId()`` (e.g. on/after first show). No-op off macOS.
+    """
+    try:
+        import objc  # noqa: F401 - import proves the bridge is present
+
+        nsview = objc.objc_object(c_void_p=int(widget.winId()))
+        nswindow = nsview.window()
+        if nswindow is None:
+            return False
+        mask = nswindow.styleMask()
+        nswindow.setStyleMask_(mask | _NS_RESIZABLE if resizable else mask & ~_NS_RESIZABLE)
+        return True
+    except Exception:
+        return False
 
 
 def raise_above_menubar(widget) -> bool:  # pragma: no cover - macOS/AppKit only
