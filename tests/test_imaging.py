@@ -6,10 +6,19 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtGui import QImage  # noqa: E402
+from PySide6.QtGui import (
+    QColor,  # noqa: E402
+    QImage,  # noqa: E402
+)
 
 from shotquill.capture.base import CaptureResult  # noqa: E402
-from shotquill.imaging import downscale_to_max, result_to_qimage  # noqa: E402
+from shotquill.imaging import (  # noqa: E402
+    changed_bbox,
+    downscale_to_max,
+    frame_diff_fraction,
+    image_diff_box,
+    result_to_qimage,
+)
 
 
 def _result(width=2, height=2, color=(255, 0, 0, 255), premultiplied=False) -> CaptureResult:
@@ -105,3 +114,114 @@ def test_downscale_disabled_when_max_is_non_positive():
     for cap in (0, -1):
         out = downscale_to_max(image, cap)
         assert (out.width(), out.height()) == (400, 200)
+
+
+# --- before/after diff (changed_bbox is pure; frame_diff_fraction uses Qt) ----
+
+
+def _rgba(width, height, color=(0, 0, 0, 255)):
+    return bytearray(list(color) * (width * height))
+
+
+def _set(buf, width, x, y, color):
+    i = (y * width + x) * 4
+    buf[i : i + 4] = bytes(color)
+
+
+def test_changed_bbox_locates_a_single_changed_pixel():
+    w = h = 3
+    before = _rgba(w, h)
+    after = _rgba(w, h)
+    _set(after, w, 2, 1, (255, 255, 255, 255))
+    assert changed_bbox(bytes(before), bytes(after), w, h, threshold=16) == (2, 1, 3, 2)
+
+
+def test_changed_bbox_spans_a_region():
+    w = h = 4
+    before = _rgba(w, h)
+    after = _rgba(w, h)
+    for x in (1, 2):
+        for y in (1, 2, 3):
+            _set(after, w, x, y, (200, 0, 0, 255))
+    # x0,y0 inclusive .. x1,y1 exclusive → covers cols 1..2, rows 1..3.
+    assert changed_bbox(bytes(before), bytes(after), w, h, threshold=16) == (1, 1, 3, 4)
+
+
+def test_changed_bbox_none_when_identical_or_within_threshold():
+    w = h = 2
+    before = _rgba(w, h, (10, 10, 10, 255))
+    assert changed_bbox(bytes(before), bytes(before), w, h) is None
+    near = _rgba(w, h, (10, 10, 10, 255))
+    _set(near, w, 0, 0, (20, 10, 10, 255))  # delta 10 <= threshold 16
+    assert changed_bbox(bytes(before), bytes(near), w, h, threshold=16) is None
+
+
+def test_changed_bbox_none_when_buffer_too_small():
+    assert changed_bbox(b"\x00\x00\x00\xff", b"", 2, 2) is None
+
+
+def test_frame_diff_fraction_returns_box_in_frame_fractions():
+    before = QImage(40, 20, QImage.Format.Format_RGBA8888)
+    before.fill(QColor(0, 0, 0))
+    after = QImage(40, 20, QImage.Format.Format_RGBA8888)
+    after.fill(QColor(0, 0, 0))
+    # Change the bottom-right quadrant (x 20..40, y 10..20).
+    for x in range(20, 40):
+        for y in range(10, 20):
+            after.setPixelColor(x, y, QColor(255, 255, 255))
+    frac = frame_diff_fraction(before, after)
+    assert frac is not None
+    fx, fy, fw, fh = frac
+    # Box sits in the bottom-right (allow slack for the coarse work-size grid).
+    assert fx > 0.4 and fy > 0.4
+    assert fx + fw <= 1.001 and fy + fh <= 1.001
+
+
+def test_frame_diff_fraction_none_for_identical_frames():
+    img = QImage(30, 30, QImage.Format.Format_RGBA8888)
+    img.fill(QColor(5, 5, 5))
+    assert frame_diff_fraction(img, img) is None
+
+
+def test_frame_diff_fraction_none_on_size_mismatch():
+    a = QImage(40, 20, QImage.Format.Format_RGBA8888)
+    a.fill(QColor(0, 0, 0))
+    b = QImage(20, 40, QImage.Format.Format_RGBA8888)  # different aspect → diff sizes
+    b.fill(QColor(0, 0, 0))
+    assert frame_diff_fraction(a, b) is None
+
+
+# --- image_diff_box (full-res golden-image comparison) ------------------------
+
+
+def _img(width, height, color=(0, 0, 0)):
+    image = QImage(width, height, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(*color))
+    return image
+
+
+def test_image_diff_box_identical_is_not_changed():
+    assert image_diff_box(_img(10, 8), _img(10, 8)) == (False, None)
+
+
+def test_image_diff_box_returns_pixel_region_xywh():
+    a = _img(20, 12)
+    b = _img(20, 12)
+    for x in range(5, 9):
+        for y in range(2, 5):
+            b.setPixelColor(x, y, QColor(255, 0, 0))
+    changed, box = image_diff_box(a, b)
+    assert changed is True
+    assert box == (5, 2, 4, 3)  # x, y, w, h
+
+
+def test_image_diff_box_size_mismatch_is_changed_without_a_box():
+    assert image_diff_box(_img(20, 12), _img(10, 10)) == (True, None)
+
+
+def test_image_diff_box_threshold_absorbs_small_deltas():
+    a = _img(4, 4, (10, 10, 10))
+    b = _img(4, 4, (10, 10, 10))
+    b.setPixelColor(0, 0, QColor(20, 10, 10))  # delta 10
+    assert image_diff_box(a, b, threshold=16) == (False, None)
+    assert image_diff_box(a, b, threshold=0)[0] is True

@@ -165,6 +165,7 @@ def test_tools_list_descriptors():
         "record_start",
         "record_frame",
         "record_end",
+        "record_export",
         "record_list",
         "record_prune",
     }

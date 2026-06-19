@@ -224,6 +224,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ocr.set_defaults(func=_cmd_ocr)
 
+    diff = sub.add_parser(
+        "diff",
+        help="compare two images and report where they differ (for golden-image checks)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    diff.add_argument("a", help="first image file (or '-' for image bytes on stdin)")
+    diff.add_argument("b", help="second image file (or '-' for image bytes on stdin)")
+    diff.add_argument(
+        "--threshold",
+        type=int,
+        default=0,
+        metavar="N",
+        help="per-channel delta that counts as a change (0 = exact; raise to absorb "
+        "anti-aliasing/compression noise)",
+    )
+    diff.add_argument(
+        "--json",
+        action="store_true",
+        help="print a JSON object (changed, box, sizes) instead of a human line",
+    )
+    diff.set_defaults(func=_cmd_diff)
+
     doctor = sub.add_parser(
         "doctor",
         help="report platform capabilities and permissions",
@@ -473,6 +495,32 @@ def _add_record_parser(sub) -> None:
     )
     prune.add_argument("--json", action="store_true", help="machine-readable output")
     prune.set_defaults(func=_cmd_record_prune)
+
+    export = rec_sub.add_parser(
+        "export",
+        help="bundle a session into one shareable archive (manifest + frames + filmstrip)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    export.add_argument("session", help="session id or directory (from `record start`)")
+    export.add_argument(
+        "-o",
+        "--output",
+        help="archive path to write (default: <session-id>.<ext> next to the session)",
+    )
+    export.add_argument(
+        "--format",
+        choices=("tar.gz", "zip"),
+        default="tar.gz",
+        help="archive format (default: tar.gz)",
+    )
+    export.add_argument(
+        "--fail-on-pii",
+        action="store_true",
+        help="refuse to export (exit 6) if any frame carries a best-effort PII flag "
+        "(from `record frame --scan-pii`)",
+    )
+    export.add_argument("--json", action="store_true", help="machine-readable output")
+    export.set_defaults(func=_cmd_record_export)
 
 
 def _add_target_options(command: argparse.ArgumentParser) -> None:
@@ -888,6 +936,12 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
 
     try:
         session = record.resolve_session(args.session)
+        # Compute before/after change boxes before rendering the filmstrip. Best
+        # effort: a diff hiccup must never block closing a session, so swallow it.
+        try:
+            headless.annotate_pair_diffs(session)
+        except Exception:  # noqa: BLE001 - change boxes are a cosmetic review hint
+            pass
         filmstrip = record.end_session(session)
         manifest = record.load_manifest(session)
     except record.RecordError as exc:
@@ -911,6 +965,52 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
         )
     else:
         print(html_path)
+    return 0
+
+
+def _cmd_record_export(args: argparse.Namespace) -> int:
+    from shotquill import record
+
+    try:
+        session = record.resolve_session(args.session)
+        manifest = record.load_manifest(session)
+    except record.RecordError as exc:
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
+
+    # Privacy gate (opt-in): refuse to bundle a trace that still carries residual
+    # PII flags, so a flagged session isn't shared off the machine by accident.
+    pii_totals = record.aggregate_pii(manifest)
+    if args.fail_on_pii and pii_totals:
+        summary = ", ".join(f"{count} {kind}" for kind, count in sorted(pii_totals.items()))
+        print(
+            f"squill: refusing to export: frames carry likely PII ({summary}); "
+            "re-record with --redact-pii or drop --fail-on-pii to override",
+            file=sys.stderr,
+        )
+        return headless.EXIT_BLOCKED
+
+    try:
+        out_path = record.export_session(
+            session, Path(args.output).expanduser() if args.output else None, fmt=args.format
+        )
+    except record.RecordError as exc:
+        print(f"squill: {exc}", file=sys.stderr)
+        return 1
+    dest = str(out_path.resolve())
+    audit.record("record_export", via="record", target=session.id, dest=dest)
+    if args.json:
+        payload = {
+            "conversation_id": session.id,
+            "archive": dest,
+            "format": args.format,
+            "frames": len(manifest.get("frames", [])),
+        }
+        if pii_totals:
+            payload["pii"] = pii_totals
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(dest)
     return 0
 
 
@@ -1108,6 +1208,65 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
     for check in checks:
         print(textassert.describe(check), file=sys.stderr)
     return 0 if textassert.all_passed(checks) else _EXIT_ASSERTION_FAILED
+
+
+def _cmd_diff(args: argparse.Namespace) -> int:
+    from PySide6.QtGui import QImage
+
+    from shotquill import imaging
+
+    if args.a == "-" and args.b == "-":
+        return _usage_error("only one of A/B can be stdin ('-')")
+    if args.threshold < 0:
+        return _usage_error("--threshold must be >= 0")
+
+    def load(arg: str):
+        if arg == "-":
+            data = headless.read_image_bytes(sys.stdin.buffer, label="stdin")
+        else:
+            path = Path(arg).expanduser()
+            try:
+                with path.open("rb") as fh:
+                    data = headless.read_image_bytes(fh, label=str(path))
+            except OSError as exc:
+                print(f"squill: cannot read {arg}: {exc}", file=sys.stderr)
+                return None
+        image = QImage.fromData(data)
+        if image.isNull():
+            label = "stdin" if arg == "-" else str(Path(arg).expanduser())
+            print(f"squill: {label} is not a decodable image", file=sys.stderr)
+            return None
+        return image
+
+    a_img = load(args.a)
+    if a_img is None:
+        return 1
+    b_img = load(args.b)
+    if b_img is None:
+        return 1
+
+    changed, box = imaging.image_diff_box(a_img, b_img, threshold=args.threshold)
+    a_size = (a_img.width(), a_img.height())
+    b_size = (b_img.width(), b_img.height())
+    if args.json:
+        payload: dict = {
+            "changed": changed,
+            "a_size": {"width": a_size[0], "height": a_size[1]},
+            "b_size": {"width": b_size[0], "height": b_size[1]},
+        }
+        if box is not None:
+            payload["box"] = {"x": box[0], "y": box[1], "width": box[2], "height": box[3]}
+        elif changed:
+            payload["reason"] = "size differs"
+        print(json.dumps(payload, ensure_ascii=False))
+    elif not changed:
+        print("identical")
+    elif box is None:
+        print(f"differ: size {a_size[0]}x{a_size[1]} vs {b_size[0]}x{b_size[1]}")
+    else:
+        print("changed: {},{},{},{}".format(*box))
+    # 0 = identical, 20 = differ (the predicate-result band, like an assertion).
+    return 0 if not changed else _EXIT_ASSERTION_FAILED
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:

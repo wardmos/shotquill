@@ -41,7 +41,9 @@ import html
 import json
 import os
 import shutil
+import tarfile
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -254,6 +256,24 @@ def open_before_pair_id(frames: list[dict]) -> str | None:
     return open_pairs[-1] if open_pairs else None
 
 
+def attach_diffs(session: Session, diffs: dict[int, dict]) -> None:
+    """Store before/after change boxes on frames, keyed by 0-based position (pure).
+
+    ``diffs`` maps a frame's position in the manifest to a ``{x, y, width, height}``
+    box in frame fractions (computed with Qt by the record-end glue, see
+    :func:`shotquill.headless.compute_pair_diffs`) — this module stays image-free.
+    A no-op when ``diffs`` is empty.
+    """
+    if not diffs:
+        return
+    manifest = _read_manifest(session.manifest_path)
+    frames = manifest["frames"]
+    for pos, box in diffs.items():
+        if 0 <= pos < len(frames):
+            frames[pos]["diff"] = dict(box)
+    _write_manifest(session.manifest_path, manifest)
+
+
 def record_frame(
     session: Session,
     *,
@@ -367,6 +387,62 @@ def end_session(session: Session, *, now: dt.datetime | None = None) -> Path:
     session.filmstrip_path.write_text(render_filmstrip(manifest), encoding="utf-8")
     _write_otlp(session, manifest)
     return session.filmstrip_path
+
+
+# --- export -----------------------------------------------------------------
+
+EXPORT_FORMATS = ("tar.gz", "zip")
+
+
+def aggregate_pii(manifest: dict) -> dict[str, int]:
+    """Total best-effort PII flags across a session's frames, ``{kind: count}``.
+
+    Sums the per-frame ``pii`` lists (kind + count only — the values were never
+    stored) so a caller can gate on residual risk before the trace leaves the
+    machine. Empty when no frame was scanned or nothing was flagged. Pure.
+    """
+    totals: dict[str, int] = {}
+    for frame in manifest.get("frames", []):
+        for finding in frame.get("pii") or []:
+            kind = finding.get("kind")
+            if kind:
+                totals[kind] = totals.get(kind, 0) + int(finding.get("count", 0))
+    return totals
+
+
+def export_session(session: Session, out_path: Path | None = None, *, fmt: str = "tar.gz") -> Path:
+    """Bundle a session directory into one shareable archive; return its path.
+
+    Packs the manifest, every frame, and (once the session is closed) the HTML
+    filmstrip and OTLP/JSON — all under a single ``<session-id>/`` top-level
+    folder so it extracts cleanly. ``fmt`` is ``"tar.gz"`` (default) or ``"zip"``.
+    Without ``out_path`` the archive lands next to the session as
+    ``<session-id>.<ext>``. Pure I/O — no Qt, no network.
+    """
+    if fmt not in EXPORT_FORMATS:
+        raise RecordError(f"export format must be one of {EXPORT_FORMATS}, got {fmt!r}")
+    if not session.dir.is_dir():
+        raise SessionNotFound(f"session directory not found: {session.dir}")
+    ext = "zip" if fmt == "zip" else "tar.gz"
+    out_path = (
+        Path(out_path) if out_path is not None else session.dir.parent / f"{session.id}.{ext}"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Explicit, sorted file list (no directories, no symlink surprises): every
+    # entry is rooted under "<id>/" so the archive expands into its own folder.
+    files = sorted(p for p in session.dir.rglob("*") if p.is_file())
+    if fmt == "zip":
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in files:
+                archive.write(path, arcname=f"{session.id}/{path.relative_to(session.dir)}")
+    else:
+        with tarfile.open(out_path, "w:gz") as archive:
+            for path in files:
+                archive.add(
+                    path, arcname=f"{session.id}/{path.relative_to(session.dir)}", recursive=False
+                )
+    return out_path
 
 
 # --- retention --------------------------------------------------------------
@@ -539,9 +615,18 @@ def _write_manifest(path: Path, manifest: dict) -> None:
 _FILMSTRIP_CSS = """\
 body { font: 14px system-ui, sans-serif; margin: 2rem; background: #1a1a1a; color: #eee; }
 h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
-.strip { display: flex; flex-wrap: wrap; gap: 1rem; }
+.strip { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+/* A before/after pair sits as one unit: its two frames side by side, set off by
+   a subtle frame so the diff reads as a single step. */
+.pair { display: flex; gap: .5rem; background: #202020; border: 1px solid #383838;
+        border-radius: 10px; padding: .5rem; }
+.pair .frame { width: 220px; }
 .frame { background: #262626; border-radius: 8px; padding: .75rem; width: 280px; }
+.frame .shot { position: relative; line-height: 0; }
 .frame img { width: 100%; border-radius: 4px; display: block; background: #000; }
+/* before/after change box: a percent-positioned outline over the after frame. */
+.diffbox { position: absolute; border: 2px solid #f5a623;
+           box-shadow: 0 0 0 1px rgba(0,0,0,.55); border-radius: 3px; pointer-events: none; }
 .frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
 .frame .label { color: #ccc; } .frame .at { color: #888; font-size: .8rem; }
 .frame.failed { outline: 2px solid #c55; }
@@ -555,6 +640,15 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
 .badge.phase { background: #4a3f23; color: #ed9; }
 .empty { color: #888; }
 """
+
+
+def _pct(value: object) -> str:
+    """A frame-fraction in ``[0, 1]`` as a clamped CSS percentage (defensive)."""
+    try:
+        fraction = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        fraction = 0.0
+    return f"{max(0.0, min(1.0, fraction)) * 100:.2f}%"
 
 
 def render_filmstrip(manifest: dict) -> str:
@@ -576,8 +670,8 @@ def render_filmstrip(manifest: dict) -> str:
     ended = manifest.get("ended_at")
     frames = manifest.get("frames", [])
 
-    cards: list[str] = []
-    for entry in frames:
+    def card(entry: dict) -> str:
+        """Render one frame as a ``<figure>`` card."""
         span = entry.get("span") or {}
         tool = span.get("tool_name", "")
         is_observation = entry.get("kind") == "observation"
@@ -604,15 +698,53 @@ def render_filmstrip(manifest: dict) -> str:
             figure_class += " observation"
         label = entry.get("label")
         label_html = f'<div class="label">{esc(label)}</div>' if label else ""
-        cards.append(
+        img = f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+        # A before/after change box (fractions of the frame) overlays the image as
+        # a percent-positioned outline, so it tracks the image at any display size.
+        diff = entry.get("diff")
+        if isinstance(diff, dict):
+            style = (
+                f"left:{_pct(diff.get('x'))};top:{_pct(diff.get('y'))};"
+                f"width:{_pct(diff.get('width'))};height:{_pct(diff.get('height'))}"
+            )
+            shot = f'<div class="shot">{img}<div class="diffbox" style="{style}"></div></div>'
+        else:
+            shot = f'<div class="shot">{img}</div>'
+        return (
             f'<figure class="{figure_class}">'
-            f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+            f"{shot}"
             f'<div class="tool">{esc(tool)} {" ".join(badges)}</div>'
             f"{label_html}"
             f'<div class="at">{esc(entry.get("at", ""))} · {esc(entry.get("target", ""))}</div>'
             "</figure>"
         )
-    strip = "\n".join(cards) if cards else '<p class="empty">No frames recorded.</p>'
+
+    # Lay out cards in timeline order, but group each before/after pair into one
+    # ``.pair`` block so the two halves sit side by side for a visual diff. A
+    # ``before`` reserves the block at its own position; its matching ``after`` is
+    # pulled up into that block (any frames captured between them keep their own
+    # slots). A frame with no pair renders standalone.
+    units: list[str | list[str]] = []  # str = standalone card; list = a pair's cards
+    pair_blocks: dict[str, list[str]] = {}
+    for entry in frames:
+        pair_id = entry.get("pair_id")
+        phase = entry.get("phase")
+        if pair_id and phase == PHASE_BEFORE:
+            block = [card(entry)]
+            pair_blocks[pair_id] = block
+            units.append(block)
+        elif pair_id and phase == PHASE_AFTER and pair_id in pair_blocks:
+            pair_blocks[pair_id].append(card(entry))
+        else:
+            units.append(card(entry))
+
+    parts = []
+    for unit in units:
+        if isinstance(unit, list):
+            parts.append('<div class="pair">\n' + "\n".join(unit) + "\n</div>")
+        else:
+            parts.append(unit)
+    strip = "\n".join(parts) if parts else '<p class="empty">No frames recorded.</p>'
 
     meta_bits = [f"{len(frames)} frame(s)", f"status: {esc(status)}", f"started {esc(started)}"]
     if ended:

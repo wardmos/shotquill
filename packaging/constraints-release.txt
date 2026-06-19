@@ -14,7 +14,7 @@ PySide6==6.11.1
 
 # PyInstaller minor releases routinely change bundle layout and hooks; the
 # hooks-contrib package ships third-party hooks and moves independently.
-pyinstaller==6.20.0
+pyinstaller==6.21.0
 pyinstaller-hooks-contrib==2026.6
 
 # All pyobjc packages release in lockstep; pin the core plus every framework
