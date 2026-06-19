@@ -41,7 +41,9 @@ import html
 import json
 import os
 import shutil
+import tarfile
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -385,6 +387,62 @@ def end_session(session: Session, *, now: dt.datetime | None = None) -> Path:
     session.filmstrip_path.write_text(render_filmstrip(manifest), encoding="utf-8")
     _write_otlp(session, manifest)
     return session.filmstrip_path
+
+
+# --- export -----------------------------------------------------------------
+
+EXPORT_FORMATS = ("tar.gz", "zip")
+
+
+def aggregate_pii(manifest: dict) -> dict[str, int]:
+    """Total best-effort PII flags across a session's frames, ``{kind: count}``.
+
+    Sums the per-frame ``pii`` lists (kind + count only — the values were never
+    stored) so a caller can gate on residual risk before the trace leaves the
+    machine. Empty when no frame was scanned or nothing was flagged. Pure.
+    """
+    totals: dict[str, int] = {}
+    for frame in manifest.get("frames", []):
+        for finding in frame.get("pii") or []:
+            kind = finding.get("kind")
+            if kind:
+                totals[kind] = totals.get(kind, 0) + int(finding.get("count", 0))
+    return totals
+
+
+def export_session(session: Session, out_path: Path | None = None, *, fmt: str = "tar.gz") -> Path:
+    """Bundle a session directory into one shareable archive; return its path.
+
+    Packs the manifest, every frame, and (once the session is closed) the HTML
+    filmstrip and OTLP/JSON — all under a single ``<session-id>/`` top-level
+    folder so it extracts cleanly. ``fmt`` is ``"tar.gz"`` (default) or ``"zip"``.
+    Without ``out_path`` the archive lands next to the session as
+    ``<session-id>.<ext>``. Pure I/O — no Qt, no network.
+    """
+    if fmt not in EXPORT_FORMATS:
+        raise RecordError(f"export format must be one of {EXPORT_FORMATS}, got {fmt!r}")
+    if not session.dir.is_dir():
+        raise SessionNotFound(f"session directory not found: {session.dir}")
+    ext = "zip" if fmt == "zip" else "tar.gz"
+    out_path = (
+        Path(out_path) if out_path is not None else session.dir.parent / f"{session.id}.{ext}"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Explicit, sorted file list (no directories, no symlink surprises): every
+    # entry is rooted under "<id>/" so the archive expands into its own folder.
+    files = sorted(p for p in session.dir.rglob("*") if p.is_file())
+    if fmt == "zip":
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in files:
+                archive.write(path, arcname=f"{session.id}/{path.relative_to(session.dir)}")
+    else:
+        with tarfile.open(out_path, "w:gz") as archive:
+            for path in files:
+                archive.add(
+                    path, arcname=f"{session.id}/{path.relative_to(session.dir)}", recursive=False
+                )
+    return out_path
 
 
 # --- retention --------------------------------------------------------------

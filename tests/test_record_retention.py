@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""D12 — flight-recorder cost control: frame dedup, listing, and retention.
+"""Flight-recorder cost control: frame dedup, listing, retention, and export.
 
 All pure (no Qt): the dedup path in :func:`record.record_frame` and the
 :func:`record.list_sessions` / :func:`record.prune_sessions` helpers operate on
@@ -12,9 +12,15 @@ timestamps. The CLI surface (``record list`` / ``record prune`` / ``record frame
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
+import pathlib
+import tarfile
+import zipfile
 
-from shotquill import cli, record
+import pytest
+
+from shotquill import cli, mcp, record
 
 _PNG_A = b"\x89PNG\r\n\x1a\nframe-a"
 _PNG_B = b"\x89PNG\r\n\x1a\nframe-b"
@@ -178,3 +184,134 @@ def test_cli_prune_requires_a_limit(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(paths, "records_dir", lambda: tmp_path / "records")
     # No --max-age-days / --max-sessions: a usage error, nothing deleted.
     assert cli.main(["record", "prune"]) != 0
+
+
+# --- export: aggregate_pii + export_session (pure) --------------------------
+
+
+def test_aggregate_pii_sums_flags_across_frames(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-agg", now=_at(1))
+    record.record_frame(session, image_bytes=_PNG_A, tool="t", target="x")
+    record.record_frame(
+        session, image_bytes=_PNG_B, tool="t", target="x", pii=[{"kind": "email", "count": 2}]
+    )
+    record.record_frame(
+        session,
+        image_bytes=_PNG_A + b"!",
+        tool="t",
+        target="x",
+        pii=[{"kind": "email", "count": 1}, {"kind": "ssn", "count": 3}],
+    )
+    assert record.aggregate_pii(record.load_manifest(session)) == {"email": 3, "ssn": 3}
+
+
+def test_aggregate_pii_empty_without_flags(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-noagg", now=_at(1))
+    record.record_frame(session, image_bytes=_PNG_A, tool="t", target="x")
+    assert record.aggregate_pii(record.load_manifest(session)) == {}
+
+
+def test_export_session_bundles_everything_under_one_folder(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-exp", now=_at(1))
+    record.record_frame(session, image_bytes=_PNG_A, tool="t", target="x", now=_at(1))
+    record.end_session(session, now=_at(1))
+    archive = record.export_session(session)
+    assert archive == tmp_path / "conv-exp.tar.gz"  # default path beside the session
+    names = sorted(tarfile.open(archive).getnames())
+    assert "conv-exp/manifest.json" in names
+    assert "conv-exp/frames/0001.png" in names
+    assert "conv-exp/index.html" in names  # the filmstrip rode along
+
+
+def test_export_session_zip_and_custom_output_preserve_bytes(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-z", now=_at(1))
+    record.record_frame(session, image_bytes=_PNG_A, tool="t", target="x", now=_at(1))
+    out = tmp_path / "bundle.zip"
+    archive = record.export_session(session, out, fmt="zip")
+    assert archive == out
+    with zipfile.ZipFile(archive) as zf:
+        assert zf.read("conv-z/frames/0001.png") == _PNG_A
+
+
+def test_export_session_rejects_unknown_format(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-bad", now=_at(1))
+    with pytest.raises(record.RecordError, match="format"):
+        record.export_session(session, fmt="rar")
+
+
+# --- export: CLI + MCP surfaces ---------------------------------------------
+
+
+def _isolate(monkeypatch, tmp_path):
+    from shotquill import audit, paths
+
+    monkeypatch.setattr(paths, "records_dir", lambda: tmp_path / "records")
+    monkeypatch.setattr(paths, "audit_log_path", lambda: tmp_path / "audit.log")
+    monkeypatch.setattr(audit, "_to_system_log", lambda line: None)
+    monkeypatch.setattr(audit, "_caller_chain", lambda: ["pytest"])
+    return tmp_path / "records"
+
+
+def _flagged_session(root, sid):
+    session = record.start_session(records_root=root, session_id=sid, now=_at(1))
+    record.record_frame(
+        session, image_bytes=_PNG_A, tool="t", target="x", pii=[{"kind": "email", "count": 1}]
+    )
+    record.end_session(session, now=_at(1))
+    return session
+
+
+def test_cli_record_export_prints_archive_path(tmp_path, monkeypatch, capsys):
+    root = _isolate(monkeypatch, tmp_path)
+    _session(root, "conv-e", when=_at(1))
+    assert cli.main(["record", "export", "conv-e"]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out.endswith("conv-e.tar.gz")
+    assert pathlib.Path(out).is_file()
+
+
+def test_cli_record_export_fail_on_pii_blocks_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    root = _isolate(monkeypatch, tmp_path)
+    _flagged_session(root, "conv-g")
+    rc = cli.main(["record", "export", "conv-g", "--fail-on-pii"])
+    assert rc == 6  # EXIT_BLOCKED
+    assert "likely PII" in capsys.readouterr().err
+    assert not (root / "conv-g.tar.gz").exists()  # refused before writing
+
+
+def test_cli_record_export_fail_on_pii_ok_when_clean(tmp_path, monkeypatch, capsys):
+    root = _isolate(monkeypatch, tmp_path)
+    _session(root, "conv-clean", when=_at(1))  # no PII flags
+    assert cli.main(["record", "export", "conv-clean", "--fail-on-pii"]) == 0
+
+
+def _mcp_export(args):
+    raw = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "record_export", "arguments": args},
+        }
+    )
+    fout = io.StringIO()
+    mcp.serve(stdin=io.StringIO(raw + "\n"), stdout=fout)
+    return json.loads(fout.getvalue())["result"]
+
+
+def test_mcp_record_export_returns_archive_and_pii(tmp_path, monkeypatch):
+    root = _isolate(monkeypatch, tmp_path)
+    _flagged_session(root, "conv-mcp-e")
+    result = _mcp_export({"session": "conv-mcp-e"})
+    assert result["isError"] is False
+    structured = result["structuredContent"]
+    assert structured["archive"].endswith("conv-mcp-e.tar.gz")
+    assert structured["pii"] == {"email": 1}  # residual risk reported
+
+
+def test_mcp_record_export_fail_on_pii_is_blocked(tmp_path, monkeypatch):
+    root = _isolate(monkeypatch, tmp_path)
+    _flagged_session(root, "conv-mcp-g")
+    result = _mcp_export({"session": "conv-mcp-g", "fail_on_pii": True})
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "blocked"
