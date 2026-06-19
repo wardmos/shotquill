@@ -15,10 +15,18 @@ import json
 import pytest
 
 from shotquill import audit, cli, headless, mcp, paths, textassert
+from shotquill.ocr.base import TextBox
 
 # --- pure assertion core ----------------------------------------------------
 
-_LINES = ["Login", "Welcome back, Ada", "Order #41 placed"]
+# Boxes carry the same texts as the lines, each on its own row, so the text-only
+# and box-aware paths assert identically while the boxes locate the match.
+_BOXES = [
+    TextBox("Login", 0, 0, 50, 10),
+    TextBox("Welcome back, Ada", 0, 20, 170, 10),
+    TextBox("Order #41 placed", 0, 40, 160, 10),
+]
+_LINES = [box.text for box in _BOXES]
 
 
 def test_contains_pass_and_fail():
@@ -60,12 +68,52 @@ def test_describe_reports_status():
     assert textassert.describe(no).startswith("FAIL:")
 
 
+# --- pure: locate matches in boxes (evaluate_boxes) -------------------------
+
+
+def test_evaluate_boxes_locates_a_single_line_match():
+    (check,) = textassert.evaluate_boxes(_BOXES, contains=("Welcome back",))
+    assert check.passed is True
+    assert check.boxes == (_BOXES[1],)
+    # describe() appends the union rect when a check carries boxes.
+    assert textassert.describe(check) == "ok: text contains 'Welcome back' at 0,20,170,10"
+
+
+def test_evaluate_boxes_match_spanning_two_lines_unions_their_boxes():
+    (check,) = textassert.evaluate_boxes(_BOXES, contains=("Login\nWelcome back",))
+    assert check.passed is True
+    assert check.boxes == (_BOXES[0], _BOXES[1])
+    # Union covers both rows: y 0..30, widest line 170 wide.
+    assert textassert.union_rect(check.boxes) == (0, 0, 170, 30)
+
+
+def test_evaluate_boxes_failed_check_has_no_boxes():
+    (check,) = textassert.evaluate_boxes(_BOXES, contains=("Logout",))
+    assert check.passed is False
+    assert check.boxes == ()
+    assert textassert.describe(check) == "FAIL: text contains 'Logout'"
+
+
+def test_evaluate_boxes_verdicts_match_text_only_evaluate():
+    kw = {"contains": ("Login", "Logout"), "matches": (r"Order #\d+",)}
+    located = textassert.evaluate_boxes(_BOXES, **kw)
+    text_only = textassert.evaluate(_LINES, **kw)
+    assert [c.passed for c in located] == [c.passed for c in text_only]
+
+
+def test_union_rect_is_none_for_empty():
+    assert textassert.union_rect(()) is None
+
+
 # --- CLI: assertion -> exit code --------------------------------------------
 
 
 class _Recognizer:
     def recognize(self, image):
         return list(_LINES)
+
+    def recognize_boxes(self, image):
+        return list(_BOXES)
 
 
 @pytest.fixture(autouse=True)
@@ -174,3 +222,43 @@ def test_mcp_ocr_invalid_regex_is_invalid_arguments(png):
     result = _mcp_ocr({"path": png, "matches": ["Order #("]})
     assert result["isError"] is True
     assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
+
+
+# --- boxes surface: CLI --boxes and MCP boxes (D11) -------------------------
+
+
+def test_cli_boxes_prints_coordinates_then_text(png, capsys):
+    assert cli.main(["ocr", png, "--boxes"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "0,0,50,10\tLogin",
+        "0,20,170,10\tWelcome back, Ada",
+        "0,40,160,10\tOrder #41 placed",
+    ]
+
+
+def test_cli_boxes_locates_passing_assertion(png, capsys):
+    assert cli.main(["ocr", png, "--boxes", "--contains", "Welcome back"]) == 0
+    assert "ok: text contains 'Welcome back' at 0,20,170,10" in capsys.readouterr().err
+
+
+def test_cli_without_boxes_keeps_plain_text(png, capsys):
+    assert cli.main(["ocr", png]) == 0
+    assert capsys.readouterr().out.splitlines() == _LINES  # no coordinates
+
+
+def test_mcp_boxes_returns_per_line_boxes_and_locates_assertion(png):
+    structured = _mcp_ocr({"path": png, "boxes": True, "contains": ["Login"]})["structuredContent"]
+    assert structured["boxes"][0] == {
+        "text": "Login",
+        "x": 0,
+        "y": 0,
+        "width": 50,
+        "height": 10,
+    }
+    assert structured["assertions"][0]["box"] == {"x": 0, "y": 0, "width": 50, "height": 10}
+
+
+def test_mcp_without_boxes_omits_boxes_and_assertion_box(png):
+    structured = _mcp_ocr({"path": png, "contains": ["Login"]})["structuredContent"]
+    assert "boxes" not in structured
+    assert "box" not in structured["assertions"][0]

@@ -30,8 +30,7 @@ not expose a way to turn it off mid-trace), so a blocked app cannot be filed
 into an archive by an agent that "forgot" to mask it. The honest limit still
 holds: redaction only covers *known* apps, so the manifest's ``redacted`` flag
 means "blocklist protection was in force for this frame", not "this frame is
-free of user content" — agent actions and user pixels are the same pixels. See
-shotquill_docs/feature-agent-flight-recorder.md (D15).
+free of user content" — agent actions and user pixels are the same pixels.
 """
 
 from __future__ import annotations
@@ -65,6 +64,12 @@ STATUS_COMPLETE = "complete"
 KIND_ACTION = "action"
 KIND_OBSERVATION = "observation"
 
+# A frame can optionally be one half of a before/after pair around a single
+# action, so a reviewer can diff "what changed when the agent did X". The two
+# frames share a ``pair_id``; ``phase`` says which side this frame is.
+PHASE_BEFORE = "before"
+PHASE_AFTER = "after"
+
 
 class RecordError(Exception):
     """A flight-recorder operation failed (bad/missing session, corrupt manifest)."""
@@ -89,6 +94,10 @@ class FrameRecord:
     # None when the frame carried no assertion; otherwise whether every OCR
     # check on it held — this is what makes a failed test a frame in the trace.
     assertion_passed: bool | None = None
+    # before/after pairing: ``phase`` is "before"/"after" (or None for a lone
+    # frame); ``pair_id`` links the two halves of one action.
+    phase: str | None = None
+    pair_id: str | None = None
 
     def as_manifest_entry(self, *, tool_call_id: str) -> dict:
         """Serialize with OTel-derived field names (see module docstring)."""
@@ -106,6 +115,10 @@ class FrameRecord:
         }
         if self.assertion_passed is not None:
             entry["assertion_passed"] = self.assertion_passed
+        if self.phase is not None:
+            entry["phase"] = self.phase
+        if self.pair_id is not None:
+            entry["pair_id"] = self.pair_id
         return entry
 
 
@@ -223,6 +236,42 @@ def load_manifest(session: Session) -> dict:
     return _read_manifest(session.manifest_path)
 
 
+def open_before_pair_id(frames: list[dict]) -> str | None:
+    """The ``pair_id`` of the most recent ``before`` frame still awaiting its ``after``.
+
+    A trace is one agent's linear run, so before/after pairs nest like brackets:
+    each ``before`` opens a pair and the next ``after`` closes the most recent
+    open one. Returns ``None`` when nothing is open (an ``after`` with no matching
+    ``before``). Pure — it reads only the manifest's frame list.
+    """
+    open_pairs: list[str] = []
+    for frame in frames:
+        phase = frame.get("phase")
+        if phase == PHASE_BEFORE and frame.get("pair_id"):
+            open_pairs.append(frame["pair_id"])
+        elif phase == PHASE_AFTER and open_pairs:
+            open_pairs.pop()
+    return open_pairs[-1] if open_pairs else None
+
+
+def attach_diffs(session: Session, diffs: dict[int, dict]) -> None:
+    """Store before/after change boxes on frames, keyed by 0-based position (pure).
+
+    ``diffs`` maps a frame's position in the manifest to a ``{x, y, width, height}``
+    box in frame fractions (computed with Qt by the record-end glue, see
+    :func:`shotquill.headless.compute_pair_diffs`) — this module stays image-free.
+    A no-op when ``diffs`` is empty.
+    """
+    if not diffs:
+        return
+    manifest = _read_manifest(session.manifest_path)
+    frames = manifest["frames"]
+    for pos, box in diffs.items():
+        if 0 <= pos < len(frames):
+            frames[pos]["diff"] = dict(box)
+    _write_manifest(session.manifest_path, manifest)
+
+
 def record_frame(
     session: Session,
     *,
@@ -233,6 +282,8 @@ def record_frame(
     redacted: bool = False,
     kind: str = KIND_ACTION,
     assertions: list[dict] | None = None,
+    pii: list[dict] | None = None,
+    phase: str | None = None,
     image_ext: str = "png",
     dedup: bool = False,
     now: dt.datetime | None = None,
@@ -245,9 +296,14 @@ def record_frame(
     passively mirrored capture. ``assertions`` is an optional list of
     already-evaluated OCR checks (each a ``{"kind", "pattern", "passed"}`` dict);
     when given, the frame records whether they all held, so a failed test becomes
-    a frame in the trace. Not safe to call concurrently for one session — a trace
-    is one agent's linear run, and the next index is read from the manifest on
-    each call.
+    a frame in the trace. ``pii`` is an optional list of best-effort PII findings
+    (each a ``{"kind", "count"}`` dict from :mod:`pii`) — kind and count only,
+    never the value — recorded as a residual-risk flag on the frame. ``phase`` is
+    ``"before"`` / ``"after"`` to file this frame as one half of a before/after
+    pair around an action (an ``"after"`` joins the most recent open ``"before"``;
+    a lone ``"after"`` raises). Not safe to call concurrently for one session — a
+    trace is one agent's linear run, and the next index is read from the manifest
+    on each call.
 
     ``dedup`` drops the cost of an unchanged screen: when the new bytes are
     identical to the previous frame's image, the new frame *references* that same
@@ -257,8 +313,19 @@ def record_frame(
     encoded deterministically (the CLI record path does); without that, an
     unchanged screen may still differ byte-wise and simply won't be deduped.
     """
+    if phase not in (None, PHASE_BEFORE, PHASE_AFTER):
+        raise RecordError(f"phase must be {PHASE_BEFORE!r} or {PHASE_AFTER!r}, got {phase!r}")
     manifest = _load_open_manifest(session)
     index = len(manifest["frames"]) + 1
+    # Resolve before/after pairing: a 'before' opens a new pair, an 'after' joins
+    # the most recent still-open one (a lone 'after' is the caller's mistake).
+    pair_id: str | None = None
+    if phase == PHASE_BEFORE:
+        pair_id = f"{session.id}/pair/{index}"
+    elif phase == PHASE_AFTER:
+        pair_id = open_before_pair_id(manifest["frames"])
+        if pair_id is None:
+            raise RecordError("no open '--before' frame to pair this '--after' with")
     digest = hashlib.sha256(image_bytes).hexdigest()
     rel_image = f"{FRAMES_SUBDIR}/{index:04d}.{image_ext}"
     deduped = False
@@ -282,6 +349,8 @@ def record_frame(
         redacted=redacted,
         kind=kind,
         assertion_passed=passed,
+        phase=phase,
+        pair_id=pair_id,
     )
     # A traceable call id without the OTel SDK: a frame is uniquely the Nth tool
     # call of this conversation.
@@ -293,6 +362,8 @@ def record_frame(
         entry["deduped"] = True
     if assertions:
         entry["assertions"] = [dict(check) for check in assertions]
+    if pii:
+        entry["pii"] = [dict(finding) for finding in pii]
     manifest["frames"].append(entry)
     _write_manifest(session.manifest_path, manifest)
     return frame
@@ -486,9 +557,18 @@ def _write_manifest(path: Path, manifest: dict) -> None:
 _FILMSTRIP_CSS = """\
 body { font: 14px system-ui, sans-serif; margin: 2rem; background: #1a1a1a; color: #eee; }
 h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
-.strip { display: flex; flex-wrap: wrap; gap: 1rem; }
+.strip { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+/* A before/after pair sits as one unit: its two frames side by side, set off by
+   a subtle frame so the diff reads as a single step. */
+.pair { display: flex; gap: .5rem; background: #202020; border: 1px solid #383838;
+        border-radius: 10px; padding: .5rem; }
+.pair .frame { width: 220px; }
 .frame { background: #262626; border-radius: 8px; padding: .75rem; width: 280px; }
+.frame .shot { position: relative; line-height: 0; }
 .frame img { width: 100%; border-radius: 4px; display: block; background: #000; }
+/* before/after change box: a percent-positioned outline over the after frame. */
+.diffbox { position: absolute; border: 2px solid #f5a623;
+           box-shadow: 0 0 0 1px rgba(0,0,0,.55); border-radius: 3px; pointer-events: none; }
 .frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
 .frame .label { color: #ccc; } .frame .at { color: #888; font-size: .8rem; }
 .frame.failed { outline: 2px solid #c55; }
@@ -499,8 +579,18 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
 .badge.pass { background: #234a2f; color: #9e9; }
 .badge.fail { background: #5a2533; color: #f9a; }
 .badge.obs { background: #33384a; color: #abd; }
+.badge.phase { background: #4a3f23; color: #ed9; }
 .empty { color: #888; }
 """
+
+
+def _pct(value: object) -> str:
+    """A frame-fraction in ``[0, 1]`` as a clamped CSS percentage (defensive)."""
+    try:
+        fraction = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        fraction = 0.0
+    return f"{max(0.0, min(1.0, fraction)) * 100:.2f}%"
 
 
 def render_filmstrip(manifest: dict) -> str:
@@ -522,14 +612,17 @@ def render_filmstrip(manifest: dict) -> str:
     ended = manifest.get("ended_at")
     frames = manifest.get("frames", [])
 
-    cards: list[str] = []
-    for entry in frames:
+    def card(entry: dict) -> str:
+        """Render one frame as a ``<figure>`` card."""
         span = entry.get("span") or {}
         tool = span.get("tool_name", "")
         is_observation = entry.get("kind") == "observation"
         badges = []
         if is_observation:
             badges.append('<span class="badge obs">observation</span>')
+        phase = entry.get("phase")
+        if phase in (PHASE_BEFORE, PHASE_AFTER):
+            badges.append(f'<span class="badge phase">{esc(phase)}</span>')
         if entry.get("redacted"):
             badges.append('<span class="badge redacted">redacted</span>')
         passed = entry.get("assertion_passed")
@@ -547,15 +640,53 @@ def render_filmstrip(manifest: dict) -> str:
             figure_class += " observation"
         label = entry.get("label")
         label_html = f'<div class="label">{esc(label)}</div>' if label else ""
-        cards.append(
+        img = f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+        # A before/after change box (fractions of the frame) overlays the image as
+        # a percent-positioned outline, so it tracks the image at any display size.
+        diff = entry.get("diff")
+        if isinstance(diff, dict):
+            style = (
+                f"left:{_pct(diff.get('x'))};top:{_pct(diff.get('y'))};"
+                f"width:{_pct(diff.get('width'))};height:{_pct(diff.get('height'))}"
+            )
+            shot = f'<div class="shot">{img}<div class="diffbox" style="{style}"></div></div>'
+        else:
+            shot = f'<div class="shot">{img}</div>'
+        return (
             f'<figure class="{figure_class}">'
-            f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+            f"{shot}"
             f'<div class="tool">{esc(tool)} {" ".join(badges)}</div>'
             f"{label_html}"
             f'<div class="at">{esc(entry.get("at", ""))} · {esc(entry.get("target", ""))}</div>'
             "</figure>"
         )
-    strip = "\n".join(cards) if cards else '<p class="empty">No frames recorded.</p>'
+
+    # Lay out cards in timeline order, but group each before/after pair into one
+    # ``.pair`` block so the two halves sit side by side for a visual diff. A
+    # ``before`` reserves the block at its own position; its matching ``after`` is
+    # pulled up into that block (any frames captured between them keep their own
+    # slots). A frame with no pair renders standalone.
+    units: list[str | list[str]] = []  # str = standalone card; list = a pair's cards
+    pair_blocks: dict[str, list[str]] = {}
+    for entry in frames:
+        pair_id = entry.get("pair_id")
+        phase = entry.get("phase")
+        if pair_id and phase == PHASE_BEFORE:
+            block = [card(entry)]
+            pair_blocks[pair_id] = block
+            units.append(block)
+        elif pair_id and phase == PHASE_AFTER and pair_id in pair_blocks:
+            pair_blocks[pair_id].append(card(entry))
+        else:
+            units.append(card(entry))
+
+    parts = []
+    for unit in units:
+        if isinstance(unit, list):
+            parts.append('<div class="pair">\n' + "\n".join(unit) + "\n</div>")
+        else:
+            parts.append(unit)
+    strip = "\n".join(parts) if parts else '<p class="empty">No frames recorded.</p>'
 
     meta_bits = [f"{len(frames)} frame(s)", f"status: {esc(status)}", f"started {esc(started)}"]
     if ended:

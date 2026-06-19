@@ -230,6 +230,37 @@ def test_capture_stdout_streams_png(fake_capturer, capsysbinary):
     assert out.startswith(PNG_MAGIC)
 
 
+def test_capture_redact_pii_masks_the_matched_box(fake_capturer, monkeypatch, tmp_path):
+    # FakeCapturer returns a 2x2 red frame; a recognized PII box at (0,0,1,1) must
+    # come out masked (black) while the rest stays red.
+    from PySide6.QtGui import QImage
+
+    from shotquill.ocr.base import TextBox
+
+    class _Recognizer:
+        def recognize_boxes(self, image):
+            return [TextBox("ada@example.com", 0, 0, 1, 1)]
+
+    monkeypatch.setattr(headless, "get_recognizer", lambda: _Recognizer())
+    dest = tmp_path / "shot.png"
+    assert cli.main(["capture", "--redact-pii", "-o", str(dest)]) == 0
+    img = QImage(str(dest))
+    assert img.pixelColor(0, 0).getRgb()[:3] == (0, 0, 0)  # PII box → masked
+    assert img.pixelColor(1, 1).getRgb()[:3] == (255, 0, 0)  # rest → intact
+
+
+def test_capture_redact_pii_unsupported_exits_4(fake_capturer, monkeypatch, tmp_path):
+    # OCR is required to find PII; a host without it fails fast (before capturing).
+    def _nope():
+        raise headless.CapabilityUnsupported("ocr", "requires macOS Vision")
+
+    monkeypatch.setattr(headless, "get_recognizer", _nope)
+    assert (
+        cli.main(["capture", "--redact-pii", "-o", str(tmp_path / "x.png")])
+        == headless.EXIT_UNSUPPORTED
+    )
+
+
 def test_capture_stdout_refused_on_tty(fake_capturer, capsys, monkeypatch):
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     assert cli.main(["capture", "-o", "-"]) == 2

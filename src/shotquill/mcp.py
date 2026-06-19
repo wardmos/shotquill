@@ -247,8 +247,7 @@ def _parse_rects(args: dict, key: str) -> list[Rect]:
     """Parse an optional array of ``{x, y, width, height}`` into logical rects.
 
     Coordinates are image-relative (the captured frame's own point space). Used
-    for ``mask`` (blank these — D14) and ``reveal`` (keep only these sharp — D15
-    layer 4).
+    for ``mask`` (blank these) and ``reveal`` (keep only these sharp).
     """
     raw = args.get(key) or []
     if not isinstance(raw, list):
@@ -287,12 +286,19 @@ def _positive_int_or_zero(value, name: str) -> int:
     return value
 
 
-def _capture_image(args: dict, masks: list[Rect] | None = None, reveal: list[Rect] | None = None):
+def _capture_image(
+    args: dict,
+    masks: list[Rect] | None = None,
+    reveal: list[Rect] | None = None,
+    redact_pii_recognizer=None,
+):
     """Capture per the shared target args and return (QImage, target, matched).
 
     ``masks`` are caller rectangles painted out before the raw pixels become a
     QImage; ``reveal`` mosaics the whole frame, keeping only those rectangles
-    sharp — so a hidden region never reaches the model, a file, or a frame."""
+    sharp — so a hidden region never reaches the model, a file, or a frame. When
+    ``redact_pii_recognizer`` is given, likely PII is OCR'd and masked after the
+    caller masks but before the reveal mosaic."""
     region = _validate_target(args)
     capturer = headless.get_capturer()
     result, target, matched = headless.perform_capture(
@@ -305,6 +311,8 @@ def _capture_image(args: dict, masks: list[Rect] | None = None, reveal: list[Rec
         via="mcp",
     )
     result = headless.apply_masks(result, masks or [])
+    if redact_pii_recognizer is not None:
+        result = headless.redact_pii(result, redact_pii_recognizer)
     from shotquill.imaging import pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal or [], result.scale)
@@ -315,8 +323,14 @@ def _tool_capture(args: dict):
     fmt = args.get("format") or "png"
     if fmt not in ("png", "jpg", "jpeg"):
         raise ValueError(f"format must be png or jpg — got {fmt!r}")
+    # Resolve the recognizer up front when redacting PII, so a host without OCR
+    # fails fast before the capture.
+    recognizer = headless.get_recognizer() if args.get("redact_pii") else None
     image, target, matched = _capture_image(
-        args, _parse_rects(args, "mask"), _parse_rects(args, "reveal")
+        args,
+        _parse_rects(args, "mask"),
+        _parse_rects(args, "reveal"),
+        redact_pii_recognizer=recognizer,
     )
 
     max_width = args.get("max_width")
@@ -345,7 +359,7 @@ def _tool_capture(args: dict):
         meta["saved_path"] = dest = str(path.resolve())
 
     # While a session is active, a capture the agent did to *see* the screen also
-    # mirrors into the trace as an observation frame (D3). Default-on; pass
+    # mirrors into the trace as an observation frame. Default-on; pass
     # record=false to skip a one-off. The model still gets the (possibly
     # downscaled) image above; the archived copy goes through the record path.
     if args.get("record") is not False:
@@ -429,9 +443,18 @@ def _tool_ocr(args: dict):
         # Capture-and-recognize in memory: only text reaches the agent, so a
         # "what does the screen say" question costs zero image tokens.
         image, source, _matched = _capture_image(args)
-    lines = recognizer.recognize(image)
+    # `boxes` adds per-line pixel boxes (and locates any assertion); without it
+    # the tool stays text-only, as before.
+    want_boxes = bool(args.get("boxes"))
+    text_boxes = recognizer.recognize_boxes(image) if want_boxes else []
+    lines = [b.text for b in text_boxes] if want_boxes else recognizer.recognize(image)
     audit.record("ocr", via="mcp", target=source)
     structured = {"lines": lines, "source": source}
+    if want_boxes:
+        structured["boxes"] = [
+            {"text": b.text, "x": b.x, "y": b.y, "width": b.width, "height": b.height}
+            for b in text_boxes
+        ]
 
     # Optional assertions: turn "read the screen" into "check the screen". The
     # agent branches on structured `passed`, the way the CLI branches on its
@@ -441,12 +464,25 @@ def _tool_ocr(args: dict):
     if contains or matches:
         from shotquill import textassert
 
-        checks = textassert.evaluate(
-            lines, contains=contains, matches=matches, ignore_case=bool(args.get("ignore_case"))
-        )
-        structured["assertions"] = [
-            {"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks
-        ]
+        ignore_case = bool(args.get("ignore_case"))
+        if want_boxes:
+            checks = textassert.evaluate_boxes(
+                text_boxes, contains=contains, matches=matches, ignore_case=ignore_case
+            )
+        else:
+            checks = textassert.evaluate(
+                lines, contains=contains, matches=matches, ignore_case=ignore_case
+            )
+        assertions = []
+        for c in checks:
+            entry = {"kind": c.kind, "pattern": c.pattern, "passed": c.passed}
+            # Where the match landed, as the same {x,y,w,h} a box reports — present
+            # only when located (--boxes) and the check passed.
+            rect = textassert.union_rect(c.boxes)
+            if rect is not None:
+                entry["box"] = {"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]}
+            assertions.append(entry)
+        structured["assertions"] = assertions
         structured["passed"] = textassert.all_passed(checks)
 
     # OCR'd text is attacker-controllable (it comes off the screen) and an MCP
@@ -471,7 +507,7 @@ def _tool_record_start(args: dict):
         agent_id=args.get("agent_id"),
         label=args.get("label"),
     )
-    # Subsequent captures mirror into this session until record_end (D3).
+    # Subsequent captures mirror into this session until record_end.
     _active_session = session
     audit.record("record_start", via="record", target=session.id, dest=str(session.dir))
     payload = {
@@ -502,7 +538,9 @@ def _tool_record_frame(args: dict):
     contains = tuple(args.get("contains") or ())
     matches = tuple(args.get("matches") or ())
     asserting = bool(contains or matches)
-    recognizer = headless.get_recognizer() if asserting else None
+    scanning = bool(args.get("scan_pii"))
+    redacting = bool(args.get("redact_pii"))
+    recognizer = headless.get_recognizer() if (asserting or scanning or redacting) else None
     masks = _parse_rects(args, "mask")
     reveal = _parse_rects(args, "reveal")
 
@@ -524,6 +562,10 @@ def _tool_record_frame(args: dict):
     # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
     # from the assertion, not just the archived frame.
     result = headless.apply_masks(result, masks)
+    # Mask likely PII before the frame is filed (and before the assert/scan OCR),
+    # so the redacted pixels are what gets archived, asserted, and scanned.
+    if redacting:
+        result = headless.redact_pii(result, recognizer)
     from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
 
     image = pixelate_except(result_to_qimage(result), reveal, result.scale)
@@ -535,17 +577,27 @@ def _tool_record_frame(args: dict):
     # can reference the previous frame instead of writing a duplicate.
     image_bytes = headless.encode_qimage(image, "png", deterministic=True)
 
+    # OCR once and share the lines between the assertion and the PII scan.
+    recognized = recognizer.recognize(image) if recognizer is not None else []
     assertions = None
     if asserting:
         from shotquill import textassert
 
         checks = textassert.evaluate(
-            recognizer.recognize(image),
+            recognized,
             contains=contains,
             matches=matches,
             ignore_case=bool(args.get("ignore_case")),
         )
         assertions = [{"kind": c.kind, "pattern": c.pattern, "passed": c.passed} for c in checks]
+
+    # Best-effort residual-risk flag: kind + count only, never the value. This
+    # only flags; pass redact_pii to also mask the matched pixels (done above).
+    pii_findings = None
+    if scanning:
+        from shotquill import pii
+
+        pii_findings = [{"kind": f.kind, "count": f.count} for f in pii.scan(recognized)]
 
     frame = record.record_frame(
         session,
@@ -555,6 +607,8 @@ def _tool_record_frame(args: dict):
         label=args.get("label"),
         redacted=bool(blocklist),
         assertions=assertions,
+        pii=pii_findings,
+        phase=args.get("phase"),
         dedup=bool(args.get("dedup")),
     )
     dest = str((session.dir / frame.image).resolve())
@@ -570,6 +624,11 @@ def _tool_record_frame(args: dict):
     if assertions is not None:
         payload["assertions"] = assertions
         payload["assertion_passed"] = frame.assertion_passed
+    if pii_findings is not None:
+        payload["pii"] = pii_findings
+    if frame.phase is not None:
+        payload["phase"] = frame.phase
+        payload["pair_id"] = frame.pair_id
     if matched > 1:
         payload["matched_windows"] = matched
         payload["note"] = "captured the front-most match; use window_id for an exact pick"
@@ -581,6 +640,12 @@ def _tool_record_end(args: dict):
     session = _require_session(args)
     if _active_session is not None and _active_session.dir == session.dir:
         _active_session = None  # stop mirroring captures into it
+    # Compute before/after change boxes before the filmstrip renders. Best effort:
+    # a diff hiccup must not block closing a session.
+    try:
+        headless.annotate_pair_diffs(session)
+    except Exception:  # noqa: BLE001 - change boxes are a cosmetic review hint
+        pass
     filmstrip = record.end_session(session)
     manifest = record.load_manifest(session)
     html_path = str(filmstrip.resolve())
@@ -687,6 +752,20 @@ _REVEAL_PROPERTY = {
             },
             "required": ["x", "y", "width", "height"],
         },
+    },
+}
+
+_REDACT_PII_PROPERTY = {
+    "redact_pii": {
+        "type": "boolean",
+        "default": False,
+        "description": (
+            "OCR the frame and mask the pixels of any likely PII (email, credit "
+            "card, SSN, IBAN, IPv4, phone) before the frame is used anywhere. "
+            "Best-effort, not a guarantee — it can only mask what OCR reads and "
+            "the detectors catch. Layered on the blocklist and mask; applied "
+            "before reveal."
+        ),
     },
 }
 
@@ -830,6 +909,7 @@ _TOOLS = {
                     },
                     **_MASK_PROPERTY,
                     **_REVEAL_PROPERTY,
+                    **_REDACT_PII_PROPERTY,
                 },
                 "additionalProperties": False,
             },
@@ -932,6 +1012,15 @@ _TOOLS = {
                         "default": False,
                         "description": "Make contains/matches case-insensitive.",
                     },
+                    "boxes": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Also return each line's pixel bounding box in the image, and "
+                            "locate where any contains/matches landed (for highlighting or "
+                            "masking). Coordinates are image pixels, top-left origin."
+                        ),
+                    },
                     **_TARGET_PROPERTIES,
                 },
                 "additionalProperties": False,
@@ -940,6 +1029,21 @@ _TOOLS = {
                 "type": "object",
                 "properties": {
                     "lines": {"type": "array", "items": {"type": "string"}},
+                    "boxes": {
+                        "type": "array",
+                        "description": "Present when `boxes` was set: one pixel box per line.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "width": {"type": "integer"},
+                                "height": {"type": "integer"},
+                            },
+                            "required": ["text", "x", "y", "width", "height"],
+                        },
+                    },
                     "source": {
                         "type": "string",
                         "description": "The file or capture target the text came from.",
@@ -956,6 +1060,20 @@ _TOOLS = {
                                 "kind": {"type": "string", "enum": ["contains", "matches"]},
                                 "pattern": {"type": "string"},
                                 "passed": {"type": "boolean"},
+                                "box": {
+                                    "type": "object",
+                                    "description": (
+                                        "Where the match landed (pixels); present only with "
+                                        "`boxes` set and the check passed."
+                                    ),
+                                    "properties": {
+                                        "x": {"type": "integer"},
+                                        "y": {"type": "integer"},
+                                        "width": {"type": "integer"},
+                                        "height": {"type": "integer"},
+                                    },
+                                    "required": ["x", "y", "width", "height"],
+                                },
                             },
                             "required": ["kind", "pattern", "passed"],
                         },
@@ -1055,6 +1173,25 @@ _TOOLS = {
                         "default": False,
                         "description": "Make contains/matches case-insensitive.",
                     },
+                    "scan_pii": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "OCR the frame and flag likely PII kinds + counts on it "
+                            "(best-effort, not a guarantee; records kind/count only, "
+                            "never the value)."
+                        ),
+                    },
+                    "phase": {
+                        "type": "string",
+                        "enum": ["before", "after"],
+                        "description": (
+                            "File this frame as one half of a before/after pair around an "
+                            "action: 'before' opens a pair, 'after' joins the most recent "
+                            "open one (a lone 'after' is an error). Lets a reviewer diff "
+                            "what changed when the agent acted."
+                        ),
+                    },
                     "dedup": {
                         "type": "boolean",
                         "default": False,
@@ -1072,6 +1209,7 @@ _TOOLS = {
                     },
                     **_MASK_PROPERTY,
                     **_REVEAL_PROPERTY,
+                    **_REDACT_PII_PROPERTY,
                     **_TARGET_PROPERTIES,
                 },
                 "required": ["session", "tool"],
@@ -1106,6 +1244,30 @@ _TOOLS = {
                             },
                             "required": ["kind", "pattern", "passed"],
                         },
+                    },
+                    "pii": {
+                        "type": "array",
+                        "description": (
+                            "Present when scan_pii was set: best-effort PII flags, "
+                            "kind + count only (not a guarantee, never the value)."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string"},
+                                "count": {"type": "integer"},
+                            },
+                            "required": ["kind", "count"],
+                        },
+                    },
+                    "phase": {
+                        "type": "string",
+                        "enum": ["before", "after"],
+                        "description": "Present when this frame is half of a before/after pair.",
+                    },
+                    "pair_id": {
+                        "type": "string",
+                        "description": "Links the two halves of a before/after pair.",
                     },
                     "matched_windows": {"type": "integer"},
                     "note": {"type": "string"},

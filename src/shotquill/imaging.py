@@ -48,7 +48,7 @@ def downscale_to_max(image: QImage, max_dimension: int) -> QImage:
 
     A flight-recorder archive doesn't need native resolution to be reviewable, so
     capping the long edge trades a little detail for much smaller frames (cost
-    control, D12). Aspect ratio is preserved and the image is only ever scaled
+    control). Aspect ratio is preserved and the image is only ever scaled
     *down* — ``max_dimension <= 0`` or an already-small image is returned
     unchanged, so this is a no-op unless a cap is asked for and exceeded.
     """
@@ -64,10 +64,87 @@ def downscale_to_max(image: QImage, max_dimension: int) -> QImage:
     return image.scaled(max_dimension, max_dimension, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
+# How small the before/after pair is scaled before diffing. The change box is a
+# review hint, not a measurement, so a coarse grid keeps the per-pixel scan cheap
+# (a 128px-longest-edge buffer is at most ~64 KB) while still locating the region.
+DIFF_WORK_SIZE = 128
+
+
+def changed_bbox(
+    before: bytes, after: bytes, width: int, height: int, *, threshold: int = 16
+) -> tuple[int, int, int, int] | None:
+    """Pixel box ``(x0, y0, x1, y1)`` of where two RGBA buffers differ (pure).
+
+    A pixel counts as changed when any RGBA channel differs by more than
+    ``threshold`` — a margin that absorbs the minor resampling noise from scaling
+    the frames down first. Returns ``None`` when either buffer is too small for the
+    given size or nothing changed. Rows are compared whole first, so an unchanged
+    row is skipped without touching its pixels (the common case is a small change).
+    No Qt: callers scale to a small working buffer so this stays cheap.
+    """
+    span = width * height * 4
+    if width <= 0 or height <= 0 or len(before) < span or len(after) < span:
+        return None
+    row_bytes = width * 4
+    x0, y0, x1, y1 = width, height, -1, -1
+    for y in range(height):
+        base = y * row_bytes
+        if before[base : base + row_bytes] == after[base : base + row_bytes]:
+            continue  # identical row — skip the per-pixel scan
+        for x in range(width):
+            i = base + x * 4
+            if (
+                abs(before[i] - after[i]) > threshold
+                or abs(before[i + 1] - after[i + 1]) > threshold
+                or abs(before[i + 2] - after[i + 2]) > threshold
+                or abs(before[i + 3] - after[i + 3]) > threshold
+            ):
+                x0, x1 = min(x0, x), max(x1, x)
+                y0, y1 = min(y0, y), max(y1, y)
+    if x1 < 0:
+        return None
+    return (x0, y0, x1 + 1, y1 + 1)
+
+
+def frame_diff_fraction(
+    before: QImage, after: QImage, *, work_size: int = DIFF_WORK_SIZE, threshold: int = 16
+) -> tuple[float, float, float, float] | None:
+    """Changed region of a before/after pair as fractions ``(x, y, w, h)`` of the frame.
+
+    Scales both frames into a small ``work_size`` box (Qt does the work) and diffs
+    them with :func:`changed_bbox`, then returns the box as fractions in ``[0, 1]``
+    so the filmstrip can overlay it at any display size. Best-effort: returns
+    ``None`` when the two frames scale to different sizes (e.g. different aspect)
+    or nothing changed.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+
+    def small(img: QImage) -> QImage:
+        scaled = img.scaled(work_size, work_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        return scaled.convertToFormat(QImage.Format.Format_RGBA8888)
+
+    b, a = small(before), small(after)
+    if (b.width(), b.height()) != (a.width(), a.height()) or b.width() == 0:
+        return None
+    w, h = b.width(), b.height()
+    box = changed_bbox(
+        bytes(b.constBits())[: w * h * 4],
+        bytes(a.constBits())[: w * h * 4],
+        w,
+        h,
+        threshold=threshold,
+    )
+    if box is None:
+        return None
+    x0, y0, x1, y1 = box
+    return (x0 / w, y0 / h, (x1 - x0) / w, (y1 - y0) / h)
+
+
 def pixelate_except(image: QImage, reveal: list[Rect], scale: float, block: int = BLUR_BLOCK):
     """Mosaic the whole frame, then paint the ``reveal`` rectangles back sharp.
 
-    Privacy layer 4 (D15): blur everything by default and open a clear window only
+    The reveal privacy layer: blur everything by default and open a clear window only
     where the action is, so a recorded frame shows *what the agent did* without
     leaving the rest of the screen legible. ``reveal`` rectangles are logical
     points (the same space as ``--mask`` / window bounds), mapped to pixels via

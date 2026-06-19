@@ -37,7 +37,17 @@ class _FakeProc:
         self.returncode = returncode
 
 
-def test_recognize_parses_lines_and_drops_blanks(monkeypatch):
+_TSV_HEADER = (
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext"
+)
+
+
+def _tsv(*rows: str) -> bytes:
+    """A minimal Tesseract ``tsv`` document: header + the given raw rows."""
+    return ("\n".join([_TSV_HEADER, *rows]) + "\n").encode("utf-8")
+
+
+def test_recognize_parses_lines_and_boxes(monkeypatch):
     monkeypatch.setattr(linux, "tesseract_path", lambda: "/usr/bin/tesseract")
     monkeypatch.setattr(linux, "_installed_languages", lambda binary: {"eng"})
 
@@ -46,15 +56,30 @@ def test_recognize_parses_lines_and_drops_blanks(monkeypatch):
     def fake_run(args, **kwargs):
         captured["args"] = args
         captured["input"] = kwargs.get("input")
-        # Tesseract pads output with blank lines and a trailing form feed.
-        return _FakeProc(stdout=b"hello\n\nworld \n\x0c")
+        # Two words on line 1 join into one box; a second line follows. The "-1"
+        # confidence rows (Tesseract's page/line scaffolding) must be ignored.
+        return _FakeProc(
+            stdout=_tsv(
+                "4\t1\t1\t1\t1\t0\t10\t10\t100\t20\t-1\t",
+                "5\t1\t1\t1\t1\t1\t10\t10\t40\t20\t96\thello",
+                "5\t1\t1\t1\t1\t2\t60\t12\t50\t18\t95\tworld",
+                "5\t1\t1\t1\t2\t1\t10\t50\t30\t16\t90\tbye",
+            )
+        )
 
     monkeypatch.setattr(linux.subprocess, "run", fake_run)
 
-    lines = linux.TesseractTextRecognizer().recognize(_image())
+    boxes = linux.TesseractTextRecognizer().recognize_boxes(_image())
 
-    assert lines == ["hello", "world"]
+    # Line 1 = both words joined; its box is the union (x:10..110, y:10..30).
+    assert [(b.text, b.as_rect()) for b in boxes] == [
+        ("hello world", (10, 10, 100, 20)),
+        ("bye", (10, 50, 30, 16)),
+    ]
+    # recognize() is the text-only view of the same call.
+    assert linux.TesseractTextRecognizer().recognize(_image()) == ["hello world", "bye"]
     assert captured["args"][:3] == ["/usr/bin/tesseract", "stdin", "stdout"]
+    assert captured["args"][-1] == "tsv"  # box output requested
     # Image is piped on stdin as PNG bytes (no temp file).
     assert captured["input"][:8] == b"\x89PNG\r\n\x1a\n"
 

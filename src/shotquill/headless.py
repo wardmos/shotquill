@@ -589,7 +589,7 @@ def _redact_window_overlaps(
 
 def apply_masks(result: CaptureResult, masks: list[Rect]) -> CaptureResult:
     """Paint solid blocks over caller-supplied rectangles before the frame is
-    used anywhere — the dynamic, caller-controlled redaction layer (D14).
+    used anywhere — the dynamic, caller-controlled redaction layer.
 
     Coordinates are **image-relative logical points**: ``(0, 0)`` is the frame's
     own top-left, so a caller masks a rectangle within the screenshot it asked
@@ -604,6 +604,61 @@ def apply_masks(result: CaptureResult, masks: list[Rect]) -> CaptureResult:
 
     masked, _ = redact.redact_bounds(result, (0, 0), masks)
     return masked
+
+
+def redact_pii(result: CaptureResult, recognizer: TextRecognizer) -> CaptureResult:
+    """Mask the pixels of any likely-PII text in ``result`` (best-effort).
+
+    The content-level redaction layer: OCR the frame, find which recognized boxes
+    carry likely PII, and fill those pixel rectangles with the same hardened path
+    the blocklist and caller masks use — so a card number or email is gone from
+    the bytes, not just flagged. Best-effort, **not a guarantee**: it can only
+    mask what OCR reads and the detectors catch. Returns the input unchanged when
+    nothing is flagged.
+    """
+    from shotquill import pii, redact
+    from shotquill.imaging import result_to_qimage
+
+    rects = pii.redaction_rects(recognizer.recognize_boxes(result_to_qimage(result)))
+    return redact.fill_rects(result, rects) if rects else result
+
+
+def compute_pair_diffs(session, *, threshold: int = 16) -> dict[int, dict]:
+    """Diff each before/after pair's filed images; return ``{frame_position: box}``.
+
+    Qt glue for the record-end path: loads the on-disk frame images, computes the
+    changed region of every before/after pair (``imaging.frame_diff_fraction``),
+    and returns each box — fractions of the frame — keyed by the *after* frame's
+    0-based position in the manifest. Best-effort: an unreadable image, a size
+    mismatch, or no change simply omits that pair.
+    """
+    from PySide6.QtGui import QImage
+
+    from shotquill import imaging, record
+
+    frames = record.load_manifest(session).get("frames", [])
+    before_image: dict[str, str] = {}
+    diffs: dict[int, dict] = {}
+    for pos, entry in enumerate(frames):
+        pair_id, phase = entry.get("pair_id"), entry.get("phase")
+        if pair_id and phase == record.PHASE_BEFORE:
+            before_image[pair_id] = entry.get("image", "")
+        elif pair_id and phase == record.PHASE_AFTER and pair_id in before_image:
+            before = QImage(str(session.dir / before_image[pair_id]))
+            after = QImage(str(session.dir / entry.get("image", "")))
+            if before.isNull() or after.isNull():
+                continue
+            frac = imaging.frame_diff_fraction(before, after, threshold=threshold)
+            if frac is not None:
+                diffs[pos] = {"x": frac[0], "y": frac[1], "width": frac[2], "height": frac[3]}
+    return diffs
+
+
+def annotate_pair_diffs(session) -> None:
+    """Compute before/after change boxes and store them on the session's frames."""
+    from shotquill import record
+
+    record.attach_diffs(session, compute_pair_diffs(session))
 
 
 def windows_payload(windows: list[WindowInfo]) -> list[dict]:

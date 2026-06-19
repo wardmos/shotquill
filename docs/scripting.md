@@ -43,10 +43,12 @@ squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
 squill capture --reveal 40,12,180,20 -o shot.png # mosaic all but this rectangle
+squill capture --redact-pii -o shot.png   # OCR and mask likely PII before output
 squill windows --json                     # list windows, front-most first
 squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
 squill ocr --window-id 42 --contains Login # assert text is on screen (exit 20 if not)
+squill ocr --app safari --boxes           # each line as 'x,y,w,h<TAB>text' (pixel box)
 squill doctor                             # capability & permission report
 ```
 
@@ -75,6 +77,15 @@ The parts agents rely on:
   average of its source block (a lone pixel can't survive), so it isn't
   reversible, though the revealed window stays fully readable. Same coordinates,
   same `reveal` arg on the MCP tools; composes with `mask`.
+- **Or let it find the PII for you.** `--redact-pii` OCRs the frame and masks the
+  pixels of any text that looks like PII (email, credit card, SSN, IBAN, IPv4,
+  phone) before output — you don't have to know the coordinates. It reuses the
+  same hardened fill as `--mask`, layers on the blocklist, and applies before
+  `--reveal`; on `record frame` the redacted pixels are what gets archived,
+  asserted, and scanned. The MCP `capture` and `record_frame` tools take the same
+  `redact_pii`. **Best-effort, not a guarantee** — it can only mask what OCR
+  reads and the detectors catch; for a field you already know holds a secret,
+  `--mask` is the certain tool.
 - **OCR reads the screen directly.** `squill ocr --app safari` (or
   `--window-id`, `--region`, or nothing for the full screen) captures and
   recognizes in memory — no file, no pipe. `squill ocr shot.png` and
@@ -88,6 +99,13 @@ The parts agents rely on:
   text still prints on stdout; the per-check result goes to stderr. The MCP
   `ocr` tool takes the same `contains`/`matches` and returns a structured
   `passed`.
+- **OCR can locate text, not just read it.** `--boxes` adds each line's pixel
+  bounding box: stdout becomes `x,y,w,h<TAB>text` (image pixels, top-left
+  origin — the same coordinates `--mask` redacts), and any `--contains` /
+  `--matches` reports *where* it landed on stderr (`ok: text contains 'Login'
+  at 40,12,180,20`). The MCP `ocr` tool takes a `boxes` flag and returns a
+  `boxes` array plus a `box` on each located assertion — for highlighting a
+  match, or masking it.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.
@@ -136,6 +154,8 @@ DIR=$(squill record start --agent builder --label "login flow")  # prints the se
 squill record frame --session "$DIR" --tool click --label "click submit"
 squill record frame --session "$DIR" --tool type  --label "enter email" --app safari
 squill record frame --session "$DIR" --tool assert --contains "Welcome"  # OCR + assert (exit 20 if absent)
+squill record frame --session "$DIR" --tool click --before   # snapshot before an action…
+squill record frame --session "$DIR" --tool click --after    # …and after, paired for a diff
 squill record end --session "$DIR"                                # prints the HTML filmstrip path
 ```
 
@@ -157,6 +177,15 @@ squill record end --session "$DIR"                                # prints the H
   so the egress decision, and the credentials for it, stay yours. The GenAI
   semantic conventions are still experimental; the version the fields track is
   recorded on the trace's resource.
+- **Pair a before and after frame around an action.** `record frame --before`
+  snapshots the screen before a step; after the action, `record frame --after`
+  files the result and links the two (they share a `pair_id`; `phase` says which
+  is which). Pairs nest like brackets — each `--after` closes the most recent open
+  `--before` — and a lone `--after` is an error. The filmstrip renders the two
+  halves **side by side** in one block, and outlines the region that changed
+  between them, so a reviewer can see *what changed* when the agent acted, not
+  just the end state (a frame captured between them keeps its own slot). The MCP
+  `record_frame` tool takes the same as `phase: "before" | "after"`.
 - **Redaction is on by default and cannot be turned off mid-trace**, so a
   blocklisted app cannot be filed into an archive by an agent that "forgot" to
   mask it. The manifest's `redacted` flag means *blocklist protection was in
@@ -176,6 +205,16 @@ squill record end --session "$DIR"                                # prints the H
   OTLP span to error — while still recording the frame, so the failure is
   replayable. This is where the screenshot backend and the flight recorder meet:
   the failing step of a test *is* a frame in the trace.
+- **A frame can flag likely PII, or redact it (best-effort, not a guarantee).**
+  Add `--scan-pii` to `record frame` (or `scan_pii: true` on the MCP tool) and it
+  OCRs the frame and records which kinds of sensitive value likely appear and how
+  many — **kind and count only, never the value** — as a residual-risk flag on
+  the frame (e.g. for an export gate). Add `--redact-pii` (or `redact_pii: true`)
+  to go further and **mask the matched pixels** before the frame is filed, so the
+  redacted frame is what gets archived, asserted, and scanned. Both are
+  best-effort — they can only act on what OCR reads and the detectors catch — so
+  treat a flagged-but-not-redacted frame as "this probably carries a card
+  number", and for a field you already know holds a secret use `--mask`.
 - `--json` on any of the three prints a machine-readable object; every step is
   audit-logged with `via: "record"`.
 
