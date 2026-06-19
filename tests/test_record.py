@@ -269,6 +269,74 @@ def test_filmstrip_renders_phase_badge():
     assert '<span class="badge phase">before</span>' in html
 
 
+def _frame(idx, *, phase=None, pair_id=None, kind="action", tool="click"):
+    entry = {
+        "span": {"tool_name": tool, "tool_call_id": f"conv/frame/{idx}"},
+        "at": "2026-06-13T10:00:00",
+        "label": None,
+        "image": f"frames/{idx:04d}.png",
+        "target": "fullscreen",
+        "redacted": False,
+        "kind": kind,
+    }
+    if phase:
+        entry["phase"] = phase
+    if pair_id:
+        entry["pair_id"] = pair_id
+    return entry
+
+
+def _manifest(frames):
+    return {
+        "shotquill_manifest_version": 1,
+        "conversation_id": "conv-d",
+        "agent": {"name": None, "id": None},
+        "status": "complete",
+        "started_at": "2026-06-13T10:00:00",
+        "ended_at": None,
+        "frames": frames,
+    }
+
+
+def test_filmstrip_groups_before_after_into_one_pair_block():
+    html = record.render_filmstrip(
+        _manifest(
+            [
+                _frame(1, phase="before", pair_id="conv-d/pair/1"),
+                _frame(2, phase="after", pair_id="conv-d/pair/1"),
+            ]
+        )
+    )
+    assert html.count('<div class="pair">') == 1  # the two halves share one block
+    assert html.count("<figure") == 2
+    assert 'badge phase">before' in html and 'badge phase">after' in html
+
+
+def test_filmstrip_pulls_after_next_to_before_past_an_observation():
+    # before → (observation captured between) → after: the after is pulled up
+    # beside its before, so an observation taken in between sorts *after* the pair
+    # block rather than splitting it.
+    html = record.render_filmstrip(
+        _manifest(
+            [
+                _frame(1, phase="before", pair_id="conv-d/pair/1"),
+                _frame(2, kind="observation", tool="capture"),
+                _frame(3, phase="after", pair_id="conv-d/pair/1"),
+            ]
+        )
+    )
+    assert html.count('<div class="pair">') == 1
+    assert html.count("<figure") == 3  # observation still rendered, just standalone
+    before, after, obs = (html.index(f"frames/{i:04d}.png") for i in (1, 3, 2))
+    assert before < after < obs  # before+after grouped first, observation trails
+
+
+def test_filmstrip_unpaired_frames_have_no_pair_block():
+    html = record.render_filmstrip(_manifest([_frame(1)]))
+    assert '<div class="pair">' not in html
+    assert html.count("<figure") == 1
+
+
 # --- CLI round trip ---------------------------------------------------------
 
 

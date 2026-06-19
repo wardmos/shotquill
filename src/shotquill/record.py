@@ -539,7 +539,12 @@ def _write_manifest(path: Path, manifest: dict) -> None:
 _FILMSTRIP_CSS = """\
 body { font: 14px system-ui, sans-serif; margin: 2rem; background: #1a1a1a; color: #eee; }
 h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
-.strip { display: flex; flex-wrap: wrap; gap: 1rem; }
+.strip { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+/* A before/after pair sits as one unit: its two frames side by side, set off by
+   a subtle frame so the diff reads as a single step. */
+.pair { display: flex; gap: .5rem; background: #202020; border: 1px solid #383838;
+        border-radius: 10px; padding: .5rem; }
+.pair .frame { width: 220px; }
 .frame { background: #262626; border-radius: 8px; padding: .75rem; width: 280px; }
 .frame img { width: 100%; border-radius: 4px; display: block; background: #000; }
 .frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
@@ -576,8 +581,8 @@ def render_filmstrip(manifest: dict) -> str:
     ended = manifest.get("ended_at")
     frames = manifest.get("frames", [])
 
-    cards: list[str] = []
-    for entry in frames:
+    def card(entry: dict) -> str:
+        """Render one frame as a ``<figure>`` card."""
         span = entry.get("span") or {}
         tool = span.get("tool_name", "")
         is_observation = entry.get("kind") == "observation"
@@ -604,7 +609,7 @@ def render_filmstrip(manifest: dict) -> str:
             figure_class += " observation"
         label = entry.get("label")
         label_html = f'<div class="label">{esc(label)}</div>' if label else ""
-        cards.append(
+        return (
             f'<figure class="{figure_class}">'
             f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
             f'<div class="tool">{esc(tool)} {" ".join(badges)}</div>'
@@ -612,7 +617,33 @@ def render_filmstrip(manifest: dict) -> str:
             f'<div class="at">{esc(entry.get("at", ""))} · {esc(entry.get("target", ""))}</div>'
             "</figure>"
         )
-    strip = "\n".join(cards) if cards else '<p class="empty">No frames recorded.</p>'
+
+    # Lay out cards in timeline order, but group each before/after pair into one
+    # ``.pair`` block so the two halves sit side by side for a visual diff. A
+    # ``before`` reserves the block at its own position; its matching ``after`` is
+    # pulled up into that block (any frames captured between them keep their own
+    # slots). A frame with no pair renders standalone.
+    units: list[str | list[str]] = []  # str = standalone card; list = a pair's cards
+    pair_blocks: dict[str, list[str]] = {}
+    for entry in frames:
+        pair_id = entry.get("pair_id")
+        phase = entry.get("phase")
+        if pair_id and phase == PHASE_BEFORE:
+            block = [card(entry)]
+            pair_blocks[pair_id] = block
+            units.append(block)
+        elif pair_id and phase == PHASE_AFTER and pair_id in pair_blocks:
+            pair_blocks[pair_id].append(card(entry))
+        else:
+            units.append(card(entry))
+
+    parts = []
+    for unit in units:
+        if isinstance(unit, list):
+            parts.append('<div class="pair">\n' + "\n".join(unit) + "\n</div>")
+        else:
+            parts.append(unit)
+    strip = "\n".join(parts) if parts else '<p class="empty">No frames recorded.</p>'
 
     meta_bits = [f"{len(frames)} frame(s)", f"status: {esc(status)}", f"started {esc(started)}"]
     if ended:

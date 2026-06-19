@@ -181,9 +181,11 @@ squill record end --session "$DIR"                                # prints the H
   snapshots the screen before a step; after the action, `record frame --after`
   files the result and links the two (they share a `pair_id`; `phase` says which
   is which). Pairs nest like brackets — each `--after` closes the most recent open
-  `--before` — and a lone `--after` is an error. A reviewer (or a diff tool) can
-  then see *what changed* when the agent acted, not just the end state. The MCP
-  `record_frame` tool takes the same as `phase: "before" | "after"`.
+  `--before` — and a lone `--after` is an error. The filmstrip renders the two
+  halves **side by side** in one block, so a reviewer can see *what changed* when
+  the agent acted, not just the end state (a frame captured between them keeps its
+  own slot). The MCP `record_frame` tool takes the same as `phase: "before" |
+  "after"`.
 - **Redaction is on by default and cannot be turned off mid-trace**, so a
   blocklisted app cannot be filed into an archive by an agent that "forgot" to
   mask it. The manifest's `redacted` flag means *blocklist protection was in
