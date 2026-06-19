@@ -141,6 +141,39 @@ def frame_diff_fraction(
     return (x0 / w, y0 / h, (x1 - x0) / w, (y1 - y0) / h)
 
 
+def image_diff_box(
+    a: QImage, b: QImage, *, threshold: int = 0
+) -> tuple[bool, tuple[int, int, int, int] | None]:
+    """Compare two images; return ``(changed, box)`` where box is ``(x, y, w, h)``.
+
+    For a golden-image / before-after check at full resolution. ``box`` is the
+    pixel rectangle of the changed region when two **same-size** images differ;
+    ``None`` when they are identical (``changed`` False) *or* when their sizes
+    differ (``changed`` True, but there's no single box to report). ``threshold``
+    is the per-channel delta that counts as a change — ``0`` means exact, the
+    right default for lossless PNG; raise it to absorb anti-aliasing/compression
+    noise.
+    """
+    from PySide6.QtGui import QImage
+
+    if (a.width(), a.height()) != (b.width(), b.height()):
+        return True, None
+    width, height = a.width(), a.height()
+    if width == 0 or height == 0:
+        return False, None
+    span = width * height * 4
+
+    def rgba(image: QImage) -> bytes:
+        converted = image.convertToFormat(QImage.Format.Format_RGBA8888)
+        return bytes(converted.constBits())[:span]
+
+    box = changed_bbox(rgba(a), rgba(b), width, height, threshold=threshold)
+    if box is None:
+        return False, None
+    x0, y0, x1, y1 = box
+    return True, (x0, y0, x1 - x0, y1 - y0)
+
+
 def pixelate_except(image: QImage, reveal: list[Rect], scale: float, block: int = BLUR_BLOCK):
     """Mosaic the whole frame, then paint the ``reveal`` rectangles back sharp.
 

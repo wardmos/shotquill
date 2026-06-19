@@ -16,6 +16,7 @@ from shotquill.imaging import (  # noqa: E402
     changed_bbox,
     downscale_to_max,
     frame_diff_fraction,
+    image_diff_box,
     result_to_qimage,
 )
 
@@ -188,3 +189,39 @@ def test_frame_diff_fraction_none_on_size_mismatch():
     b = QImage(20, 40, QImage.Format.Format_RGBA8888)  # different aspect → diff sizes
     b.fill(QColor(0, 0, 0))
     assert frame_diff_fraction(a, b) is None
+
+
+# --- image_diff_box (full-res golden-image comparison) ------------------------
+
+
+def _img(width, height, color=(0, 0, 0)):
+    image = QImage(width, height, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(*color))
+    return image
+
+
+def test_image_diff_box_identical_is_not_changed():
+    assert image_diff_box(_img(10, 8), _img(10, 8)) == (False, None)
+
+
+def test_image_diff_box_returns_pixel_region_xywh():
+    a = _img(20, 12)
+    b = _img(20, 12)
+    for x in range(5, 9):
+        for y in range(2, 5):
+            b.setPixelColor(x, y, QColor(255, 0, 0))
+    changed, box = image_diff_box(a, b)
+    assert changed is True
+    assert box == (5, 2, 4, 3)  # x, y, w, h
+
+
+def test_image_diff_box_size_mismatch_is_changed_without_a_box():
+    assert image_diff_box(_img(20, 12), _img(10, 10)) == (True, None)
+
+
+def test_image_diff_box_threshold_absorbs_small_deltas():
+    a = _img(4, 4, (10, 10, 10))
+    b = _img(4, 4, (10, 10, 10))
+    b.setPixelColor(0, 0, QColor(20, 10, 10))  # delta 10
+    assert image_diff_box(a, b, threshold=16) == (False, None)
+    assert image_diff_box(a, b, threshold=0)[0] is True
