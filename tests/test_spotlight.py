@@ -197,3 +197,31 @@ def test_viewport_resize_refits_the_shot(qtbot, config, monkeypatch):
     monkeypatch.setattr(surface._canvas, "fitInView", lambda *a, **k: calls.append(True))
     surface.eventFilter(surface._canvas.viewport(), QResizeEvent(QSize(240, 120), QSize(200, 120)))
     assert calls  # the viewport resize re-fit the shot
+
+
+def test_cover_menubar_raises_above_the_menu_bar_on_macos(qtbot, config, monkeypatch):
+    # Bug fix: the surface must cover the system menu bar (like the capture
+    # overlay) so editing isn't obscured and the crop can be dragged to the top.
+    import shotquill.ui.spotlight as sp
+
+    monkeypatch.setattr(sp.sys, "platform", "darwin")
+    surface = _surface(qtbot, config, monkeypatch)
+    calls = []
+    monkeypatch.setattr(sp.macos_window, "raise_above_menubar", lambda w: calls.append(w) or True)
+    surface._cover_menubar()
+    assert calls == [surface]
+
+
+def test_reactivation_re_covers_the_menu_bar(qtbot, config, monkeypatch):
+    # macOS re-shows the menu bar on activation; the surface re-covers it.
+    from PySide6.QtCore import QEvent
+
+    import shotquill.ui.spotlight as sp
+
+    monkeypatch.setattr(sp.sys, "platform", "darwin")
+    surface = _surface(qtbot, config, monkeypatch)
+    calls = []
+    monkeypatch.setattr(sp.macos_window, "raise_above_menubar", lambda w: calls.append(w) or True)
+    monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
+    surface.changeEvent(QEvent(QEvent.ActivationChange))
+    assert calls == [surface]

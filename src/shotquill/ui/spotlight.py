@@ -141,18 +141,32 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self.raise_()
-        self.activateWindow()
-        self.setFocus()
-        if sys.platform == "darwin":
-            # Cover the menu bar / join every Space, like the capture overlay.
-            macos_window.raise_above_menubar(self)
-        # Defensive on macOS: a frameless window's edges can still be OS resize
-        # handles; the surface never resizes for crop, but keep them inert.
-        macos_window.set_resizable(self, False)
+        self._cover_menubar()
         if not self._placed:
             self._placed = True
             self._place_canvas()
+
+    def changeEvent(self, event) -> None:
+        # macOS re-shows the system menu bar whenever this window (re)activates;
+        # push back above it each time so it stays covered (and the crop stays
+        # adjustable all the way up to the screen top). The capture overlay is
+        # transient so it never hits this; the editor is where the user stays.
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._cover_menubar()
+        super().changeEvent(event)
+
+    def _cover_menubar(self) -> None:
+        # Match the capture overlay's proven sequence: set the resizable style
+        # mask FIRST (it must not run after the level change and reset it), then
+        # raise the NSWindow above the menu bar, then take focus — covering the
+        # menu bar so the spotlight (and edge dragging) reaches the screen top.
+        macos_window.set_resizable(self, False)
+        self.raise_()
+        if sys.platform == "darwin":
+            macos_window.raise_above_menubar(self)
+        self.raise_()
+        self.activateWindow()
+        self.setFocus()
 
     def closeEvent(self, event) -> None:
         # Stop a late text focus-out from committing onto the dying undo stack.
