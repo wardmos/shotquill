@@ -22,7 +22,7 @@ crop — its pixels must not shift under placed shapes.
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
@@ -60,6 +60,18 @@ _ARROW_DELTAS = {
     Qt.Key_Up: (0, -1),
     Qt.Key_Down: (0, 1),
 }
+
+
+class CropHost(Protocol):
+    """What :class:`AnnotationCanvas` calls back to enter mouse crop-adjustment.
+
+    The editor implements this; the canvas detects a press on a crop edge (while
+    the crop is still adjustable) and hands off to ``enter_crop_adjust``, which
+    opens the full-screen adjust surface.
+    """
+
+    def crop_adjustable(self) -> bool: ...
+    def enter_crop_adjust(self, edges: tuple[bool, bool, bool, bool]) -> None: ...
 
 
 class RegionContext(NamedTuple):
@@ -203,6 +215,9 @@ class EditorWindow(QMainWindow):
         if self._region is not None:
             self._region_sx = region.screenshot.width() / max(region.geometry.width(), 1)
             self._region_sy = region.screenshot.height() / max(region.geometry.height(), 1)
+        # The full-screen crop-adjust surface, alive only while the user is
+        # dragging the crop's edges (see enter_crop_adjust).
+        self._crop_overlay = None
 
         # Spotlight mode (default, toggleable in Settings): the editor opens
         # frameless — no macOS title bar or traffic lights — over a dim
@@ -222,6 +237,10 @@ class EditorWindow(QMainWindow):
         self._canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setCentralWidget(self._canvas)
+        # Region captures stay adjustable: let the canvas hand off an edge press
+        # to this window, which opens the full-screen adjust surface.
+        if self._region is not None:
+            self._canvas.set_crop_host(self)
         if self._backdrop is not None:
             # Frameless means no title bar to carry the OCR status text; a
             # small badge over the canvas shows it instead (see _set_status).
@@ -392,6 +411,58 @@ class EditorWindow(QMainWindow):
 
     def _can_adjust(self) -> bool:
         return self._region is not None and self._canvas.is_pristine()
+
+    # --- mouse crop-adjustment (CropHost; the canvas hands off an edge press) --
+
+    def crop_adjustable(self) -> bool:
+        return self._can_adjust()
+
+    def enter_crop_adjust(self, edges: tuple[bool, bool, bool, bool]) -> None:
+        """Open the full-screen adjust surface seeded with the current crop.
+
+        The canvas calls this when the user presses a crop edge. The surface
+        re-crops from the frozen full-desktop screenshot and, on apply, hands the
+        new selection back to :meth:`_crop_adjusted`; cancelling leaves the crop
+        unchanged. Doing the drag on one fixed full-screen window — rather than
+        resizing this small window live — keeps the surrounding desktop visible
+        and avoids any window-geometry feedback under the cursor.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        from shotquill.ui.smart_overlay import CropAdjustOverlay, present_overlay
+
+        if self._crop_overlay is not None:  # a session is already up
+            return
+        overlay = CropAdjustOverlay(self._region.screenshot, self._region.geometry, self._origin)
+        overlay.region_selected.connect(self._crop_adjusted)
+        overlay.destroyed.connect(self._crop_adjust_finished)
+        self._crop_overlay = overlay
+        present_overlay(overlay, QApplication.instance())
+        # Continue the still-held press as a resize of the grabbed edge, so the
+        # gesture feels unbroken — but only on the single-window path, where a
+        # mouse grab on the shown overlay actually delivers the rest of the drag.
+        # The multi-screen controller (always used on macOS, and multi-output
+        # Wayland) shows per-screen views, not this brain, so a grab here would
+        # never see the release and would leave a stale drag that then fires on
+        # hover; there the user just grabs a drawn handle. ``_controller`` is set
+        # by present_overlay only on those multi-screen paths.
+        if getattr(overlay, "_controller", None) is None:
+            overlay.begin_resize(edges)
+
+    def _crop_adjusted(self, image: QImage, rect: QRect) -> None:
+        # Re-crop from the original full-desktop screenshot via the same path the
+        # arrow keys use, so a single source of truth places the window once.
+        self._selection = QRectF(rect)
+        self._apply_selection()
+
+    def _crop_adjust_finished(self) -> None:
+        # The surface is gone (applied or cancelled); reclaim activation so the
+        # editor returns to front and its spotlight backdrop, which tracks
+        # activation, comes back (see changeEvent).
+        self._crop_overlay = None
+        if self.isVisible():
+            self.raise_()
+            self.activateWindow()
 
     def _adjust_crop(self, event) -> None:
         dx, dy = _ARROW_DELTAS[event.key()]

@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, QPointF, QRect, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
 
 from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
@@ -704,3 +704,153 @@ def test_present_goes_fullscreen_on_wayland(qtbot, monkeypatch):
     monkeypatch.setattr(overlay, "showFullScreen", lambda: calls.append("fullscreen"))
     overlay.present()
     assert calls == ["fullscreen"]
+
+
+# --- CropAdjustOverlay: drag edges/corners to fine-tune an existing crop -----
+
+from shotquill.ui.smart_overlay import CropAdjustOverlay  # noqa: E402
+
+
+def _adjust(qtbot, geometry=None, selection=None, shot=None):
+    # sx = sy = 1 by default (native == logical) so emitted dims equal the
+    # selection's logical size and assertions stay simple.
+    geometry = geometry if geometry is not None else QRect(0, 0, 400, 300)
+    selection = selection if selection is not None else QRect(100, 80, 200, 120)
+    image = shot if shot is not None else _screenshot(geometry.width(), geometry.height())
+    overlay = CropAdjustOverlay(image, geometry, selection)
+    overlay.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(overlay)
+    return overlay
+
+
+def test_adjust_drag_right_edge_grows_width(qtbot):
+    overlay = _adjust(qtbot)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append((image, rect)))
+
+    _press(overlay, 300, 140)  # right-edge midpoint
+    _move(overlay, 340, 140, buttons=Qt.LeftButton)
+    _release(overlay, 340, 140)
+    assert overlay._sel == QRectF(100, 80, 240, 120)
+
+    _key(overlay, Qt.Key_Return)  # apply
+    assert len(received) == 1
+    image, rect = received[0]
+    assert rect == QRect(100, 80, 240, 120)
+    assert (image.width(), image.height()) == (240, 120)
+
+
+def test_adjust_drag_left_edge_reveals_more_of_the_shot(qtbot):
+    shot = _screenshot(400, 300)
+    shot.setPixelColor(60, 80, QColor("red"))  # pixel exposed only once the left edge moves
+    overlay = _adjust(qtbot, shot=shot)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append((image, rect)))
+
+    _press(overlay, 100, 140)  # left-edge midpoint
+    _move(overlay, 60, 140, buttons=Qt.LeftButton)
+    _release(overlay, 60, 140)
+    assert overlay._sel == QRectF(60, 80, 240, 120)
+
+    _key(overlay, Qt.Key_Return)
+    image, rect = received[0]
+    assert rect == QRect(60, 80, 240, 120)
+    assert image.pixelColor(0, 0) == QColor("red")  # crop now starts at (60,80)
+
+
+def test_adjust_drag_corner_moves_both_axes(qtbot):
+    overlay = _adjust(qtbot)
+    _press(overlay, 100, 80)  # top-left corner
+    _move(overlay, 90, 70, buttons=Qt.LeftButton)
+    _release(overlay, 90, 70)
+    assert overlay._sel == QRectF(90, 70, 210, 130)
+
+
+def test_adjust_drag_inside_moves_the_whole_selection(qtbot):
+    overlay = _adjust(qtbot)
+    _press(overlay, 200, 140)  # interior, clear of any edge band
+    _move(overlay, 210, 150, buttons=Qt.LeftButton)
+    _release(overlay, 210, 150)
+    assert overlay._sel == QRectF(110, 90, 200, 120)
+
+
+def test_adjust_clamps_resize_to_the_desktop_bounds(qtbot):
+    overlay = _adjust(qtbot)
+    _press(overlay, 300, 140)
+    _move(overlay, 9999, 140, buttons=Qt.LeftButton)  # drag the right edge off-screen
+    _release(overlay, 9999, 140)
+    assert overlay._sel == QRectF(100, 80, 300, 120)  # right edge pinned at desktop width 400
+
+
+def test_adjust_plain_click_inside_applies(qtbot):
+    overlay = _adjust(qtbot)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _press(overlay, 200, 140)
+    _release(overlay, 200, 140)  # no drag -> apply the unchanged selection
+    assert received == [QRect(100, 80, 200, 120)]
+
+
+def test_adjust_escape_cancels(qtbot):
+    overlay = _adjust(qtbot)
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    _key(overlay, Qt.Key_Escape)
+    assert cancelled == [True]
+
+
+def test_adjust_right_click_cancels(qtbot):
+    overlay = _adjust(qtbot)
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    _press(overlay, 200, 140, button=Qt.RightButton)
+    assert cancelled == [True]
+
+
+def test_adjust_press_outside_redraws_a_fresh_selection(qtbot):
+    overlay = _adjust(qtbot)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _press(overlay, 10, 10)  # outside the current box
+    _move(overlay, 50, 40, buttons=Qt.LeftButton)
+    _release(overlay, 50, 40)
+    assert overlay._sel == QRectF(10, 10, 40, 30)
+    _key(overlay, Qt.Key_Return)
+    assert received == [QRect(10, 10, 40, 30)]
+
+
+def test_adjust_seeds_and_emits_in_global_coordinates(qtbot):
+    # A virtual desktop whose origin is not (0, 0): the selection is passed in
+    # global points and must round-trip back to global on apply.
+    overlay = _adjust(
+        qtbot, geometry=QRect(100, 200, 400, 300), selection=QRect(120, 220, 200, 120)
+    )
+    assert overlay._sel == QRectF(20, 20, 200, 120)  # seeded in overlay-local points
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+    _press(overlay, 120, 80)  # interior in local coords
+    _release(overlay, 120, 80)
+    assert received == [QRect(120, 220, 200, 120)]
+
+
+def test_adjust_keyboard_nudges_the_whole_selection(qtbot):
+    overlay = _adjust(qtbot)
+    _key(overlay, Qt.Key_Right)
+    assert overlay._sel == QRectF(101, 80, 200, 120)
+    _key(overlay, Qt.Key_Down, modifiers=Qt.ShiftModifier)
+    assert overlay._sel == QRectF(101, 90, 200, 120)
+
+
+def test_adjust_paint_smoke(qtbot):
+    # Exercise the full paint path (lit selection + handles + hint + loupe) so a
+    # drawing bug surfaces headlessly; the handlers alone never trigger a repaint.
+    from PySide6.QtGui import QPainter
+
+    overlay = _adjust(qtbot)
+    overlay._cursor = QPointF(150, 130)  # so guides/crosshair/loupe also draw
+    canvas = QPixmap(400, 300)
+    painter = QPainter(canvas)
+    overlay._paint_all(painter)
+    painter.end()

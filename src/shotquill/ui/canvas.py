@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from shotquill.ui.geometry import crop_edge_hits
 from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
 from shotquill.ui.tools import Tool
@@ -43,11 +44,17 @@ from shotquill.ui.tools import Tool
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from shotquill.ui.editor import CropHost
+
 _DEFAULT_COLOR = "#ff3b30"
 _NEGLIGIBLE = 3.0
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
+# How near a viewport edge (logical points) a hover/press counts as grabbing
+# that edge of the crop, to enter mouse crop-adjustment (region captures, while
+# the canvas is still pristine).
+_CROP_EDGE_MARGIN = 10.0
 # Pixelating the whole selection on every mouse move is expensive on big
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
@@ -121,6 +128,10 @@ class AnnotationCanvas(QGraphicsView):
         # again under a half-finished annotation. See ``is_pristine``.
         self._text_started = False
         self._closing = False  # set on teardown; stops late focus-out commits
+        # Crop edge-adjust (region captures only): the editor registers itself
+        # as the host; a press on a viewport edge hands off to it (see the mouse
+        # handlers and set_crop_host).
+        self._crop_host: CropHost | None = None
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -131,6 +142,15 @@ class AnnotationCanvas(QGraphicsView):
     def background_image(self) -> QImage:
         """The original (un-annotated) screenshot, for OCR."""
         return self._background_pixmap.toImage()
+
+    def set_crop_host(self, host: CropHost) -> None:
+        """Let the editor drive mouse crop-adjustment from canvas edge gestures.
+
+        While the host reports the crop is still adjustable, hovering a viewport
+        edge shows a resize cursor and pressing it hands off to the host, which
+        opens the full-screen adjust surface (see the mouse handlers).
+        """
+        self._crop_host = host
 
     def set_background(self, background: QPixmap) -> None:
         """Swap the screenshot under the (empty) scene — crop adjustment.
@@ -157,6 +177,9 @@ class AnnotationCanvas(QGraphicsView):
     def set_tool(self, tool: Tool) -> None:
         self._tool = tool
         self._apply_drag_mode()
+        # Drop any crop-resize cursor left over from hovering an edge; the next
+        # hover re-applies it if the (still-SELECT, still-pristine) crop allows.
+        self.viewport().unsetCursor()
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
@@ -182,6 +205,42 @@ class AnnotationCanvas(QGraphicsView):
             self.setDragMode(QGraphicsView.RubberBandDrag)
         else:
             self.setDragMode(QGraphicsView.NoDrag)
+
+    def _crop_edges_at(self, pos) -> tuple[bool, bool, bool, bool]:
+        """Which crop edges the pointer (viewport coords) grabs, or all-False.
+
+        Only the SELECT tool adjusts the crop (the drawing tools own the drag),
+        and only while the host reports the crop is still adjustable.
+        """
+        if self._crop_host is None or self._tool != Tool.SELECT:
+            return (False, False, False, False)
+        if not self._crop_host.crop_adjustable():
+            return (False, False, False, False)
+        viewport = self.viewport()
+        return crop_edge_hits(
+            pos.x(), pos.y(), viewport.width(), viewport.height(), _CROP_EDGE_MARGIN
+        )
+
+    @staticmethod
+    def _crop_cursor(edges: tuple[bool, bool, bool, bool]):
+        """The resize cursor for the grabbed ``edges``, or None when none are."""
+        left, top, right, bottom = edges
+        if (left and top) or (right and bottom):
+            return Qt.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return Qt.SizeBDiagCursor
+        if left or right:
+            return Qt.SizeHorCursor
+        if top or bottom:
+            return Qt.SizeVerCursor
+        return None
+
+    def _update_crop_cursor(self, pos) -> None:
+        cursor = self._crop_cursor(self._crop_edges_at(pos))
+        if cursor is None:
+            self.viewport().unsetCursor()
+        else:
+            self.viewport().setCursor(cursor)
 
     def _next_z(self) -> float:
         self._z += 1.0
@@ -209,6 +268,14 @@ class AnnotationCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        # A press on a crop edge (region capture, still pristine) opens the
+        # full-screen adjust surface instead of starting a rubber-band select.
+        if event.button() == Qt.LeftButton:
+            edges = self._crop_edges_at(event.position())
+            if any(edges):
+                self._crop_host.enter_crop_adjust(edges)
+                return
+
         if event.button() != Qt.LeftButton or self._tool == Tool.SELECT:
             super().mousePressEvent(event)
             return
@@ -254,6 +321,11 @@ class AnnotationCanvas(QGraphicsView):
 
     def mouseMoveEvent(self, event) -> None:
         if self._temp_item is None:
+            # Idle hover: show a resize cursor over a crop edge so the adjust
+            # gesture is discoverable. True hover only — a held button is a
+            # rubber-band select and must not flip the cursor.
+            if not event.buttons():
+                self._update_crop_cursor(event.position())
             super().mouseMoveEvent(event)
             return
 
