@@ -49,6 +49,7 @@ squill displays                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
 squill ocr --window-id 42 --contains Login # assert text is on screen (exit 20 if not)
 squill ocr --app safari --boxes           # each line as 'x,y,w,h<TAB>text' (pixel box)
+squill diff base.png new.png              # where two images differ (exit 20 if they do)
 squill doctor                             # capability & permission report
 ```
 
@@ -106,6 +107,13 @@ The parts agents rely on:
   at 40,12,180,20`). The MCP `ocr` tool takes a `boxes` flag and returns a
   `boxes` array plus a `box` on each located assertion — for highlighting a
   match, or masking it.
+- **Compare two images to spot a regression.** `squill diff base.png new.png`
+  exits `0` when they're identical and `20` when they differ — so a golden-image
+  CI step branches on the exit code the same way it does on an OCR assertion — and
+  prints *where* they differ as a pixel box (`changed: x,y,w,h`), or notes a size
+  mismatch. `--threshold N` absorbs anti-aliasing/compression noise (default `0` =
+  exact, right for lossless PNG); `--json` gives the structured verdict. Either
+  argument may be `-` to read one image from stdin.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.

@@ -224,6 +224,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ocr.set_defaults(func=_cmd_ocr)
 
+    diff = sub.add_parser(
+        "diff",
+        help="compare two images and report where they differ (for golden-image checks)",
+        epilog=_EXIT_CODE_EPILOG,
+    )
+    diff.add_argument("a", help="first image file (or '-' for image bytes on stdin)")
+    diff.add_argument("b", help="second image file (or '-' for image bytes on stdin)")
+    diff.add_argument(
+        "--threshold",
+        type=int,
+        default=0,
+        metavar="N",
+        help="per-channel delta that counts as a change (0 = exact; raise to absorb "
+        "anti-aliasing/compression noise)",
+    )
+    diff.add_argument(
+        "--json",
+        action="store_true",
+        help="print a JSON object (changed, box, sizes) instead of a human line",
+    )
+    diff.set_defaults(func=_cmd_diff)
+
     doctor = sub.add_parser(
         "doctor",
         help="report platform capabilities and permissions",
@@ -1186,6 +1208,65 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
     for check in checks:
         print(textassert.describe(check), file=sys.stderr)
     return 0 if textassert.all_passed(checks) else _EXIT_ASSERTION_FAILED
+
+
+def _cmd_diff(args: argparse.Namespace) -> int:
+    from PySide6.QtGui import QImage
+
+    from shotquill import imaging
+
+    if args.a == "-" and args.b == "-":
+        return _usage_error("only one of A/B can be stdin ('-')")
+    if args.threshold < 0:
+        return _usage_error("--threshold must be >= 0")
+
+    def load(arg: str):
+        if arg == "-":
+            data = headless.read_image_bytes(sys.stdin.buffer, label="stdin")
+        else:
+            path = Path(arg).expanduser()
+            try:
+                with path.open("rb") as fh:
+                    data = headless.read_image_bytes(fh, label=str(path))
+            except OSError as exc:
+                print(f"squill: cannot read {arg}: {exc}", file=sys.stderr)
+                return None
+        image = QImage.fromData(data)
+        if image.isNull():
+            label = "stdin" if arg == "-" else str(Path(arg).expanduser())
+            print(f"squill: {label} is not a decodable image", file=sys.stderr)
+            return None
+        return image
+
+    a_img = load(args.a)
+    if a_img is None:
+        return 1
+    b_img = load(args.b)
+    if b_img is None:
+        return 1
+
+    changed, box = imaging.image_diff_box(a_img, b_img, threshold=args.threshold)
+    a_size = (a_img.width(), a_img.height())
+    b_size = (b_img.width(), b_img.height())
+    if args.json:
+        payload: dict = {
+            "changed": changed,
+            "a_size": {"width": a_size[0], "height": a_size[1]},
+            "b_size": {"width": b_size[0], "height": b_size[1]},
+        }
+        if box is not None:
+            payload["box"] = {"x": box[0], "y": box[1], "width": box[2], "height": box[3]}
+        elif changed:
+            payload["reason"] = "size differs"
+        print(json.dumps(payload, ensure_ascii=False))
+    elif not changed:
+        print("identical")
+    elif box is None:
+        print(f"differ: size {a_size[0]}x{a_size[1]} vs {b_size[0]}x{b_size[1]}")
+    else:
+        print("changed: {},{},{},{}".format(*box))
+    # 0 = identical, 20 = differ (the predicate-result band, like an assertion).
+    return 0 if not changed else _EXIT_ASSERTION_FAILED
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
