@@ -337,6 +337,100 @@ def test_filmstrip_unpaired_frames_have_no_pair_block():
     assert html.count("<figure") == 1
 
 
+def test_filmstrip_overlays_a_diff_box_when_present():
+    after = _frame(2, phase="after", pair_id="conv-d/pair/1")
+    after["diff"] = {"x": 0.5, "y": 0.25, "width": 0.4, "height": 0.3}
+    html = record.render_filmstrip(
+        _manifest([_frame(1, phase="before", pair_id="conv-d/pair/1"), after])
+    )
+    assert 'class="diffbox"' in html
+    assert "left:50.00%" in html and "top:25.00%" in html
+    assert "width:40.00%" in html and "height:30.00%" in html
+
+
+def test_filmstrip_clamps_out_of_range_diff_fractions():
+    after = _frame(2, phase="after", pair_id="p")
+    after["diff"] = {"x": -1, "y": 2, "width": "junk", "height": 0.5}
+    html = record.render_filmstrip(_manifest([_frame(1, phase="before", pair_id="p"), after]))
+    assert "left:0.00%" in html and "top:100.00%" in html  # clamped to [0,1]
+    assert "width:0.00%" in html  # non-numeric → 0
+
+
+# --- before/after change boxes (attach_diffs pure; annotate uses Qt) ----------
+
+
+def test_attach_diffs_sets_diff_by_position(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-ad", now=_FIXED)
+    record.record_frame(session, image_bytes=_FAKE_PNG, tool="t", target="x")
+    record.record_frame(session, image_bytes=b"second", tool="t", target="x")
+    record.attach_diffs(session, {1: {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}})
+    frames = record.load_manifest(session)["frames"]
+    assert "diff" not in frames[0]
+    assert frames[1]["diff"] == {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}
+
+
+def test_attach_diffs_empty_is_a_noop(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-ad2", now=_FIXED)
+    record.record_frame(session, image_bytes=_FAKE_PNG, tool="t", target="x")
+    record.attach_diffs(session, {})
+    assert "diff" not in record.load_manifest(session)["frames"][0]
+
+
+def _png_bytes(image) -> bytes:
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    buf.close()
+    return bytes(ba)
+
+
+def test_annotate_pair_diffs_records_the_change_box(tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtGui import QColor, QImage
+
+    session = record.start_session(records_root=tmp_path, session_id="conv-anno", now=_FIXED)
+    before = QImage(40, 20, QImage.Format.Format_RGBA8888)
+    before.fill(QColor(0, 0, 0))
+    after = QImage(40, 20, QImage.Format.Format_RGBA8888)
+    after.fill(QColor(0, 0, 0))
+    for x in range(20, 40):  # change the bottom-right quadrant
+        for y in range(10, 20):
+            after.setPixelColor(x, y, QColor(255, 255, 255))
+
+    record.record_frame(
+        session, image_bytes=_png_bytes(before), tool="click", target="x", phase="before"
+    )
+    record.record_frame(
+        session, image_bytes=_png_bytes(after), tool="click", target="x", phase="after"
+    )
+    headless.annotate_pair_diffs(session)
+
+    frames = record.load_manifest(session)["frames"]
+    assert "diff" not in frames[0]  # the before frame carries no box
+    box = frames[1]["diff"]
+    assert box["x"] > 0.4 and box["y"] > 0.4  # change is in the bottom-right
+
+
+def test_annotate_pair_diffs_no_box_when_frames_identical(tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtGui import QColor, QImage
+
+    session = record.start_session(records_root=tmp_path, session_id="conv-anno2", now=_FIXED)
+    img = QImage(20, 20, QImage.Format.Format_RGBA8888)
+    img.fill(QColor(10, 10, 10))
+    record.record_frame(
+        session, image_bytes=_png_bytes(img), tool="click", target="x", phase="before"
+    )
+    record.record_frame(
+        session, image_bytes=_png_bytes(img), tool="click", target="x", phase="after"
+    )
+    headless.annotate_pair_diffs(session)
+    assert "diff" not in record.load_manifest(session)["frames"][1]
+
+
 # --- CLI round trip ---------------------------------------------------------
 
 
