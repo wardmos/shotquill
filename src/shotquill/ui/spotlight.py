@@ -26,7 +26,16 @@ import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence, QPainter, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QGuiApplication,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QShortcut,
+)
 from PySide6.QtWidgets import QFrame, QLabel, QWidget
 
 from shotquill.ocr import get_recognizer
@@ -218,9 +227,11 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
             painter.drawPixmap(self.rect(), self._screen_pixmap)
         painter.fillRect(self.rect(), _BACKDROP_DIM)
         if self._drag is not None and self._live_sel is not None:
-            # Canvas is hidden mid-drag; paint the live lit selection ourselves.
+            # Canvas is hidden mid-drag; paint the live lit selection ourselves,
+            # plus the running size readout.
             self._paint_lit_slice(painter, self._live_sel)
             self._paint_handles(painter, self._live_sel)
+            self._paint_size_label(painter, self._live_sel)
         elif self.crop_adjustable():
             self._paint_handles(painter, self._sel_local())
 
@@ -237,21 +248,52 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         painter.drawPixmap(sel, self._screen_pixmap, source)
 
     def _paint_handles(self, painter: QPainter, sel: QRectF) -> None:
-        painter.setPen(_ACCENT)
+        # Outline + the eight grab handles, both drawn just OUTSIDE the lit
+        # selection so the canvas child (which fills the selection exactly) can't
+        # cover them — the handles read fully, even at rest.
+        painter.setPen(QPen(_ACCENT, 2))
         painter.setBrush(Qt.NoBrush)
-        painter.drawRect(sel)
+        painter.drawRect(sel.adjusted(-1, -1, 1, 1))
+        painter.setPen(QPen(_ACCENT, 1))
         painter.setBrush(QColor("white"))
-        for hx, hy in self._handle_centers(sel):
-            painter.drawRect(
-                QRectF(hx - _HANDLE_SIZE / 2, hy - _HANDLE_SIZE / 2, _HANDLE_SIZE, _HANDLE_SIZE)
-            )
+        for rect in self._handle_rects(sel):
+            painter.drawRect(rect)
 
     @staticmethod
-    def _handle_centers(sel: QRectF) -> list[tuple[float, float]]:
+    def _handle_rects(sel: QRectF) -> list[QRectF]:
+        """The eight grab-handle squares, each sitting just outside the matching
+        edge/corner of ``sel`` (so the canvas child can't hide it)."""
         cx, cy = sel.center().x(), sel.center().y()
-        xs = (sel.left(), cx, sel.right())
-        ys = (sel.top(), cy, sel.bottom())
-        return [(x, y) for y in ys for x in xs if not (x == cx and y == cy)]
+        half = _HANDLE_SIZE / 2
+        rects = []
+        for ax in (sel.left(), cx, sel.right()):
+            for ay in (sel.top(), cy, sel.bottom()):
+                if ax == cx and ay == cy:
+                    continue
+                dx = -1 if ax < cx else (1 if ax > cx else 0)
+                dy = -1 if ay < cy else (1 if ay > cy else 0)
+                hx, hy = ax + dx * half, ay + dy * half
+                rects.append(QRectF(hx - half, hy - half, _HANDLE_SIZE, _HANDLE_SIZE))
+        return rects
+
+    def _size_text(self, sel: QRectF) -> str:
+        """The selection size in native screenshot pixels, e.g. ``240 × 120``."""
+        w = int(round(sel.width() * self._region_sx))
+        h = int(round(sel.height() * self._region_sy))
+        return f"{w} × {h}"
+
+    def _paint_size_label(self, painter: QPainter, sel: QRectF) -> None:
+        if self._region is None:
+            return
+        label = self._size_text(sel)
+        font = QFont(self.font())
+        font.setPointSize(12)
+        painter.setFont(font)
+        width = painter.fontMetrics().horizontalAdvance(label) + 12
+        box = QRect(int(sel.x()), max(int(sel.y()) - 24, 2), width, 20)
+        painter.fillRect(box, QColor(0, 0, 0, 160))
+        painter.setPen(Qt.white)
+        painter.drawText(box, Qt.AlignCenter, label)
 
     # --- mouse: handle drags (eventFilter on the canvas + bare-area presses) ---
 

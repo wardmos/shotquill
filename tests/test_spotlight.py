@@ -225,3 +225,19 @@ def test_reactivation_re_covers_the_menu_bar(qtbot, config, monkeypatch):
     monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
     surface.changeEvent(QEvent(QEvent.ActivationChange))
     assert calls == [surface]
+
+
+def test_handles_sit_outside_the_selection(qtbot, config, monkeypatch):
+    # The eight handles must sit just outside the selection so the canvas child
+    # (which fills the selection exactly) can't cover them — fully visible.
+    surface = _surface(qtbot, config, monkeypatch)
+    sel = QRectF(100, 80, 200, 120)
+    rects = surface._handle_rects(sel)
+    assert len(rects) == 8
+    for r in rects:
+        assert not sel.contains(r.center())  # every handle centre is outside
+
+
+def test_size_text_is_native_pixels(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch)  # region geometry == screen, sx = sy = 1
+    assert surface._size_text(QRectF(0, 0, 240, 120)) == "240 × 120"
