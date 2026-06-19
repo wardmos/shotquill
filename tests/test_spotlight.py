@@ -175,3 +175,25 @@ def test_paint_smoke_adjustable_and_dragging(qtbot, config, monkeypatch):
     surface._live_sel = QRectF(100, 80, 250, 120)
     surface.render(canvas)
     painter.end()
+
+
+def test_hover_over_an_edge_shows_a_resize_cursor(qtbot, config, monkeypatch):
+    # Bug fix: hovering a crop edge must show a resize cursor (and the view must
+    # not reset it back to the default on the same hover move).
+    surface = _surface(qtbot, config, monkeypatch)
+    assert surface._update_hover_cursor(QPointF(300, 140)) is True  # right-edge midpoint
+    assert surface._canvas.viewport().cursor().shape() == Qt.SizeHorCursor
+    assert surface._update_hover_cursor(QPointF(200, 140)) is False  # interior → no resize cursor
+
+
+def test_viewport_resize_refits_the_shot(qtbot, config, monkeypatch):
+    # Bug fix: re-fit after the viewport actually resizes, not straight after
+    # setGeometry (which can fit against the stale size and leave grey margins).
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QResizeEvent
+
+    surface = _surface(qtbot, config, monkeypatch)
+    calls = []
+    monkeypatch.setattr(surface._canvas, "fitInView", lambda *a, **k: calls.append(True))
+    surface.eventFilter(surface._canvas.viewport(), QResizeEvent(QSize(240, 120), QSize(200, 120)))
+    assert calls  # the viewport resize re-fit the shot

@@ -104,7 +104,10 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         close_shortcut.activated.connect(self.close)
 
-        # Intercept crop-edge presses on the canvas before it annotates them.
+        # Intercept crop-edge presses on the canvas before it annotates them,
+        # and track no-button hover so the resize cursor can show over an edge
+        # (the viewport needs its own tracking flag, not just the view's).
+        self._canvas.viewport().setMouseTracking(True)
         self._canvas.viewport().installEventFilter(self)
         self._wire_adjust_hint()
 
@@ -241,13 +244,23 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     def eventFilter(self, obj, event) -> bool:
         if obj is self._canvas.viewport():
             etype = event.type()
-            if etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            if etype == QEvent.Resize:
+                # Re-fit once the viewport has actually resized. Calling
+                # fitInView straight after setGeometry can use the stale
+                # (pre-resize) viewport size and leave the shot scaled-down and
+                # letterboxed (grey margins inside the selection) — and only
+                # sometimes, depending on when the resize lands.
+                self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+            elif etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 local = self._canvas.viewport().mapTo(self, event.position().toPoint())
                 if self._try_begin_handle_drag(QPointF(local)):
                     return True  # consumed: a crop resize, not an annotation
             elif etype == QEvent.MouseMove and not event.buttons():
                 local = self._canvas.viewport().mapTo(self, event.position().toPoint())
-                self._update_hover_cursor(QPointF(local))
+                if self._update_hover_cursor(QPointF(local)):
+                    # Over a handle: consume the move so the QGraphicsView doesn't
+                    # reset the resize cursor back to the default on this hover.
+                    return True
         return super().eventFilter(obj, event)
 
     def mousePressEvent(self, event) -> None:
@@ -319,13 +332,15 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._canvas.show()
         self.update()
 
-    def _update_hover_cursor(self, surface_pos: QPointF) -> None:
+    def _update_hover_cursor(self, surface_pos: QPointF) -> bool:
+        """Show a resize cursor over a crop edge; return True when one is set."""
         cursor = _crop_cursor(self._edges_at(surface_pos)) if self.crop_adjustable() else None
         viewport = self._canvas.viewport()
         if cursor is None:
             viewport.unsetCursor()
-        else:
-            viewport.setCursor(cursor)
+            return False
+        viewport.setCursor(cursor)
+        return True
 
 
 def _crop_cursor(edges: tuple[bool, bool, bool, bool]):
