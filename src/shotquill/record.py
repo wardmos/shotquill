@@ -254,6 +254,24 @@ def open_before_pair_id(frames: list[dict]) -> str | None:
     return open_pairs[-1] if open_pairs else None
 
 
+def attach_diffs(session: Session, diffs: dict[int, dict]) -> None:
+    """Store before/after change boxes on frames, keyed by 0-based position (pure).
+
+    ``diffs`` maps a frame's position in the manifest to a ``{x, y, width, height}``
+    box in frame fractions (computed with Qt by the record-end glue, see
+    :func:`shotquill.headless.compute_pair_diffs`) — this module stays image-free.
+    A no-op when ``diffs`` is empty.
+    """
+    if not diffs:
+        return
+    manifest = _read_manifest(session.manifest_path)
+    frames = manifest["frames"]
+    for pos, box in diffs.items():
+        if 0 <= pos < len(frames):
+            frames[pos]["diff"] = dict(box)
+    _write_manifest(session.manifest_path, manifest)
+
+
 def record_frame(
     session: Session,
     *,
@@ -546,7 +564,11 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
         border-radius: 10px; padding: .5rem; }
 .pair .frame { width: 220px; }
 .frame { background: #262626; border-radius: 8px; padding: .75rem; width: 280px; }
+.frame .shot { position: relative; line-height: 0; }
 .frame img { width: 100%; border-radius: 4px; display: block; background: #000; }
+/* before/after change box: a percent-positioned outline over the after frame. */
+.diffbox { position: absolute; border: 2px solid #f5a623;
+           box-shadow: 0 0 0 1px rgba(0,0,0,.55); border-radius: 3px; pointer-events: none; }
 .frame .tool { font-weight: 600; margin: .5rem 0 .25rem; }
 .frame .label { color: #ccc; } .frame .at { color: #888; font-size: .8rem; }
 .frame.failed { outline: 2px solid #c55; }
@@ -560,6 +582,15 @@ h1 { font-size: 1.2rem; } .meta { color: #999; margin-bottom: 1.5rem; }
 .badge.phase { background: #4a3f23; color: #ed9; }
 .empty { color: #888; }
 """
+
+
+def _pct(value: object) -> str:
+    """A frame-fraction in ``[0, 1]`` as a clamped CSS percentage (defensive)."""
+    try:
+        fraction = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        fraction = 0.0
+    return f"{max(0.0, min(1.0, fraction)) * 100:.2f}%"
 
 
 def render_filmstrip(manifest: dict) -> str:
@@ -609,9 +640,21 @@ def render_filmstrip(manifest: dict) -> str:
             figure_class += " observation"
         label = entry.get("label")
         label_html = f'<div class="label">{esc(label)}</div>' if label else ""
+        img = f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+        # A before/after change box (fractions of the frame) overlays the image as
+        # a percent-positioned outline, so it tracks the image at any display size.
+        diff = entry.get("diff")
+        if isinstance(diff, dict):
+            style = (
+                f"left:{_pct(diff.get('x'))};top:{_pct(diff.get('y'))};"
+                f"width:{_pct(diff.get('width'))};height:{_pct(diff.get('height'))}"
+            )
+            shot = f'<div class="shot">{img}<div class="diffbox" style="{style}"></div></div>'
+        else:
+            shot = f'<div class="shot">{img}</div>'
         return (
             f'<figure class="{figure_class}">'
-            f'<img src="{esc(entry.get("image", ""))}" alt="{esc(label or tool)}" loading="lazy">'
+            f"{shot}"
             f'<div class="tool">{esc(tool)} {" ".join(badges)}</div>'
             f"{label_html}"
             f'<div class="at">{esc(entry.get("at", ""))} · {esc(entry.get("target", ""))}</div>'

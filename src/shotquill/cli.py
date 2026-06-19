@@ -888,6 +888,12 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
 
     try:
         session = record.resolve_session(args.session)
+        # Compute before/after change boxes before rendering the filmstrip. Best
+        # effort: a diff hiccup must never block closing a session, so swallow it.
+        try:
+            headless.annotate_pair_diffs(session)
+        except Exception:  # noqa: BLE001 - change boxes are a cosmetic review hint
+            pass
         filmstrip = record.end_session(session)
         manifest = record.load_manifest(session)
     except record.RecordError as exc:

@@ -640,6 +640,12 @@ def _tool_record_end(args: dict):
     session = _require_session(args)
     if _active_session is not None and _active_session.dir == session.dir:
         _active_session = None  # stop mirroring captures into it
+    # Compute before/after change boxes before the filmstrip renders. Best effort:
+    # a diff hiccup must not block closing a session.
+    try:
+        headless.annotate_pair_diffs(session)
+    except Exception:  # noqa: BLE001 - change boxes are a cosmetic review hint
+        pass
     filmstrip = record.end_session(session)
     manifest = record.load_manifest(session)
     html_path = str(filmstrip.resolve())
