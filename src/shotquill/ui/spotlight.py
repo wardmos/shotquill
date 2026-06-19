@@ -1,0 +1,371 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 wardmos
+"""The unified full-screen "spotlight" editor surface.
+
+One surface that is BOTH the annotation canvas and the crop-adjust surface, so
+the user never perceives two modes — adjusting the capture region is just another
+kind of editing. It covers the single screen the selection sits on, paints the
+frozen desktop dimmed as context, hosts the existing :class:`AnnotationCanvas` as
+a positioned child over the lit selection, and draws crop handles around it.
+
+Dragging a handle moves/resizes the canvas *child* and re-crops it — the
+top-level window never changes geometry, so there is no macOS window-resize
+feedback (the bug class that sank in-window edge resizing). Annotating happens in
+the canvas child exactly as in the framed editor; the shared edit core
+(:class:`~shotquill.ui.editor_core.EditorCoreMixin`) drives copy/save/OCR/finish
+keys/arrow-nudge identically. The first annotation freezes the crop and the
+handles vanish.
+
+Spotlight mode only; the framed (titled-window) editor stays in
+:mod:`shotquill.ui.editor`.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence, QPainter, QShortcut
+from PySide6.QtWidgets import QFrame, QLabel, QWidget
+
+from shotquill.ocr import get_recognizer
+from shotquill.ui import macos_window
+from shotquill.ui.editor import _BACKDROP_DIM, _BADGE_STYLE
+from shotquill.ui.editor_core import (
+    _MIN_CROP,
+    EditorCoreMixin,
+    RegionContext,
+    _toolbar_placement,
+)
+from shotquill.ui.geometry import crop_edge_hits, resize_selection, scale_rect_edges
+from shotquill.ui.smart_overlay import _ACCENT, _HANDLE_GRAB, _HANDLE_SIZE
+
+if TYPE_CHECKING:
+    from shotquill.config import Config
+
+_TOOLBAR_GAP = 8  # logical points between the selection and the floating toolbar
+
+
+class SpotlightSurface(EditorCoreMixin, QWidget):
+    #: Same contract as EditorWindow: the annotated image + the capture's
+    #: on-screen rect, so a pin can size itself for the right screen.
+    pin_requested = Signal(QImage, object)
+    #: Internal: OCR finished on its worker thread — (lines, error).
+    _ocr_done = Signal(object, object)
+
+    def __init__(
+        self,
+        image: QImage,
+        config: Config,
+        origin: QRect | None = None,
+        region: RegionContext | None = None,
+    ) -> None:
+        super().__init__()
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setWindowTitle("")
+        self._placed = False
+        self._drag: tuple[bool, bool, bool, bool] | None = None
+        self._live_sel: QRectF | None = None  # selection (surface-local) while dragging
+
+        # Cover the screen the selection sits on (single window — no per-screen
+        # mirroring needed, and today's backdrop only dims one screen anyway).
+        screen = (QGuiApplication.screenAt(origin.center()) if origin else None) or (
+            QGuiApplication.primaryScreen()
+        )
+        self._screen_geo = screen.geometry()
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setGeometry(self._screen_geo)
+        self.setMouseTracking(True)
+
+        toolbar = self._init_editor_core(image, config, origin, region, get_recognizer())
+
+        # The lit selection IS the canvas, parented as a positioned child (placed
+        # in showEvent / on every crop change), not a central widget. Drop the
+        # view's 1px frame so the viewport is exactly the selection rect — the
+        # shot then aligns pixel-for-pixel with the lit area (the framed editor
+        # gets this for free by sizing the window around the viewport instead).
+        self._canvas.setParent(self)
+        self._canvas.setFrameShape(QFrame.NoFrame)
+        # Frameless means no title bar to carry OCR status; a badge over the
+        # canvas shows it instead (see _set_status).
+        self._status_badge = QLabel(self._canvas.viewport())
+        self._status_badge.setStyleSheet(_BADGE_STYLE)
+        self._status_badge.hide()
+        # The toolbar floats as a child near the selection (positioned on show).
+        self._toolbar = toolbar
+        toolbar.setParent(self)
+
+        # This screen's slice of the frozen desktop shot, painted dimmed as
+        # context (None for non-region captures — then the surface is pure dim).
+        self._screen_pixmap = self._build_screen_pixmap()
+
+        self.reload_finish_keys()
+        close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        close_shortcut.activated.connect(self.close)
+
+        # Intercept crop-edge presses on the canvas before it annotates them,
+        # and track no-button hover so the resize cursor can show over an edge
+        # (the viewport needs its own tracking flag, not just the view's).
+        self._canvas.viewport().setMouseTracking(True)
+        self._canvas.viewport().installEventFilter(self)
+        self._wire_adjust_hint()
+
+    # --- screen-local geometry helpers ------------------------------------
+
+    def _to_local(self, rect: QRect) -> QRect:
+        """A global rect → surface-local (this screen's origin is the surface's)."""
+        return rect.translated(-self._screen_geo.topLeft())
+
+    def _sel_local(self) -> QRectF:
+        """The committed selection in surface-local logical points."""
+        return QRectF(self._to_local(self._origin))
+
+    def _build_screen_pixmap(self):
+        from PySide6.QtGui import QPixmap
+
+        if self._region is None:
+            return None
+        geo = self._region.geometry
+        local = (
+            self._screen_geo.x() - geo.x(),
+            self._screen_geo.y() - geo.y(),
+            self._screen_geo.width(),
+            self._screen_geo.height(),
+        )
+        phys = QRect(*scale_rect_edges(local, self._region_sx, self._region_sy))
+        shot = self._region.screenshot
+        return QPixmap.fromImage(shot.copy(phys.intersected(shot.rect())))
+
+    # --- window lifecycle -------------------------------------------------
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._cover_menubar()
+        if not self._placed:
+            self._placed = True
+            self._place_canvas()
+
+    def changeEvent(self, event) -> None:
+        # macOS re-shows the system menu bar whenever this window (re)activates;
+        # push back above it each time so it stays covered (and the crop stays
+        # adjustable all the way up to the screen top). The capture overlay is
+        # transient so it never hits this; the editor is where the user stays.
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._cover_menubar()
+        super().changeEvent(event)
+
+    def _cover_menubar(self) -> None:
+        # Match the capture overlay's proven sequence: set the resizable style
+        # mask FIRST (it must not run after the level change and reset it), then
+        # raise the NSWindow above the menu bar, then take focus — covering the
+        # menu bar so the spotlight (and edge dragging) reaches the screen top.
+        macos_window.set_resizable(self, False)
+        self.raise_()
+        if sys.platform == "darwin":
+            macos_window.raise_above_menubar(self)
+        self.raise_()
+        self.activateWindow()
+        self.setFocus()
+
+    def closeEvent(self, event) -> None:
+        # Stop a late text focus-out from committing onto the dying undo stack.
+        self._canvas.begin_teardown()
+        super().closeEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if self.handle_key(event):  # arrow crop-nudge + finish keys (shared core)
+            return
+        super().keyPressEvent(event)
+
+    # --- placement (the shell hook + toolbar/badge) -----------------------
+
+    def place_for_selection(self, origin: QRect) -> None:
+        # The surface re-places the canvas CHILD, never the top-level window.
+        self._place_canvas()
+
+    def _place_canvas(self) -> None:
+        local = self._to_local(self._origin)
+        self._canvas.setGeometry(local)
+        self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+        self._reposition_toolbar()
+        self.update()
+
+    def _reposition_toolbar(self) -> None:
+        from PySide6.QtGui import QCursor
+
+        self._toolbar.adjustSize()
+        sel = self._to_local(self._origin)
+        area, align_right = _toolbar_placement(QCursor.pos(), self._origin)
+        tb = self._toolbar.size()
+        x = sel.right() - tb.width() if align_right else sel.left()
+        if area == Qt.BottomToolBarArea:
+            y = sel.bottom() + _TOOLBAR_GAP
+        else:
+            y = sel.top() - tb.height() - _TOOLBAR_GAP
+        # Clamp inside the surface so the toolbar is always reachable.
+        x = min(max(x, 0), max(self.width() - tb.width(), 0))
+        y = min(max(y, 0), max(self.height() - tb.height(), 0))
+        self._toolbar.move(int(x), int(y))
+        self._toolbar.show()
+        self._toolbar.raise_()
+
+    # --- painting ---------------------------------------------------------
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        if self._screen_pixmap is not None:
+            painter.drawPixmap(self.rect(), self._screen_pixmap)
+        painter.fillRect(self.rect(), _BACKDROP_DIM)
+        if self._drag is not None and self._live_sel is not None:
+            # Canvas is hidden mid-drag; paint the live lit selection ourselves.
+            self._paint_lit_slice(painter, self._live_sel)
+            self._paint_handles(painter, self._live_sel)
+        elif self.crop_adjustable():
+            self._paint_handles(painter, self._sel_local())
+
+    def _paint_lit_slice(self, painter: QPainter, sel: QRectF) -> None:
+        if self._screen_pixmap is None:
+            painter.fillRect(sel, QColor("black"))
+            return
+        source = QRectF(
+            sel.x() * self._region_sx,
+            sel.y() * self._region_sy,
+            sel.width() * self._region_sx,
+            sel.height() * self._region_sy,
+        )
+        painter.drawPixmap(sel, self._screen_pixmap, source)
+
+    def _paint_handles(self, painter: QPainter, sel: QRectF) -> None:
+        painter.setPen(_ACCENT)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(sel)
+        painter.setBrush(QColor("white"))
+        for hx, hy in self._handle_centers(sel):
+            painter.drawRect(
+                QRectF(hx - _HANDLE_SIZE / 2, hy - _HANDLE_SIZE / 2, _HANDLE_SIZE, _HANDLE_SIZE)
+            )
+
+    @staticmethod
+    def _handle_centers(sel: QRectF) -> list[tuple[float, float]]:
+        cx, cy = sel.center().x(), sel.center().y()
+        xs = (sel.left(), cx, sel.right())
+        ys = (sel.top(), cy, sel.bottom())
+        return [(x, y) for y in ys for x in xs if not (x == cx and y == cy)]
+
+    # --- mouse: handle drags (eventFilter on the canvas + bare-area presses) ---
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self._canvas.viewport():
+            etype = event.type()
+            if etype == QEvent.Resize:
+                # Re-fit once the viewport has actually resized. Calling
+                # fitInView straight after setGeometry can use the stale
+                # (pre-resize) viewport size and leave the shot scaled-down and
+                # letterboxed (grey margins inside the selection) — and only
+                # sometimes, depending on when the resize lands.
+                self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+            elif etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                local = self._canvas.viewport().mapTo(self, event.position().toPoint())
+                if self._try_begin_handle_drag(QPointF(local)):
+                    return True  # consumed: a crop resize, not an annotation
+            elif etype == QEvent.MouseMove and not event.buttons():
+                local = self._canvas.viewport().mapTo(self, event.position().toPoint())
+                if self._update_hover_cursor(QPointF(local)):
+                    # Over a handle: consume the move so the QGraphicsView doesn't
+                    # reset the resize cursor back to the default on this hover.
+                    return True
+        return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event) -> None:
+        # A press on the surface's bare area (just outside the canvas) can still
+        # grab a handle whose band straddles the selection edge.
+        if event.button() == Qt.LeftButton and self._try_begin_handle_drag(event.position()):
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag is not None:
+            self._update_handle_drag(event.position())
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag is not None and event.button() == Qt.LeftButton:
+            self._end_handle_drag(event.position())
+            return
+        super().mouseReleaseEvent(event)
+
+    def _edges_at(self, surface_pos: QPointF) -> tuple[bool, bool, bool, bool]:
+        sel = self._sel_local()
+        return crop_edge_hits(
+            surface_pos.x() - sel.x(),
+            surface_pos.y() - sel.y(),
+            sel.width(),
+            sel.height(),
+            _HANDLE_GRAB,
+        )
+
+    def _try_begin_handle_drag(self, surface_pos: QPointF) -> bool:
+        if not self.crop_adjustable():
+            return False
+        edges = self._edges_at(surface_pos)
+        if not any(edges):
+            return False
+        self._drag = edges
+        self._live_sel = self._sel_local()
+        self._canvas.hide()  # paint the live lit slice ourselves while dragging
+        self.grabMouse()
+        self.update()
+        return True
+
+    def _update_handle_drag(self, surface_pos: QPointF) -> None:
+        sel = self._sel_local()  # committed base; active edge tracks the pointer
+        bounds = (0.0, 0.0, float(self.width()), float(self.height()))
+        new = resize_selection(
+            (sel.x(), sel.y(), sel.width(), sel.height()),
+            self._drag,
+            surface_pos.x(),
+            surface_pos.y(),
+            bounds,
+            _MIN_CROP,
+        )
+        self._live_sel = QRectF(*new)
+        self.update()
+
+    def _end_handle_drag(self, surface_pos: QPointF) -> None:
+        self._update_handle_drag(surface_pos)
+        if self.mouseGrabber() is self:
+            self.releaseMouse()
+        self._drag = None
+        # Commit: surface-local selection → global, then re-crop + re-place.
+        self._selection = QRectF(self._live_sel).translated(self._screen_geo.topLeft())
+        self._live_sel = None
+        self.recrop_selection()
+        self._place_canvas()
+        self._canvas.show()
+        self.update()
+
+    def _update_hover_cursor(self, surface_pos: QPointF) -> bool:
+        """Show a resize cursor over a crop edge; return True when one is set."""
+        cursor = _crop_cursor(self._edges_at(surface_pos)) if self.crop_adjustable() else None
+        viewport = self._canvas.viewport()
+        if cursor is None:
+            viewport.unsetCursor()
+            return False
+        viewport.setCursor(cursor)
+        return True
+
+
+def _crop_cursor(edges: tuple[bool, bool, bool, bool]):
+    """The resize cursor for the grabbed ``edges``, or None when none are."""
+    left, top, right, bottom = edges
+    if (left and top) or (right and bottom):
+        return Qt.SizeFDiagCursor
+    if (right and top) or (left and bottom):
+        return Qt.SizeBDiagCursor
+    if left or right:
+        return Qt.SizeHorCursor
+    if top or bottom:
+        return Qt.SizeVerCursor
+    return None

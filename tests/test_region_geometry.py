@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
 from shotquill.ui.geometry import (
+    crop_edge_hits,
     loupe_anchor,
+    move_rect_within,
     rect_containing,
+    resize_selection,
     scale_rect,
     selection_rect,
     window_at_point,
@@ -115,3 +118,98 @@ def test_scale_rect_edges_never_smaller_than_logical_span():
         px, _, pw, _ = scale_rect_edges((x, 0, w, 1), s, 1.0)
         assert px <= x * s
         assert px + pw >= (x + w) * s
+
+
+# --- crop_edge_hits: which edges of a box the pointer grabs ------------------
+
+# A 100x80 box; pointer coords are relative to its top-left.
+
+
+def test_crop_edge_hits_each_side():
+    assert crop_edge_hits(0, 40, 100, 80, 8) == (True, False, False, False)
+    assert crop_edge_hits(100, 40, 100, 80, 8) == (False, False, True, False)
+    assert crop_edge_hits(50, 0, 100, 80, 8) == (False, True, False, False)
+    assert crop_edge_hits(50, 80, 100, 80, 8) == (False, False, False, True)
+
+
+def test_crop_edge_hits_corner_lights_two_edges():
+    # Top-left corner grabs left and top together (a diagonal resize).
+    assert crop_edge_hits(0, 0, 100, 80, 8) == (True, True, False, False)
+    # Bottom-right corner grabs right and bottom.
+    assert crop_edge_hits(100, 80, 100, 80, 8) == (False, False, True, True)
+
+
+def test_crop_edge_hits_center_and_far_pointer_grab_nothing():
+    assert crop_edge_hits(50, 40, 100, 80, 8) == (False, False, False, False)
+    # Well outside the box on every side: no grab.
+    assert crop_edge_hits(-40, 40, 100, 80, 8) == (False, False, False, False)
+    assert crop_edge_hits(140, 40, 100, 80, 8) == (False, False, False, False)
+
+
+def test_crop_edge_hits_band_straddles_the_edge():
+    # The band reaches a little OUTSIDE the box too, so a handle drawn on the
+    # edge is easy to catch from either side (the overlay has no window frame).
+    assert crop_edge_hits(-5, 40, 100, 80, 8) == (True, False, False, False)
+    assert crop_edge_hits(105, 40, 100, 80, 8) == (False, False, True, False)
+    assert crop_edge_hits(50, -5, 100, 80, 8) == (False, True, False, False)
+
+
+def test_crop_edge_hits_thin_box_keeps_only_the_nearer_edge():
+    # Box narrower than 2*margin: a pointer left-of-center grabs the left edge
+    # alone, never both opposite edges at once.
+    assert crop_edge_hits(4, 40, 10, 80, 8) == (True, False, False, False)
+    assert crop_edge_hits(7, 40, 10, 80, 8) == (False, False, True, False)
+
+
+# --- resize_selection: move active edges to the pointer ---------------------
+
+# sel (10,10,30,20) -> edges left=10 top=10 right=40 bottom=30; bounds 0..100/0..80.
+_SEL = (10.0, 10.0, 30.0, 20.0)
+_BOUNDS = (0.0, 0.0, 100.0, 80.0)
+
+
+def test_resize_selection_moves_one_edge():
+    # Drag the right edge out to x=50: only width grows.
+    grown = resize_selection(_SEL, (False, False, True, False), 50, 0, _BOUNDS, 2)
+    assert grown == (10, 10, 40, 20)
+
+
+def test_resize_selection_left_edge_expands_outward():
+    # Drag the left edge to x=4: x shrinks, width grows.
+    assert resize_selection(_SEL, (True, False, False, False), 4, 0, _BOUNDS, 2) == (4, 10, 36, 20)
+
+
+def test_resize_selection_corner_moves_both_axes():
+    # Top-left corner to (5,5): both x/y shrink, both w/h grow.
+    assert resize_selection(_SEL, (True, True, False, False), 5, 5, _BOUNDS, 2) == (5, 5, 35, 25)
+
+
+def test_resize_selection_clamps_to_bounds():
+    # Drag the right edge far past the desktop edge: clamps to bounds width.
+    assert resize_selection(_SEL, (False, False, True, False), 9999, 0, _BOUNDS, 2) == (
+        10,
+        10,
+        90,
+        20,
+    )
+
+
+def test_resize_selection_honours_min_size():
+    # Drag the right edge inward past the left edge: floored at left + min_size.
+    assert resize_selection(_SEL, (False, False, True, False), 0, 0, _BOUNDS, 2) == (10, 10, 2, 20)
+
+
+# --- move_rect_within: clamp a moved selection back inside bounds ------------
+
+
+def test_move_rect_within_leaves_an_inside_rect_untouched():
+    assert move_rect_within((10, 10, 30, 20), _BOUNDS) == (10, 10, 30, 20)
+
+
+def test_move_rect_within_clamps_past_right_and_bottom():
+    # A box pushed off the bottom-right is shifted fully back inside.
+    assert move_rect_within((90, 70, 30, 20), _BOUNDS) == (70, 60, 30, 20)
+
+
+def test_move_rect_within_clamps_past_top_left():
+    assert move_rect_within((-5, -5, 30, 20), _BOUNDS) == (0, 0, 30, 20)

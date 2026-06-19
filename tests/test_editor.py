@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence  # noqa: E402
 
 from shotquill.ui import editor as editor_module  # noqa: E402
@@ -629,6 +629,153 @@ def test_adjusted_crop_keeps_canvas_over_the_selection(qtbot, config):
     assert window._origin == QRect(121, 80, 200, 100)
     assert viewport.size() == window._origin.size()
     assert viewport.mapToGlobal(QPoint(0, 0)) == window._origin.topLeft()
+
+
+# --- mouse crop-adjustment (edge drag -> full-screen adjust surface) ---------
+
+
+def test_crop_adjustable_tracks_pristine(qtbot, config):
+    from PySide6.QtGui import QUndoCommand
+
+    window = _region_editor(qtbot, config)
+    assert window.crop_adjustable() is True
+    window._canvas.undo_stack().push(QUndoCommand())  # an annotation landed
+    assert window.crop_adjustable() is False
+
+
+def test_non_region_editor_registers_no_crop_host(qtbot, config):
+    window = EditorWindow(_image(), config, QRect(10, 10, 30, 20))  # no RegionContext
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    assert window._canvas._crop_host is None
+    assert window.crop_adjustable() is False
+
+
+def test_enter_crop_adjust_opens_overlay_seeded_with_current_crop(qtbot, config):
+    from shotquill.ui.smart_overlay import CropAdjustOverlay
+
+    window = _region_editor(qtbot, config)
+    window.enter_crop_adjust((False, False, True, False))
+    overlay = window._crop_overlay
+    try:
+        assert isinstance(overlay, CropAdjustOverlay)
+        # Origin (10,10,30,20) seeds the surface; geometry origin is (0,0) so
+        # overlay-local equals global here.
+        assert overlay._sel == QRectF(10, 10, 30, 20)
+    finally:
+        overlay.close()
+
+
+def test_crop_adjusted_recrops_from_the_full_screenshot(qtbot, config):
+    # The apply path re-crops from the frozen screenshot via _apply_selection,
+    # so the editor stays the single source of truth (the overlay's image arg is
+    # ignored). Mark the pixel the widened crop's top-left should still land on.
+    screenshot = _image(100, 50)
+    screenshot.setPixelColor(10, 10, QColor("red"))
+    window = _region_editor(qtbot, config, screenshot=screenshot)
+
+    window._crop_adjusted(QImage(), QRect(10, 10, 50, 20))  # widened by the surface
+
+    assert window._origin == QRect(10, 10, 50, 20)
+    background = window._canvas.background_image()
+    assert (background.width(), background.height()) == (50, 20)
+    assert background.pixelColor(0, 0) == QColor("red")
+
+
+def test_canvas_edge_press_enters_crop_adjust(qtbot, config):
+    from PySide6.QtCore import QPoint as _QPoint
+
+    window = _region_editor(qtbot, config)
+    window.show()
+    qtbot.waitExposed(window)
+    calls = []
+    window.enter_crop_adjust = lambda edges: calls.append(edges)  # don't spawn a real surface
+
+    viewport = window._canvas.viewport()
+    qtbot.mousePress(
+        viewport, Qt.LeftButton, pos=_QPoint(viewport.width() - 1, viewport.height() // 2)
+    )
+
+    assert len(calls) == 1
+    assert calls[0][2] is True  # the right edge was grabbed
+
+
+def test_canvas_interior_press_does_not_enter_crop_adjust(qtbot, config):
+    from PySide6.QtCore import QPoint as _QPoint
+
+    window = _region_editor(qtbot, config)
+    window.show()
+    qtbot.waitExposed(window)
+    calls = []
+    window.enter_crop_adjust = lambda edges: calls.append(edges)
+
+    viewport = window._canvas.viewport()
+    qtbot.mousePress(
+        viewport, Qt.LeftButton, pos=_QPoint(viewport.width() // 2, viewport.height() // 2)
+    )
+
+    assert calls == []  # a press in the middle is a normal (rubber-band) select
+
+
+def test_canvas_edge_press_inert_after_first_annotation(qtbot, config):
+    from PySide6.QtCore import QPoint as _QPoint
+    from PySide6.QtGui import QUndoCommand
+
+    window = _region_editor(qtbot, config)
+    window.show()
+    qtbot.waitExposed(window)
+    window._canvas.undo_stack().push(QUndoCommand())  # crop is now frozen
+    calls = []
+    window.enter_crop_adjust = lambda edges: calls.append(edges)
+
+    viewport = window._canvas.viewport()
+    qtbot.mousePress(
+        viewport, Qt.LeftButton, pos=_QPoint(viewport.width() - 1, viewport.height() // 2)
+    )
+
+    assert calls == []  # no longer adjustable, so the edge press does nothing
+
+
+def test_spotlight_editor_disables_user_window_resize(qtbot, config, monkeypatch):
+    # The frameless spotlight editor must not be user-resizable: on macOS the
+    # window's resize edges otherwise hijack the crop-edge drag (and scale the
+    # shot via fitInView) before it can reach the canvas. The AppKit call is a
+    # no-op off macOS, so assert it is wired (not its effect).
+    from shotquill.ui import macos_window
+
+    calls = []
+    monkeypatch.setattr(macos_window, "set_resizable", lambda w, r: calls.append(r))
+    screenshot = _image(400, 300)
+    geometry = QRect(0, 0, 400, 300)
+    origin = QRect(120, 80, 200, 100)
+    window = EditorWindow(
+        screenshot.copy(origin), config, origin, RegionContext(screenshot, geometry)
+    )
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    assert window._backdrop is not None  # spotlight (frameless) mode
+    assert calls and calls[-1] is False  # the frameless window is made non-resizable
+
+
+def test_framed_editor_keeps_default_resizability(qtbot, config, monkeypatch):
+    # With the spotlight backdrop off the editor is a normal titled window; its
+    # OS resize border is expected, so we must not disable it.
+    from shotquill.ui import macos_window
+
+    config.set_editor_backdrop(False)
+    calls = []
+    monkeypatch.setattr(macos_window, "set_resizable", lambda w, r: calls.append(r))
+    window = EditorWindow(_image(), config, QRect(120, 80, 60, 40))
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    assert window._backdrop is None  # framed mode
+    assert calls == []
 
 
 def test_editor_toolbar_style_follows_config(qtbot, config):

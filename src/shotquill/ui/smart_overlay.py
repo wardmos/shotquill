@@ -58,8 +58,11 @@ from PySide6.QtWidgets import QWidget
 from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
 from shotquill.i18n import t
 from shotquill.ui.geometry import (
+    crop_edge_hits,
     loupe_anchor,
+    move_rect_within,
     rect_containing,
+    resize_selection,
     scale_rect,
     scale_rect_edges,
     selection_rect,
@@ -111,6 +114,10 @@ _CURSOR_DELTAS = {
 # app shortcuts like ⌘A / ⌘W land on the same keys and must not move the
 # pointer while the overlay is up.
 _NUDGE_MODIFIERS = Qt.ShiftModifier | Qt.KeypadModifier
+# Crop-adjust handles (CropAdjustOverlay): how near an edge/corner a press grabs
+# it, and the drawn size of each handle square — both in logical points.
+_HANDLE_GRAB = 12.0
+_HANDLE_SIZE = 8.0
 
 
 def _compositor_prefers_fullscreen() -> bool:
@@ -719,6 +726,207 @@ class SmartOverlay(QWidget):
     def _cancel(self) -> None:
         self._closed = True  # one outcome only — see _accept_region
         self.cancelled.emit()
+        self.close()
+
+
+class CropAdjustOverlay(SmartOverlay):
+    """Full-screen surface to fine-tune an *existing* region selection.
+
+    The editor opens this on demand when the user wants to adjust a region
+    capture's crop with the mouse. It reuses :class:`SmartOverlay`'s dimmed-
+    screenshot rendering, pixel loupe, painted crosshair, and the per-screen
+    multi-display plumbing, but replaces the capture interaction with edge/corner
+    **handles**: drag a handle to move that edge of the selection, drag inside to
+    move the whole box, all against the dimmed desktop so the surrounding context
+    stays visible while resizing. Apply with a plain click inside / Enter (re-
+    emits ``region_selected`` exactly like a fresh capture); cancel with Esc /
+    right-click (``cancelled``). A capture that needs no adjustment never sees
+    this — the editor opens straight to annotation as before.
+
+    The drag is driven by the pointer's position in the overlay's own (fixed,
+    full-screen) coordinate space, so — unlike adjusting inside the small editor
+    window — no top-level window changes geometry mid-drag and there is no
+    feedback loop with the cursor.
+    """
+
+    def __init__(self, screenshot: QImage, geometry: QRect, selection: QRect) -> None:
+        super().__init__(screenshot, geometry, [], window_preview=None)
+        # Selection in overlay-local logical points (floats survive Retina); the
+        # caller passes it in global points, so shift by the virtual-desktop origin.
+        self._sel = QRectF(selection.translated(-geometry.topLeft()))
+        self._bounds = (0.0, 0.0, float(geometry.width()), float(geometry.height()))
+        # Active gesture: None, or ("resize", edges) / ("move", offset) /
+        # ("redraw", origin). ``_moved`` distinguishes a drag from a plain click.
+        self._drag: tuple | None = None
+        self._moved = False
+
+    # --- painting (override the capture branches; keep loupe/crosshair) ----
+
+    def _paint_all(self, painter: QPainter) -> None:
+        painter.drawPixmap(self.rect(), self._pixmap)
+        painter.fillRect(self.rect(), _DIM)
+        self._paint_adjust(painter)
+        if self._cursor is not None:
+            self._paint_guides(painter)
+            self._paint_cursor(painter)
+            self._paint_loupe(painter)
+        self._draw_adjust_hint(painter)
+
+    def _paint_adjust(self, painter: QPainter) -> None:
+        sel = self._sel
+        source = QRectF(
+            *scale_rect((sel.x(), sel.y(), sel.width(), sel.height()), self._sx, self._sy)
+        )
+        painter.drawPixmap(sel, self._pixmap, source)
+        painter.setPen(QPen(_ACCENT, 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(sel)
+        self._draw_size_label(painter, sel.toRect(), source)
+        # Eight grab handles (corners + edge midpoints): white squares with an
+        # accent outline so they read on both the lit shot and the dimmed desktop.
+        painter.setPen(QPen(_ACCENT, 1))
+        painter.setBrush(QColor("white"))
+        for hx, hy in self._handle_centers():
+            painter.drawRect(
+                QRectF(hx - _HANDLE_SIZE / 2, hy - _HANDLE_SIZE / 2, _HANDLE_SIZE, _HANDLE_SIZE)
+            )
+
+    def _handle_centers(self) -> list[tuple[float, float]]:
+        s = self._sel
+        cx, cy = s.center().x(), s.center().y()
+        xs = (s.left(), cx, s.right())
+        ys = (s.top(), cy, s.bottom())
+        return [(x, y) for y in ys for x in xs if not (x == cx and y == cy)]
+
+    def _draw_adjust_hint(self, painter: QPainter) -> None:
+        hint = t("smart.adjust_hint")
+        painter.setFont(self._label_font(13))
+        metrics = painter.fontMetrics()
+        box = QRect(0, 0, metrics.horizontalAdvance(hint) + 28, 34)
+        box.moveCenter(QPoint(self.rect().center().x(), self.rect().bottom() - 40))
+        painter.fillRect(box, QColor(0, 0, 0, 180))
+        painter.setPen(Qt.white)
+        painter.drawText(box, Qt.AlignCenter, hint)
+
+    # --- interaction (handles instead of window/region capture) -----------
+
+    def _sel_tuple(self) -> tuple[float, float, float, float]:
+        s = self._sel
+        return (s.x(), s.y(), s.width(), s.height())
+
+    def _edges_at(self, pos: QPointF) -> tuple[bool, bool, bool, bool]:
+        s = self._sel
+        return crop_edge_hits(pos.x() - s.x(), pos.y() - s.y(), s.width(), s.height(), _HANDLE_GRAB)
+
+    def _press(self, pos: QPointF, button) -> None:
+        if button == Qt.RightButton:
+            self._cancel()
+            return
+        if button != Qt.LeftButton:
+            return
+        self._cursor = pos
+        self._moved = False
+        edges = self._edges_at(pos)
+        if any(edges):
+            self._drag = ("resize", edges)
+        elif self._sel.contains(pos):
+            self._drag = ("move", QPointF(pos.x() - self._sel.x(), pos.y() - self._sel.y()))
+        else:
+            # A press well outside the box redraws a fresh selection from here.
+            self._drag = ("redraw", QPointF(pos))
+            self._sel = QRectF(pos.x(), pos.y(), 0.0, 0.0)
+        self._refresh()
+
+    def begin_resize(self, edges: tuple[bool, bool, bool, bool]) -> None:
+        """Start a resize drag on ``edges`` and grab the mouse.
+
+        Lets the editor hand off a press it already received on a crop edge: the
+        overlay grabs the still-held button and tracks it to the release, so the
+        gesture feels continuous. Best-effort — if the platform doesn't deliver
+        grabbed events the user simply grabs a (clearly drawn) handle instead.
+        """
+        self._moved = False
+        self._drag = ("resize", edges)
+        self.grabMouse()
+
+    def _pointer_moved(self, pos: QPointF) -> None:
+        self._cursor = pos
+        if self._drag is None:
+            self._refresh()
+            return
+        self._moved = True
+        mode = self._drag[0]
+        if mode == "resize":
+            resized = resize_selection(
+                self._sel_tuple(), self._drag[1], pos.x(), pos.y(), self._bounds, _MIN_SIZE
+            )
+            self._sel = QRectF(*resized)
+        elif mode == "move":
+            off = self._drag[1]
+            moved = (pos.x() - off.x(), pos.y() - off.y(), self._sel.width(), self._sel.height())
+            self._sel = QRectF(*move_rect_within(moved, self._bounds))
+        else:  # redraw
+            origin = self._drag[1]
+            x, y, w, h = selection_rect(origin.x(), origin.y(), pos.x(), pos.y())
+            bx, by, bw, bh = self._bounds
+            left = min(max(x, bx), bx + bw)
+            top = min(max(y, by), by + bh)
+            right = min(max(x + w, bx), bx + bw)
+            bottom = min(max(y + h, by), by + bh)
+            self._sel = QRectF(left, top, right - left, bottom - top)
+        self._refresh()
+
+    def _release(self, pos: QPointF, button) -> None:
+        if button != Qt.LeftButton or self._drag is None:
+            return
+        mode = self._drag[0]
+        self._drag = None
+        if self.mouseGrabber() is self:
+            self.releaseMouse()
+        # A plain click inside the selection (no drag) applies it; any real drag
+        # just settles the new edge and keeps the session open to tweak further.
+        if mode == "move" and not self._moved:
+            self._confirm()
+            return
+        self._refresh()
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key == Qt.Key_Escape:
+            self._cancel()
+        elif key in (Qt.Key_Return, Qt.Key_Enter):
+            self._confirm()
+        elif key in _CURSOR_DELTAS and not event.modifiers() & ~_NUDGE_MODIFIERS:
+            # Arrows / WASD nudge the whole selection (Shift steps by ten) for
+            # fine placement without the mouse.
+            dx, dy = _CURSOR_DELTAS[key]
+            step = _CURSOR_NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
+            moved = (
+                self._sel.x() + dx * step,
+                self._sel.y() + dy * step,
+                self._sel.width(),
+                self._sel.height(),
+            )
+            self._sel = QRectF(*move_rect_within(moved, self._bounds))
+            self._refresh()
+
+    def _confirm(self) -> None:
+        sel = self._sel
+        if sel.width() < _MIN_SIZE or sel.height() < _MIN_SIZE:
+            self._cancel()
+            return
+        self._closed = True  # one outcome only — see SmartOverlay._accept_region
+        # Crop from the float selection by edges (Retina-safe), clamped to the
+        # screenshot so QImage.copy can't pad with uninitialized pixels.
+        phys = QRect(*scale_rect_edges(self._sel_tuple(), self._sx, self._sy))
+        cropped = self._screenshot.copy(phys.intersected(self._screenshot.rect()))
+        rect = QRect(
+            int(round(sel.x())),
+            int(round(sel.y())),
+            int(round(sel.width())),
+            int(round(sel.height())),
+        )
+        self.region_selected.emit(cropped, rect.translated(self._geometry.topLeft()))
         self.close()
 
 

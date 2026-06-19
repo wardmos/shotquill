@@ -10,21 +10,22 @@ highlighted it. A Settings toggle restores the regular titled window.
 A region capture hands over a :class:`RegionContext` (the full-desktop
 screenshot it was cropped from) and stays *adjustable* here: until the first
 annotation lands, the arrow keys nudge the crop by one screenshot pixel per
-press (Shift steps by 10, Option moves the right/bottom edge to resize),
-re-cropping from the full screenshot and re-placing the window so the shot
-keeps sitting over the live screen. Hand-drawn edges are rarely
-pixel-accurate, and doing the fix-up here (rather than in a separate pinned
-step on the capture overlay, as earlier versions did) means selecting,
-adjusting, and annotating are one mode. The first annotation freezes the
-crop — its pixels must not shift under placed shapes.
+press (Shift steps by 10, Option moves the right/bottom edge to resize), and a
+mouse press on a crop edge opens a full-screen adjust surface — re-cropping from
+the full screenshot. The first annotation freezes the crop.
+
+The edit core (canvas, toolbar, OCR, finish keys, crop re-crop logic) lives in
+:class:`~shotquill.ui.editor_core.EditorCoreMixin`, shared with the unified
+full-screen :class:`~shotquill.ui.spotlight.SpotlightSurface`. This window is the
+*framed* shell: a titled (or frameless-over-backdrop) top-level that re-places
+itself over the shot on every crop change.
 """
 
 from __future__ import annotations
 
-import threading
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Protocol
 
-from PySide6.QtCore import QEvent, QKeyCombination, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -32,71 +33,62 @@ from PySide6.QtGui import (
     QImage,
     QKeySequence,
     QPainter,
-    QPixmap,
     QShortcut,
 )
 from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QWidget
 
-from shotquill.i18n import adjust_hint_key, key_display_name, t
+from shotquill.i18n import t
 from shotquill.ocr import get_recognizer
-from shotquill.ui.canvas import AnnotationCanvas
-from shotquill.ui.geometry import scale_rect_edges
-from shotquill.ui.toolbar import create_toolbar
+from shotquill.ui import macos_window
+from shotquill.ui._debug import crop_log
+from shotquill.ui.editor_core import (
+    EditorCoreMixin,
+    RegionContext,
+    _finish_tip,  # noqa: F401 — re-exported for tests
+    _toolbar_placement,
+)
 
 if TYPE_CHECKING:
     from shotquill.config import Config
 
+__all__ = ["CropHost", "EditorWindow", "RegionContext"]
+
 _MAX_INITIAL_WIDTH = 1400
 _MAX_INITIAL_HEIGHT = 900
 
-# Keyboard adjustment of the crop: arrows step by one *native* pixel (what the
-# size readout counts), Shift steps by _NUDGE_COARSE — the same stepping the
-# capture overlay's loupe used to read in.
-_NUDGE_COARSE = 10
-_MIN_CROP = 2  # logical points; matches the overlay's minimum selection
-_ARROW_DELTAS = {
-    Qt.Key_Left: (-1, 0),
-    Qt.Key_Right: (1, 0),
-    Qt.Key_Up: (0, -1),
-    Qt.Key_Down: (0, 1),
-}
-
-
-class RegionContext(NamedTuple):
-    """What a region capture must hand over for the crop to stay adjustable.
-
-    ``screenshot`` is the frozen full-desktop shot (native pixels) the region
-    was cropped from; ``geometry`` is the virtual desktop's rect in logical,
-    global points — together they let the editor re-crop any selection.
-    """
-
-    screenshot: QImage
-    geometry: QRect
-
-
-# Pure-modifier presses never match a finish key; ignore them outright.
-_MODIFIER_KEYS = (Qt.Key_unknown, Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta)
-
-# Same dim the capture overlay paints over the desktop, so the editor's
-# backdrop reads as a continuation of the capture rather than a new layer.
+# Same dim the capture overlay paints over the desktop, so the editor's backdrop
+# reads as a continuation of the capture rather than a new layer.
 _BACKDROP_DIM = QColor(0, 0, 0, 120)
 
-# OCR status badge shown over the canvas in frameless mode (no title bar to
-# carry the text); styled like the overlay's labels.
+# OCR status badge shown over the canvas in frameless mode (no title bar to carry
+# the text); styled like the overlay's labels.
 _BADGE_STYLE = (
     "background-color: rgba(0, 0, 0, 180); color: white;padding: 3px 8px; border-radius: 4px;"
 )
 
 
+class CropHost(Protocol):
+    """What :class:`AnnotationCanvas` calls back to enter mouse crop-adjustment.
+
+    The framed editor implements this; the canvas detects a press on a crop edge
+    (while the crop is still adjustable) and hands off to ``enter_crop_adjust``,
+    which opens the full-screen adjust surface. (The unified SpotlightSurface
+    owns its own handles and never uses this path.)
+    """
+
+    def crop_adjustable(self) -> bool: ...
+    def enter_crop_adjust(self, edges: tuple[bool, bool, bool, bool]) -> None: ...
+
+
 class _EditorBackdrop(QWidget):
     """A translucent dim layer behind a frameless editor.
 
-    Covers the whole virtual desktop with the same dim the capture overlay
-    used, so editing feels like the capture's spotlight never went away: the
-    shot stays lit while everything around it stays dark. Deliberately inert —
-    it never takes focus (the editor keeps keyboard input) and clicks on it do
-    nothing, so a stray click can't discard annotations. The editor shows and
-    hides it with its own activation and closes it from ``closeEvent``.
+    Covers the whole virtual desktop with the same dim the capture overlay used,
+    so editing feels like the capture's spotlight never went away: the shot stays
+    lit while everything around it stays dark. Deliberately inert — it never
+    takes focus (the editor keeps keyboard input) and clicks on it do nothing, so
+    a stray click can't discard annotations. The editor shows and hides it with
+    its own activation and closes it from ``closeEvent``.
     """
 
     def __init__(self) -> None:
@@ -115,64 +107,7 @@ class _EditorBackdrop(QWidget):
         QPainter(self).fillRect(self.rect(), _BACKDROP_DIM)
 
 
-def _toolbar_placement(cursor: QPoint | None, origin: QRect | None) -> tuple[Qt.ToolBarArea, bool]:
-    """Pick the toolbar's corner from where the pointer is: (area, right-align).
-
-    The editor opens the instant a capture ends, so the pointer is still where
-    the shot was confirmed — a region drag usually ends near the selection's
-    bottom-right corner. Putting the toolbar in that corner saves the trip
-    across the shot: bottom area when the pointer is in the capture's lower
-    half, right-aligned when it is in the right half. Without an origin to
-    compare against the toolbar stays at the top-left (the classic layout).
-    """
-    if cursor is None or origin is None or origin.isEmpty():
-        return Qt.TopToolBarArea, False
-    center = origin.center()
-    area = Qt.BottomToolBarArea if cursor.y() > center.y() else Qt.TopToolBarArea
-    return area, cursor.x() > center.x()
-
-
-def _finish_sequence(config: Config, action: str) -> QKeySequence:
-    """The configured finish-key sequence, or an empty one when disabled."""
-    if not config.hotkey_enabled(action):
-        return QKeySequence()
-    return QKeySequence(config.editor_hotkey(action))
-
-
-def _pressed_sequence(event) -> QKeySequence:
-    """Normalize a key event into a QKeySequence for finish-key matching."""
-    key = event.key()
-    if key in _MODIFIER_KEYS:
-        return QKeySequence()
-    if key == Qt.Key_Enter:
-        key = Qt.Key_Return  # keypad Enter counts as a configured Return
-    modifiers = event.modifiers() & ~Qt.KeypadModifier
-    return QKeySequence(QKeyCombination(modifiers, Qt.Key(key)))
-
-
-def _finish_tip(sequence: QKeySequence, label: str) -> str:
-    """A tooltip with the finish-key name appended (omitted when the key is off).
-
-    NativeText keeps macOS modifier symbols unambiguous (⌘D — the portable
-    "Ctrl+D" would be misleading there because Qt swaps Ctrl/Cmd). The lookup
-    for a localized key name must use the *portable* spelling though: on macOS
-    NativeText renders Return as ↩, which the display-name table would never
-    match. So the localized name replaces the key's native suffix (macOS
-    "⌘↩" → "⌘回车", elsewhere "Ctrl+Return" → "Ctrl+回车").
-    """
-    native = sequence.toString(QKeySequence.NativeText)
-    if not native:
-        return label
-    portable_key = sequence.toString().split("+")[-1]  # the non-modifier key
-    localized = key_display_name(portable_key)
-    if localized != portable_key:
-        native_key = QKeySequence(portable_key).toString(QKeySequence.NativeText)
-        if native_key and native.endswith(native_key):
-            native = native[: len(native) - len(native_key)] + localized
-    return f"{label} ({native})"
-
-
-class EditorWindow(QMainWindow):
+class EditorWindow(EditorCoreMixin, QMainWindow):
     #: Emitted when the user pins the shot to the desktop: the annotated image
     #: plus the capture's on-screen rect (or None) so the pin can size itself
     #: for the screen the shot came from.
@@ -191,72 +126,52 @@ class EditorWindow(QMainWindow):
         super().__init__()
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle(t("title.annotate"))
-        self._config = config
-        self._origin = origin
         self._placed = False
-
-        # Crop adjustment (region captures only): the live selection in
-        # logical global points, kept as floats so native-pixel steps survive
-        # fractional (Retina) scale factors; sx/sy convert to screenshot px.
-        self._region = region if origin is not None else None
-        self._selection = QRectF(origin) if self._region is not None else None
-        if self._region is not None:
-            self._region_sx = region.screenshot.width() / max(region.geometry.width(), 1)
-            self._region_sy = region.screenshot.height() / max(region.geometry.height(), 1)
+        # The full-screen crop-adjust surface, alive only while the user is
+        # dragging the crop's edges (see enter_crop_adjust).
+        self._crop_overlay = None
 
         # Spotlight mode (default, toggleable in Settings): the editor opens
-        # frameless — no macOS title bar or traffic lights — over a dim
-        # backdrop, so the shot stays lit in place against the darkened
-        # desktop exactly like the capture overlay showed it.
+        # frameless — no macOS title bar or traffic lights — over a dim backdrop,
+        # so the shot stays lit in place against the darkened desktop exactly
+        # like the capture overlay showed it.
         self._backdrop: _EditorBackdrop | None = None
         self._status_badge: QLabel | None = None
         if config.editor_backdrop():
             self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
             self._backdrop = _EditorBackdrop()
 
-        pixmap = QPixmap.fromImage(image)
-        self._canvas = AnnotationCanvas(pixmap)
-        # The image is always fitted to the view (below and in resizeEvent), so
-        # scrollbars never help — and the ~14px they'd steal would break the
-        # canvas-over-capture alignment in _place_over_origin.
-        self._canvas.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._canvas.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # get_recognizer is resolved here (a module the tests can patch) and
+        # handed to the core, which omits the OCR button when it is None.
+        toolbar = self._init_editor_core(image, config, origin, region, get_recognizer())
         self.setCentralWidget(self._canvas)
+        # Region captures stay adjustable: let the canvas hand off an edge press
+        # to this window, which opens the full-screen adjust surface.
+        if self._region is not None:
+            self._canvas.set_crop_host(self)
         if self._backdrop is not None:
-            # Frameless means no title bar to carry the OCR status text; a
-            # small badge over the canvas shows it instead (see _set_status).
+            # Frameless means no title bar to carry the OCR status text; a small
+            # badge over the canvas shows it instead (see _set_status).
             self._status_badge = QLabel(self._canvas.viewport())
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
-        # OCR is only offered when the platform has an on-device recognizer
-        # (macOS Vision); elsewhere the action is omitted (None).
-        self._recognizer = get_recognizer()
-        toolbar = create_toolbar(
-            self._canvas,
-            self._copy,
-            self._save,
-            self._ocr if self._recognizer is not None else None,
-            self._pin,
-            style=config.toolbar_style(),
-        )
+
         # The toolbar lands in the corner nearest the pointer (e.g. the
-        # bottom-right after a region drag towards the bottom of the screen),
-        # so finishing a shot never means crossing the whole capture.
+        # bottom-right after a region drag towards the bottom of the screen), so
+        # finishing a shot never means crossing the whole capture.
         area, align_right = _toolbar_placement(QCursor.pos(), origin)
         if align_right:
             spacer = QWidget()
             spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             toolbar.insertWidget(toolbar.actions()[0], spacer)
         self.addToolBar(area, toolbar)
-        self._copy_action = toolbar.copy_action
-        self._save_action = toolbar.save_action
-        # Resolves the (configurable, possibly disabled) finish keys and sets
-        # the matching tooltips; re-run by the app whenever Settings changes.
+        # Resolves the (configurable, possibly disabled) finish keys and sets the
+        # matching tooltips; re-run by the app whenever Settings changes.
         self.reload_finish_keys()
 
-        # Size from the shot's on-screen (logical) rect when known — the pixmap
-        # is in native pixels, which is 2x too large on Retina displays.
-        initial = origin.size() if origin is not None else pixmap.size()
+        # Size from the shot's on-screen (logical) rect when known — the image is
+        # in native pixels, which is 2x too large on Retina displays.
+        initial = origin.size() if origin is not None else image.size()
         self.resize(
             min(initial.width(), _MAX_INITIAL_WIDTH) + 40,
             min(initial.height(), _MAX_INITIAL_HEIGHT) + 120,
@@ -265,15 +180,7 @@ class EditorWindow(QMainWindow):
         close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         close_shortcut.activated.connect(self.close)
 
-        self._ocr_running = False
-        self._ocr_done.connect(self._on_ocr_done)
-
-        self._hint_showing = False
-        if self._can_adjust():
-            # Make the merged adjust+annotate mode discoverable; the hint is
-            # retired once the first annotation freezes the crop.
-            self._canvas.undo_stack().indexChanged.connect(self._retire_adjust_hint)
-            self._show_adjust_hint()
+        self._wire_adjust_hint()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -289,10 +196,10 @@ class EditorWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         # The dim backdrop tracks the editor's activation: it hides while the
-        # user is in another app (it must not darken whatever they switched
-        # to) and comes back when the editor regains activation. Visibility is
-        # guarded so the deactivation that accompanies closing can't resurrect
-        # a backdrop that closeEvent already took down.
+        # user is in another app (it must not darken whatever they switched to)
+        # and comes back when the editor regains activation. Visibility is
+        # guarded so the deactivation that accompanies closing can't resurrect a
+        # backdrop that closeEvent already took down.
         if (
             event.type() == QEvent.ActivationChange
             and self._backdrop is not None
@@ -316,30 +223,58 @@ class EditorWindow(QMainWindow):
         super().closeEvent(event)
 
     def resizeEvent(self, event) -> None:
-        # Keep the whole image fitted as the user resizes — with scrollbars off
-        # there is no other way to reach content outside the viewport.
+        # Keep the whole image fitted as the window is (re-)sized — with
+        # scrollbars off there is no other way to reach content outside the
+        # viewport.
         super().resizeEvent(event)
+        crop_log(f"resizeEvent size={event.size()} crop_overlay={self._crop_overlay is not None}")
+        # While the full-screen adjust surface is up, never re-fit: a stray
+        # resize must not scale the frozen shot under the user (the surface owns
+        # the live preview, and the editor re-crops once on apply).
+        if self._crop_overlay is not None:
+            return
+        self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+
+    def keyPressEvent(self, event) -> None:
+        # Crop nudge (arrows) + finish keys live in the shared core; anything it
+        # declines falls through to the default handling.
+        if self.handle_key(event):
+            return
+        super().keyPressEvent(event)
+
+    def place_for_selection(self, origin: QRect) -> None:
+        # The framed shell re-places its top-level window over the new crop.
+        self._place_over_origin()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
 
     def _place_over_origin(self) -> None:
         """Open the editor so the screenshot appears to stay where it was shot.
 
         Sizes the window so the canvas viewport matches the capture's on-screen
-        size (within the initial-size caps), shifts the frame so the canvas
-        lands exactly on the capture rect, then clamps the frame to the screen
-        so the toolbar and window edges stay reachable. Runs on first show —
-        only then are the toolbar and frame dimensions known.
+        size (within the initial-size caps), shifts the frame so the canvas lands
+        exactly on the capture rect, then clamps the frame to the screen so the
+        toolbar and window edges stay reachable. Runs on first show — only then
+        are the toolbar and frame dimensions known.
         """
+        if self._backdrop is not None:
+            # Frameless spotlight window: stop the user from drag-resizing it.
+            # Resizing only scales the shot via fitInView (never useful) and, on
+            # macOS, the OS treats the frameless edges as resize handles — so an
+            # edge drag meant to adjust the crop is hijacked as a window resize
+            # and never reaches the canvas. Clearing the resizable style mask
+            # removes that zone (the program still re-places the window itself).
+            # Done before the move below so any AppKit frame nudge is corrected.
+            macos_window.set_resizable(self, False)
         self.layout().activate()  # settle toolbar/central layout before measuring
         viewport = self._canvas.viewport()
         screen = QGuiApplication.screenAt(self._origin.center())
         available = (screen or self.screen()).availableGeometry()
         # The frame is the viewport plus chrome (toolbar, window borders). A
         # near-screen-sized capture plus that chrome would not fit, leaving the
-        # toolbar off-screen — often exactly where the pointer placed it (a
-        # region drag ends bottom-right, so the toolbar lands at the clipped
-        # bottom edge). Cap the viewport so the whole frame fits; fitInView
-        # scales the shot down to match.
+        # toolbar off-screen — often exactly where the pointer placed it (a region
+        # drag ends bottom-right, so the toolbar lands at the clipped bottom
+        # edge). Cap the viewport so the whole frame fits; fitInView scales the
+        # shot down to match.
         chrome = self.frameGeometry().size() - viewport.size()
         target = QSize(
             min(self._origin.width(), _MAX_INITIAL_WIDTH, available.width() - chrome.width()),
@@ -355,188 +290,53 @@ class EditorWindow(QMainWindow):
         frame.moveTop(min(max(frame.top(), available.top()), max_top))
         self.move(self.pos() + (frame.topLeft() - self.frameGeometry().topLeft()))
 
-    def reload_finish_keys(self) -> None:
-        """Re-resolve the finish keys from config — the app calls this on every
-        open editor after the user accepts the Settings dialog, so changed or
-        disabled keys take effect without reopening the window."""
-        self._copy_key = _finish_sequence(self._config, "editor_copy")
-        self._save_key = _finish_sequence(self._config, "editor_save")
-        self._refresh_finish_tips()
+    # --- mouse crop-adjustment (CropHost; the canvas hands off an edge press) --
 
-    def _refresh_finish_tips(self) -> None:
-        self._copy_action.setToolTip(_finish_tip(self._copy_key, t("toolbar.copy_tip")))
-        self._save_action.setToolTip(_finish_tip(self._save_key, t("toolbar.save_tip")))
+    def enter_crop_adjust(self, edges: tuple[bool, bool, bool, bool]) -> None:
+        """Open the full-screen adjust surface seeded with the current crop.
 
-    def keyPressEvent(self, event) -> None:
-        # Crop adjustment first: until the first annotation lands, the arrow
-        # keys nudge a region capture's crop (⇧ steps by 10, ⌥ resizes). The
-        # canvas declines plain arrows so they reach here.
-        if event.key() in _ARROW_DELTAS and self._can_adjust():
-            self._adjust_crop(event)
+        The canvas calls this when the user presses a crop edge. The surface
+        re-crops from the frozen full-desktop screenshot and, on apply, hands the
+        new selection back to :meth:`_crop_adjusted`; cancelling leaves the crop
+        unchanged. Doing the drag on one fixed full-screen window — rather than
+        resizing this small window live — keeps the surrounding desktop visible
+        and avoids any window-geometry feedback under the cursor.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        from shotquill.ui.smart_overlay import CropAdjustOverlay, present_overlay
+
+        crop_log(f"enter_crop_adjust edges={edges} origin={self._origin}")
+        if self._crop_overlay is not None:  # a session is already up
             return
-        # Quick-finish keys (configurable; Space copies to the clipboard and
-        # Enter saves to disk by default). Both close the editor (handled in
-        # _copy / _save). A focused text annotation consumes the key first, so
-        # these never fire mid-typing.
-        pressed = _pressed_sequence(event)
-        if not pressed.isEmpty():
-            if pressed == self._copy_key:
-                self._copy()
-                return
-            if pressed == self._save_key:
-                self._save()
-                return
-        super().keyPressEvent(event)
+        overlay = CropAdjustOverlay(self._region.screenshot, self._region.geometry, self._origin)
+        overlay.region_selected.connect(self._crop_adjusted)
+        overlay.destroyed.connect(self._crop_adjust_finished)
+        self._crop_overlay = overlay
+        present_overlay(overlay, QApplication.instance())
+        # Continue the still-held press as a resize of the grabbed edge, so the
+        # gesture feels unbroken — but only on the single-window path, where a
+        # mouse grab on the shown overlay actually delivers the rest of the drag.
+        # The multi-screen controller (always used on macOS, and multi-output
+        # Wayland) shows per-screen views, not this brain, so a grab here would
+        # never see the release and would leave a stale drag that then fires on
+        # hover; there the user just grabs a drawn handle. ``_controller`` is set
+        # by present_overlay only on those multi-screen paths.
+        if getattr(overlay, "_controller", None) is None:
+            overlay.begin_resize(edges)
 
-    # --- crop adjustment (region captures, until the first annotation) ------
-
-    def _can_adjust(self) -> bool:
-        return self._region is not None and self._canvas.is_pristine()
-
-    def _adjust_crop(self, event) -> None:
-        dx, dy = _ARROW_DELTAS[event.key()]
-        step = _NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
-        # One step is one *native* pixel expressed in logical points, so on a
-        # Retina screen a press moves the crop (and the size readout) by
-        # exactly one screenshot pixel, not one 2x point.
-        lx = dx * step / self._region_sx
-        ly = dy * step / self._region_sy
-        sel = QRectF(self._selection)
-        bounds = QRectF(self._region.geometry)
-        if event.modifiers() & Qt.AltModifier:
-            # Option+arrows move the right/bottom edge; combined with plain
-            # arrows (which move the whole box) any edge can be placed exactly.
-            sel.setRight(min(max(sel.right() + lx, sel.left() + _MIN_CROP), bounds.right()))
-            sel.setBottom(min(max(sel.bottom() + ly, sel.top() + _MIN_CROP), bounds.bottom()))
-        else:
-            sel.moveLeft(min(max(sel.left() + lx, bounds.left()), bounds.right() - sel.width()))
-            sel.moveTop(min(max(sel.top() + ly, bounds.top()), bounds.bottom() - sel.height()))
-        self._selection = sel
+    def _crop_adjusted(self, image: QImage, rect: QRect) -> None:
+        # Re-crop from the original full-desktop screenshot via the same path the
+        # arrow keys use, so a single source of truth places the window once.
+        crop_log(f"_crop_adjusted rect={rect}")
+        self._selection = QRectF(rect)
         self._apply_selection()
 
-    def _apply_selection(self) -> None:
-        """Re-crop the adjusted selection and keep the window sitting over it."""
-        region = self._region
-        relative = (
-            self._selection.x() - region.geometry.x(),
-            self._selection.y() - region.geometry.y(),
-            self._selection.width(),
-            self._selection.height(),
-        )
-        # Crop by edges from the float selection, exactly as the capture
-        # overlay did, so fractional scale factors never clip a pixel row.
-        phys = QRect(*scale_rect_edges(relative, self._region_sx, self._region_sy))
-        cropped = region.screenshot.copy(phys.intersected(region.screenshot.rect()))
-        self._canvas.set_background(QPixmap.fromImage(cropped))
-        # The same int snap the overlay applied to the rect it emitted.
-        self._origin = QRect(
-            int(self._selection.x()),
-            int(self._selection.y()),
-            int(self._selection.width()),
-            int(self._selection.height()),
-        )
-        self._place_over_origin()
-        self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
-
-    def _show_adjust_hint(self) -> None:
-        self._set_status(t(adjust_hint_key()))
-        self._hint_showing = True
-
-    def _retire_adjust_hint(self) -> None:
-        # The first annotation freezes the crop; take the stale hint down with
-        # it — unless OCR or another status has already replaced it.
-        if not self._hint_showing or self._canvas.is_pristine():
-            return
-        self._hint_showing = False
-        self.setWindowTitle(t("title.annotate"))
-        if self._status_badge is not None:
-            self._status_badge.hide()
-
-    def _copy(self) -> None:
-        # Copy the annotated shot to the clipboard, then close the editor — the
-        # toolbar button and the finish key share this finish-and-dismiss flow.
-        from shotquill.output.clipboard import copy_qimage
-
-        copy_qimage(self._canvas.export_image())
-        self.close()
-
-    def _save(self) -> None:
-        # Save to the configured folder, then close — shared by the toolbar
-        # button and the finish key. On failure keep the editor open so the
-        # annotations aren't lost.
-        from PySide6.QtWidgets import QMessageBox
-
-        from shotquill.output.saver import save_qimage
-
-        try:
-            save_qimage(
-                self._canvas.export_image(),
-                self._config.save_dir(),
-                self._config.image_format(),
-            )
-        except OSError as exc:
-            QMessageBox.warning(self, "ShotQuill", t("notify.save_failed").format(error=exc))
-            return
-        self.close()
-
-    def _pin(self) -> None:
-        # Hand the annotated image to the app (which keeps the pin alive), then
-        # close the editor — the floating pin replaces it.
-        self.pin_requested.emit(self._canvas.export_image(), self._origin)
-        self.close()
-
-    def _ocr(self) -> None:
-        # Vision's accurate recognition can take seconds on a full-screen shot,
-        # so it runs on a worker thread instead of freezing the GUI; the title
-        # shows progress. A second click while one is in flight is ignored.
-        if self._ocr_running or self._recognizer is None:
-            return
-        self._ocr_running = True
-        self._set_status(t("title.ocr_running"))
-        image = self._canvas.background_image()
-        # Snapshot the recognizer on the GUI thread and hand it to the worker,
-        # so the worker never reads live ``self`` state that could be swapped
-        # out from under it (mirrors how ``image`` is already passed in).
-        recognizer = self._recognizer
-        threading.Thread(
-            target=self._run_ocr, args=(recognizer, image), daemon=True, name="sq-ocr"
-        ).start()
-
-    def _run_ocr(self, recognizer, image: QImage) -> None:
-        """Worker thread: recognize and hand the outcome back to the GUI thread."""
-        lines: list[str] | None = None
-        error: Exception | None = None
-        try:
-            lines = recognizer.recognize(image)
-        except Exception as exc:
-            error = exc
-        try:
-            self._ocr_done.emit(lines, error)
-        except RuntimeError:
-            pass  # editor closed (and deleted) while OCR was in flight
-
-    def _on_ocr_done(self, lines: object, error: object) -> None:
-        from shotquill.output.clipboard import copy_text
-
-        self._ocr_running = False
-        if error is not None:
-            self._set_status(t("title.ocr_failed").format(error=error))
-        elif lines:
-            copy_text("\n".join(lines))
-            self._set_status(t("title.ocr_copied").format(count=len(lines)))
-        else:
-            self._set_status(t("title.ocr_empty"))
-
-    def _set_status(self, text: str) -> None:
-        """Surface OCR progress/outcome: the title bar carries it normally; in
-        frameless spotlight mode (no title bar) a badge over the canvas does.
-        The title is set either way so tests and tooling can read it."""
-        self._hint_showing = False  # any real status outranks the adjust hint
-        self.setWindowTitle(text)
-        if self._status_badge is None:
-            return
-        self._status_badge.setText(text)
-        self._status_badge.adjustSize()
-        self._status_badge.move(6, 6)
-        self._status_badge.show()
-        self._status_badge.raise_()
+    def _crop_adjust_finished(self) -> None:
+        # The surface is gone (applied or cancelled); reclaim activation so the
+        # editor returns to front and its spotlight backdrop, which tracks
+        # activation, comes back (see changeEvent).
+        self._crop_overlay = None
+        if self.isVisible():
+            self.raise_()
+            self.activateWindow()

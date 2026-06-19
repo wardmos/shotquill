@@ -71,15 +71,23 @@ _STRINGS: dict[str, dict[str, str]] = {
         " · arrows/WASD nudge the cursor · Esc cancels",
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · 方向键/WASD 微移光标 · Esc 取消",
     },
+    # Shown on the full-screen crop-adjust surface (CropAdjustOverlay): how to
+    # resize/move the selection, apply it, or back out.
+    "smart.adjust_hint": {
+        "en": "Drag the edges to adjust · drag inside to move"
+        " · click inside or ↵ to apply · Esc cancels",
+        "zh": "拖动边缘调整 · 框内拖动移动 · 框内单击或 ↵ 确认 · Esc 取消",
+    },
     "editor.adjust_hint": {
-        "en": "Arrows move crop · ⌥ resizes · ⇧ ×10 · until first annotation",
-        "zh": "方向键微调选区 · ⌥ 调大小 · ⇧ ×10 · 开始标注后固定",
+        "en": "Drag edges or arrows to adjust crop · ⌥ resizes · ⇧ ×10 · until first annotation",
+        "zh": "拖动边缘或方向键微调选区 · ⌥ 调大小 · ⇧ ×10 · 开始标注后固定",
     },
     # Linux/X11 variant: ⌥/⇧ are macOS keycap glyphs that speak Mac convention.
     # The editor picks this variant off-darwin so the hint reads natively.
     "editor.adjust_hint_text": {
-        "en": "Arrows move crop · Alt resizes · Shift ×10 · until first annotation",
-        "zh": "方向键微调选区 · Alt 调大小 · Shift ×10 · 开始标注后固定",
+        "en": "Drag edges or arrows to adjust crop · Alt resizes · Shift ×10"
+        " · until first annotation",
+        "zh": "拖动边缘或方向键微调选区 · Alt 调大小 · Shift ×10 · 开始标注后固定",
     },
     # System-tray missing dialog (shown when QSystemTrayIcon.isSystemTrayAvailable
     # is false — GNOME 42+ shipped without legacy tray support is the common case).
