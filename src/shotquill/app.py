@@ -31,6 +31,7 @@ from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
 from shotquill.ui.editor import EditorWindow, RegionContext
+from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
@@ -537,12 +538,25 @@ class ShotquillApp(QObject):
     ) -> None:
         if not self._config.region_adjust():
             region = None  # the user turned crop adjustment off in Settings
-        editor = EditorWindow(image, self._config, origin, region)
+        editor = self._make_editor(image, origin, region)
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)
         editor.show()
         editor.raise_()
         editor.activateWindow()
+
+    def _make_editor(self, image: QImage, origin: QRect | None, region: RegionContext | None):
+        """Pick the editor shell: the unified full-screen spotlight surface when
+        spotlight mode is on and the shot sits on a single screen; otherwise the
+        framed window (titled mode, or a shot spanning screens — e.g. a
+        fullscreen capture — which one surface can't cover)."""
+        from shotquill.ui.spotlight import SpotlightSurface
+
+        if self._config.editor_backdrop() and origin is not None:
+            screen = self._app.screenAt(origin.center())
+            if screen is not None and screen.geometry().contains(origin):
+                return SpotlightSurface(image, self._config, origin, region)
+        return EditorWindow(image, self._config, origin, region)
 
     def _pin_image(self, image: QImage, origin: QRect | None = None) -> None:
         pinned = PinnedWindow(image, origin, self._config)
@@ -620,7 +634,7 @@ class ShotquillApp(QObject):
         # Editors resolve their finish keys at creation; push the new
         # bindings into any that are still open.
         for window in self._windows:
-            if isinstance(window, EditorWindow):
+            if isinstance(window, EditorCoreMixin):  # both editor shells
                 window.reload_finish_keys()
 
     def _forget_settings_dialog(self) -> None:

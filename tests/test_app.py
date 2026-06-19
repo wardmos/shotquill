@@ -933,19 +933,20 @@ def test_open_editor_honours_region_adjust_setting(qapp, config, fakes):
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
 
-    from shotquill.ui.editor import EditorWindow, RegionContext
+    from shotquill.ui.editor import RegionContext
+    from shotquill.ui.editor_core import EditorCoreMixin  # matches either editor shell
 
     app = _build_app(qapp, fakes)
     image = QImage(4, 3, QImage.Format.Format_ARGB32)
     region = RegionContext(image, QRect(0, 0, 4, 3))
 
     app._open_editor(image, QRect(0, 0, 4, 3), region)
-    adjustable = [w for w in app._windows if isinstance(w, EditorWindow)][-1]
+    adjustable = [w for w in app._windows if isinstance(w, EditorCoreMixin)][-1]
     assert adjustable._region is not None
 
     config.set_region_adjust(False)
     app._open_editor(image, QRect(0, 0, 4, 3), region)
-    frozen = [w for w in app._windows if isinstance(w, EditorWindow)][-1]
+    frozen = [w for w in app._windows if isinstance(w, EditorCoreMixin)][-1]
     assert frozen._region is None
 
     adjustable.close()
@@ -1134,3 +1135,91 @@ def test_open_save_folder_notifies_on_failure(qapp, config, fakes, monkeypatch, 
 
     assert notes and "no such volume" in notes[0]
     app.shutdown()
+
+
+# --- editor shell routing: spotlight surface vs framed window ----------------
+
+
+def _fake_screen(rect):
+    class _Screen:
+        def geometry(self):
+            return rect
+
+    return _Screen()
+
+
+def test_make_editor_uses_spotlight_for_a_single_screen_region(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill.ui.spotlight import SpotlightSurface
+
+    app = _build_app(qapp, fakes)
+    # The shot sits well inside one screen, and spotlight mode is on (default).
+    monkeypatch.setattr(qapp, "screenAt", lambda pt: _fake_screen(QRect(0, 0, 1920, 1080)))
+    origin = QRect(100, 100, 300, 200)
+    editor = app._make_editor(QImage(300, 200, QImage.Format.Format_ARGB32), origin, None)
+    try:
+        assert isinstance(editor, SpotlightSurface)
+    finally:
+        editor.close()
+
+
+def test_make_editor_uses_framed_window_when_backdrop_off(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill.ui.editor import EditorWindow
+
+    config.set_editor_backdrop(False)
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(qapp, "screenAt", lambda pt: _fake_screen(QRect(0, 0, 1920, 1080)))
+    origin = QRect(100, 100, 300, 200)
+    editor = app._make_editor(QImage(300, 200, QImage.Format.Format_ARGB32), origin, None)
+    try:
+        assert isinstance(editor, EditorWindow)
+    finally:
+        editor.close()
+
+
+def test_make_editor_uses_framed_window_for_a_multi_screen_shot(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill.ui.editor import EditorWindow
+
+    app = _build_app(qapp, fakes)
+    # The shot spans beyond the screen the surface could cover (e.g. fullscreen
+    # across displays): no single screen contains it, so use the framed window.
+    monkeypatch.setattr(qapp, "screenAt", lambda pt: _fake_screen(QRect(0, 0, 640, 480)))
+    origin = QRect(100, 100, 2000, 1200)
+    editor = app._make_editor(QImage(2000, 1200, QImage.Format.Format_ARGB32), origin, None)
+    try:
+        assert isinstance(editor, EditorWindow)
+    finally:
+        editor.close()
+
+
+def test_apply_settings_reloads_finish_keys_on_both_shells(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill.ui.editor import EditorWindow
+    from shotquill.ui.spotlight import SpotlightSurface
+
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(qapp, "screenAt", lambda pt: _fake_screen(QRect(0, 0, 1920, 1080)))
+    origin = QRect(100, 100, 300, 200)
+    surface = SpotlightSurface(QImage(300, 200, QImage.Format.Format_ARGB32), config, origin, None)
+    window = EditorWindow(QImage(300, 200, QImage.Format.Format_ARGB32), config, origin, None)
+    app._track(surface)
+    app._track(window)
+    reloaded = []
+    monkeypatch.setattr(surface, "reload_finish_keys", lambda: reloaded.append("surface"))
+    monkeypatch.setattr(window, "reload_finish_keys", lambda: reloaded.append("window"))
+    try:
+        app._apply_settings()
+        assert set(reloaded) == {"surface", "window"}
+    finally:
+        surface.close()
+        window.close()
