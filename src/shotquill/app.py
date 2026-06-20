@@ -548,11 +548,18 @@ class ShotquillApp(QObject):
     def _make_editor(self, image: QImage, origin: QRect | None, region: RegionContext | None):
         """Pick the editor shell: the unified full-screen spotlight surface when
         spotlight mode is on and the shot sits on a single screen; otherwise the
-        framed window (titled mode, or a shot spanning screens — e.g. a
-        fullscreen capture — which one surface can't cover)."""
+        framed window (titled mode, a shot spanning screens — e.g. a fullscreen
+        capture — which one surface can't cover, or Wayland).
+
+        The spotlight surface must sit exactly on the selection's screen. On
+        Wayland the compositor ignores a set window position (it tiles/places
+        top-levels itself), so the surface couldn't align with the shot and the
+        crop handles would be off — fall back to the framed window there. macOS
+        and X11 honour the geometry, so they get the surface."""
         from shotquill.ui.spotlight import SpotlightSurface
 
-        if self._config.editor_backdrop() and origin is not None:
+        wayland = self._app.platformName().lower().startswith("wayland")
+        if self._config.editor_backdrop() and origin is not None and not wayland:
             screen = self._app.screenAt(origin.center())
             if screen is not None and screen.geometry().contains(origin):
                 return SpotlightSurface(image, self._config, origin, region)
