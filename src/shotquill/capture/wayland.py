@@ -24,6 +24,7 @@ known PNG. The QtDBus round-trip itself still needs a real-Wayland smoke.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
 from shotquill.capture.qtgrab import _qimage_to_result
@@ -98,10 +99,20 @@ class PortalScreenCapturer(ScreenCapturer):
 
         uri = self._request_screenshot_uri(interactive=False)
         path = _uri_to_path(uri)
-        image = QImage(path)
-        if image.isNull():
-            raise CapabilityUnsupported("capture", f"portal returned an unreadable image: {uri!r}")
-        image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+        # The portal writes the frame to disk and hands back a URI purely as an
+        # IPC transport; ``QImage(path)`` reads it eagerly into memory, so once we
+        # hold it the on-disk copy is a plaintext-screen leak. Remove it after
+        # reading (even an unreadable one) — but only from an ephemeral root, so a
+        # backend that instead saves into the user's Pictures keeps its file.
+        try:
+            image = QImage(path)
+            if image.isNull():
+                raise CapabilityUnsupported(
+                    "capture", f"portal returned an unreadable image: {uri!r}"
+                )
+            image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+        finally:
+            _cleanup_portal_file(path)
         origin, scale = self._geometry(image.width())
         return image, origin, scale
 
@@ -148,13 +159,6 @@ class PortalScreenCapturer(ScreenCapturer):
 
         token = "shotquill_" + uuid.uuid4().hex
         options = {"handle_token": token, "interactive": bool(interactive), "modal": False}
-        reply = iface.call("Screenshot", "", options)
-        args = reply.arguments()
-        if not args:
-            raise CapabilityUnsupported(
-                "capture", f"portal rejected the request: {reply.errorMessage()}"
-            )
-        request_path = args[0]
 
         result: dict = {}
         loop = QEventLoop()
@@ -166,13 +170,46 @@ class PortalScreenCapturer(ScreenCapturer):
             result["results"] = payload[1] if len(payload) > 1 else {}
             loop.quit()
 
-        bus.connect(_PORTAL_SERVICE, request_path, _REQUEST_IFACE, "Response", _on_response)
+        # Subscribe to the request's Response *before* issuing the call. The portal
+        # may emit Response the instant it is done, and a match rule added only
+        # afterwards would miss it — the bus never routes a signal to a client that
+        # was not yet subscribed — leaving us to wait out the full timeout. The
+        # request object path is derivable from our unique name and handle_token
+        # (xdg-desktop-portal API >= 0.9), so we can listen on it ahead of time.
+        predicted_path = _request_handle_path(bus.baseService(), token)
+        connected: list[str] = []
+        if bus.connect(_PORTAL_SERVICE, predicted_path, _REQUEST_IFACE, "Response", _on_response):
+            connected.append(predicted_path)
+
+        reply = iface.call("Screenshot", "", options)
+        args = reply.arguments()
+        if not args:
+            for path in connected:
+                bus.disconnect(_PORTAL_SERVICE, path, _REQUEST_IFACE, "Response", _on_response)
+            raise CapabilityUnsupported(
+                "capture", f"portal rejected the request: {reply.errorMessage()}"
+            )
+        # The reply carries the real request path; on the off chance a backend
+        # picks one we did not predict, listen on that too so we still hear back.
+        request_path = args[0]
+        if request_path and request_path != predicted_path:
+            if bus.connect(_PORTAL_SERVICE, request_path, _REQUEST_IFACE, "Response", _on_response):
+                connected.append(request_path)
+        if not connected:
+            raise CapabilityUnsupported(
+                "capture", "could not subscribe to the portal's Response signal"
+            )
+
         timer = QTimer()
         timer.setSingleShot(True)
         timer.timeout.connect(loop.quit)
         timer.start(_PORTAL_TIMEOUT_MS)
-        loop.exec()
-        bus.disconnect(_PORTAL_SERVICE, request_path, _REQUEST_IFACE, "Response", _on_response)
+        # A Response that already landed (between connect and here) set the result
+        # via the queued slot, so only wait when nothing has arrived yet.
+        if "response" not in result:
+            loop.exec()
+        for path in connected:
+            bus.disconnect(_PORTAL_SERVICE, path, _REQUEST_IFACE, "Response", _on_response)
 
         if "response" not in result:
             raise CapabilityUnsupported("capture", "portal did not respond in time")
@@ -201,6 +238,16 @@ def portal_available() -> bool:
         return False
 
 
+def _request_handle_path(unique_name: str, token: str) -> str:
+    """The Request object path the portal will use for a call, derived ahead of
+    the call so we can subscribe to its Response first (xdg-desktop-portal API
+    >= 0.9): ``/org/freedesktop/portal/desktop/request/<sender>/<token>``, where
+    ``<sender>`` is the caller's unique bus name with its leading ``:`` dropped
+    and every ``.`` turned into ``_``."""
+    sender = unique_name.removeprefix(":").replace(".", "_")
+    return f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
+
+
 def _uri_to_path(uri: str) -> str:
     """Local filesystem path for a portal ``file://`` URI (or a bare path)."""
     from PySide6.QtCore import QUrl
@@ -208,3 +255,48 @@ def _uri_to_path(uri: str) -> str:
     if uri.startswith("file://"):
         return QUrl(uri).toLocalFile()
     return uri
+
+
+def _ephemeral_roots() -> list[Path]:
+    """Directories a portal backend uses for throwaway screenshot files.
+
+    The runtime dir, the system temp dir, and the XDG cache — all auto-cleaned or
+    explicitly scratch space. A file outside these (e.g. ``~/Pictures``) is
+    treated as a user-visible artifact and left alone.
+    """
+    import os
+    import tempfile
+
+    roots = [
+        Path(tempfile.gettempdir()),
+        Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"),
+    ]
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        roots.append(Path(runtime))
+    return roots
+
+
+def _cleanup_portal_file(path: str) -> None:
+    """Best-effort removal of the throwaway PNG the portal wrote for us.
+
+    Scoped to :func:`_ephemeral_roots` so we never delete a screenshot a backend
+    routed into the user's own folder; wrapped so a failed unlink never breaks the
+    capture (the image is already in memory by the time this runs)."""
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return
+    if not any(_is_within(resolved, root) for root in _ephemeral_roots()):
+        return
+    try:
+        resolved.unlink()
+    except OSError:
+        pass
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        return path.is_relative_to(root.resolve())
+    except OSError:
+        return False
