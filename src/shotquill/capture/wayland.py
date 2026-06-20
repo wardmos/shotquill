@@ -100,19 +100,22 @@ class PortalScreenCapturer(ScreenCapturer):
         uri = self._request_screenshot_uri(interactive=False)
         path = _uri_to_path(uri)
         # The portal writes the frame to disk and hands back a URI purely as an
-        # IPC transport; ``QImage(path)`` reads it eagerly into memory, so once we
-        # hold it the on-disk copy is a plaintext-screen leak. Remove it after
-        # reading (even an unreadable one) — but only from an ephemeral root, so a
-        # backend that instead saves into the user's Pictures keeps its file.
+        # IPC transport. Read the bytes ourselves and drop the file rather than
+        # hand the path to ``QImage``: the plaintext frame is then never held open
+        # by Qt, so the cleanup always succeeds — even where the OS locks a file
+        # that is open (and even an undecodable one, which Qt may not release).
+        # Removal is scoped to an ephemeral root, so a backend that saves into the
+        # user's own folder keeps its file.
         try:
-            image = QImage(path)
-            if image.isNull():
-                raise CapabilityUnsupported(
-                    "capture", f"portal returned an unreadable image: {uri!r}"
-                )
-            image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+            data = Path(path).read_bytes()
+        except OSError:
+            data = b""  # missing/unreadable → falls through to the isNull error
         finally:
             _cleanup_portal_file(path)
+        image = QImage.fromData(data)
+        if image.isNull():
+            raise CapabilityUnsupported("capture", f"portal returned an unreadable image: {uri!r}")
+        image = image.convertToFormat(QImage.Format.Format_RGBA8888)
         origin, scale = self._geometry(image.width())
         return image, origin, scale
 
