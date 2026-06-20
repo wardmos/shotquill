@@ -59,6 +59,23 @@ def test_new_session_id_format():
     assert sid == "conv-20260613-100003-abc123"
 
 
+@pytest.mark.parametrize(
+    "bad",
+    ["../escape", "a/b", "..", ".", ".hidden", "x\\y", "foo/../bar", "/abs"],
+)
+def test_start_rejects_path_traversal_ids(tmp_path, bad):
+    # A caller-supplied id must be an inert name, never a path: ../x would file
+    # the session outside the records root (and later smuggle a Zip-Slip entry).
+    with pytest.raises(record.RecordError, match="invalid session id"):
+        record.start_session(records_root=tmp_path, session_id=bad)
+    assert list(tmp_path.iterdir()) == []  # nothing created on the way out
+
+
+def test_start_accepts_ordinary_ids(tmp_path):
+    session = record.start_session(records_root=tmp_path, session_id="conv-OK_1.2-3")
+    assert session.dir == tmp_path / "conv-OK_1.2-3"
+
+
 def test_record_frame_appends_and_writes_image(tmp_path):
     session = record.start_session(records_root=tmp_path, session_id="conv-1", now=_FIXED)
     frame = record.record_frame(
