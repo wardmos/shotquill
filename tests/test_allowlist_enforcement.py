@@ -53,6 +53,10 @@ class FakeCapturer:
         self.captured.append(("window", window_id))
         return self._result()
 
+    def capture_interactive(self):
+        self.captured.append("interactive")
+        return self._result()
+
     def list_windows(self):
         if self._list_raises is not None:
             raise self._list_raises
@@ -159,6 +163,24 @@ def test_display_is_refused_when_allowlist_enabled():
     with pytest.raises(headless.CaptureBlocked):
         headless.perform_capture(cap, display=0, blocklist=EMPTY, allowlist=TERM_ONLY)
     assert cap.captured == []
+
+
+def test_interactive_is_refused_when_allowlist_enabled():
+    # The compositor picker can land on any window or the whole screen, so the
+    # "only these apps" allowlist refuses it outright — same as a fullscreen grab.
+    cap = FakeCapturer(windows=[TERMINAL])
+    with pytest.raises(headless.CaptureBlocked) as exc:
+        headless.perform_interactive_capture(cap, allowlist=TERM_ONLY)
+    assert exc.value.exit_code == headless.EXIT_BLOCKED
+    assert cap.captured == []  # refused before the picker is ever shown
+
+
+def test_interactive_proceeds_when_allowlist_disabled():
+    cap = FakeCapturer(windows=[TERMINAL])
+    result, target, matched = headless.perform_interactive_capture(cap, allowlist=DISABLED)
+    assert isinstance(result, CaptureResult)
+    assert (target, matched) == ("interactive", 1)
+    assert cap.captured == ["interactive"]
 
 
 # --- disabled allowlist is inert --------------------------------------------

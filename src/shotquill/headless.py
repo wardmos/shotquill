@@ -331,6 +331,30 @@ def _refuse_whole_screen_under_allowlist(kind: str, *, via: str) -> None:
     )
 
 
+def perform_interactive_capture(
+    capturer: ScreenCapturer, *, allowlist=None, via: str = "cli"
+) -> tuple[CaptureResult, str, int]:
+    """Drive an interactive (compositor-picked) capture, honouring the allowlist.
+
+    The picker may land on any window or the whole screen, so — exactly like a
+    fullscreen / region / display grab — an enforcing allowlist refuses it: its
+    "only these apps" contract cannot be honoured for a user-framed selection.
+    Keeping the gate here (not in the CLI) means every front-end and the audit
+    log get the same policy the other whole-screen paths already do.
+
+    The blocklist is deliberately *not* applied: the backend hands back an
+    already-composited selection and Wayland cannot enumerate windows to redact,
+    so the compositor's own picker plus a human at the keyboard is the gate.
+
+    Returns ``(result, "interactive", 1)`` to match :func:`perform_capture`.
+    """
+    if allowlist is None:
+        allowlist = active_allowlist()
+    if allowlist:
+        _refuse_whole_screen_under_allowlist("interactive", via=via)
+    return capturer.capture_interactive(), "interactive", 1
+
+
 def perform_capture(
     capturer: ScreenCapturer,
     *,
