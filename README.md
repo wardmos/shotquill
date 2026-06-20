@@ -183,7 +183,8 @@ on macOS, text labels on Linux/Windows).
 > **Linux / Wayland**: global hotkeys are blocked by the compositor; ShotQuill
 > raises a notification at startup so you can fall back to the tray menu, or
 > bind a compositor-level shortcut to `squill capture` (full screen) /
-> `squill capture --interactive` (planned).
+> `squill capture --interactive` (the compositor's own picker frames a window,
+> region, or screen).
 
 ### What happens after a capture
 

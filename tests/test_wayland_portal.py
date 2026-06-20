@@ -68,6 +68,24 @@ def test_fullscreen_reports_geometry_origin_and_scale(capturer, monkeypatch, tmp
     assert result.scale == 2.0
 
 
+def test_interactive_requests_the_portal_picker(capturer, monkeypatch, tmp_path):
+    # --interactive must drive the portal with interactive=True so the
+    # compositor shows its own area/window/screen picker; the returned (already
+    # cropped) frame is handed back as-is.
+    seen = {}
+    uri = _write_png(tmp_path / "shot.png", 12, 9)
+
+    def _stub(interactive=False):
+        seen["interactive"] = interactive
+        return uri
+
+    monkeypatch.setattr(capturer, "_request_screenshot_uri", _stub)
+    monkeypatch.setattr(type(capturer), "_geometry", staticmethod(lambda w: ((0, 0), 1.0)))
+    result = capturer.capture_interactive()
+    assert seen["interactive"] is True
+    assert (result.width, result.height) == (12, 9)
+
+
 def test_region_is_cropped_locally(capturer, monkeypatch, tmp_path):
     uri = _write_png(tmp_path / "shot.png", 20, 16)
     _stub_uri(monkeypatch, capturer, uri)

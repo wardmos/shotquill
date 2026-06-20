@@ -108,6 +108,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_target_options(capture)
     capture.add_argument(
+        "--interactive",
+        action="store_true",
+        help="frame the shot interactively — the compositor's own picker chooses "
+        "a window, region, or screen (Wayland only for now; meant for a "
+        "compositor-bound hotkey where global key grabs are blocked)",
+    )
+    capture.add_argument(
         "-o",
         "--output",
         help="output file path, or '-' for image bytes on stdout (default: temp dir)",
@@ -607,21 +614,28 @@ def _capture_image(
     caller masks but before the reveal mosaic, so the redaction joins the same
     raw-pixel stage."""
     capturer = headless.get_capturer(include_cursor=include_cursor)
-    result, target, matched = headless.perform_capture(
-        capturer,
-        window_id=args.window_id,
-        app=args.app,
-        title=args.title,
-        region=region,
-        display=args.display,
-    )
-    if matched > 1 and not getattr(args, "json", False):
-        # In --json mode the ambiguity rides along in the payload instead.
-        print(
-            f"squill: {matched} windows match; captured the front-most"
-            " (use --window-id for an exact pick)",
-            file=sys.stderr,
+    if getattr(args, "interactive", False):
+        # The compositor frames the shot and hands back the user's selection.
+        # An enforcing allowlist still refuses it (the picker can land on any
+        # window or the whole screen — same contract as a fullscreen grab); the
+        # blocklist cannot apply on Wayland, so the picker is the only gate.
+        result, target, matched = headless.perform_interactive_capture(capturer, via="cli")
+    else:
+        result, target, matched = headless.perform_capture(
+            capturer,
+            window_id=args.window_id,
+            app=args.app,
+            title=args.title,
+            region=region,
+            display=args.display,
         )
+        if matched > 1 and not getattr(args, "json", False):
+            # In --json mode the ambiguity rides along in the payload instead.
+            print(
+                f"squill: {matched} windows match; captured the front-most"
+                " (use --window-id for an exact pick)",
+                file=sys.stderr,
+            )
 
     result = headless.apply_masks(result, list(masks))
     if redact_pii_recognizer is not None:
@@ -642,6 +656,24 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         # The pointer moves between frames, so compositing it is the opposite of
         # byte-stable; refusing is clearer than silently dropping one of them.
         return _usage_error("--deterministic and --include-cursor conflict; the cursor must be off")
+    if args.interactive:
+        # The picker chooses the target, so an explicit target option is a
+        # contradiction — refuse it rather than silently honour one or the other.
+        conflicts = [
+            name
+            for name, value in (
+                ("--window-id", args.window_id),
+                ("--app", args.app),
+                ("--title", args.title),
+                ("--region", args.region),
+                ("--display", args.display),
+            )
+            if value is not None
+        ]
+        if conflicts:
+            return _usage_error(
+                "--interactive picks the target itself; it conflicts with " + ", ".join(conflicts)
+            )
 
     # --deterministic forces the cursor off so the same scene always encodes the
     # same way; --include-cursor is rejected above, so this just stays the default.

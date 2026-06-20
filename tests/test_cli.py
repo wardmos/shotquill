@@ -57,6 +57,10 @@ class FakeCapturer:
         self.calls.append(("window", window_id))
         return _result()
 
+    def capture_interactive(self) -> CaptureResult:
+        self.calls.append(("interactive",))
+        return _result()
+
     def list_windows(self) -> list[WindowInfo]:
         return self.windows
 
@@ -206,6 +210,61 @@ def test_capture_display_json_names_the_display(fake_capturer, capsys):
 def test_capture_unknown_display_exits_5(fake_capturer, capsys):
     assert cli.main(["capture", "--display", "9"]) == headless.EXIT_NO_MATCH
     assert "no display 9" in capsys.readouterr().err
+
+
+def test_capture_interactive_routes_to_the_picker(fake_capturer, capsys, isolated_audit):
+    assert cli.main(["capture", "--interactive"]) == 0
+    assert fake_capturer.calls == [("interactive",)]
+
+
+def test_capture_interactive_target_is_named_interactive(fake_capturer, capsys, isolated_audit):
+    assert cli.main(["capture", "--interactive", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["target"] == "interactive"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [["--window-id", "1"], ["--app", "safari"], ["--region", "0,0,5,5"], ["--display", "0"]],
+)
+def test_capture_interactive_conflicts_with_a_target(fake_capturer, capsys, target):
+    assert cli.main(["capture", "--interactive", *target]) == 2
+    assert "--interactive picks the target itself" in capsys.readouterr().err
+    assert fake_capturer.calls == []
+
+
+def test_capture_interactive_refused_under_allowlist_exits_6(fake_capturer, tmp_path, capsys):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    al.save(
+        al.Allowlist(enabled=True, rules=(bl.BlockRule(name="firefox"),)),
+        tmp_path / "allowlist.json",
+    )
+    assert cli.main(["capture", "--interactive"]) == headless.EXIT_BLOCKED
+    assert "allowlist" in capsys.readouterr().err.lower()
+    assert fake_capturer.calls == []  # refused before the picker is ever shown
+
+
+def test_capture_interactive_unsupported_platform_exits_4(monkeypatch, capsys):
+    pytest.importorskip("PySide6")
+    from shotquill.capture.base import ScreenCapturer
+
+    class NoPicker(ScreenCapturer):
+        def capture_fullscreen(self, exclude_window_ids=frozenset()):
+            raise AssertionError("should not capture")
+
+        def capture_region(self, region):
+            raise AssertionError("should not capture")
+
+        def list_windows(self):
+            return []
+
+        def capture_window(self, window_id):
+            raise AssertionError("should not capture")
+
+    monkeypatch.setattr(headless, "get_capturer", lambda include_cursor=False: NoPicker())
+    assert cli.main(["capture", "--interactive"]) == headless.EXIT_UNSUPPORTED
+    assert "only supported on Wayland" in capsys.readouterr().err
 
 
 def test_capture_display_excludes_other_targets(fake_capturer):

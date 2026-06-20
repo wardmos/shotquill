@@ -135,6 +135,22 @@ class ScreenCapturer(ABC):
         works for every current backend, and existing test fakes satisfy the
         interface without knowing about displays."""
 
+    def capture_interactive(self) -> CaptureResult:
+        """Let the platform's own picker frame the shot (window / region /
+        screen) and return the selected frame — the grab behind
+        ``squill capture --interactive``.
+
+        Default: unsupported. Only the Wayland portal backend offers it today,
+        where the compositor provides the framing UI and hands back the
+        already-cropped selection. The other platforms have no out-of-band
+        picker; an interactive grab there would have to drive the in-app
+        smart-capture overlay, which is not wired into the headless path yet."""
+        from shotquill.headless import CapabilityUnsupported
+
+        raise CapabilityUnsupported(
+            "interactive capture", "interactive capture is only supported on Wayland for now"
+        )
+
     def list_displays(self) -> list[DisplayInfo]:
         """List displays, primary first; a display capture is a region capture
         of the returned bounds.

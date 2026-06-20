@@ -83,6 +83,15 @@ class PortalScreenCapturer(ScreenCapturer):
             image.copy(crop.intersected(image.rect())), scale, origin=(region.x, region.y)
         )
 
+    def capture_interactive(self) -> CaptureResult:
+        # The compositor shows its own area/window/screen picker and the portal
+        # returns that selection already cropped, so we just load and hand it
+        # back. This is the grab the global-hotkey fallback documents — bind a
+        # compositor shortcut to ``squill capture --interactive`` where Wayland
+        # blocks out-of-band key grabs.
+        image, origin, scale = self._grab(interactive=True)
+        return _qimage_to_result(image, scale, origin=origin)
+
     def list_windows(self) -> list[WindowInfo]:
         raise CapabilityUnsupported(
             "list_windows", "Wayland does not allow enumerating other apps' windows"
@@ -93,11 +102,15 @@ class PortalScreenCapturer(ScreenCapturer):
             "capture_window", "Wayland does not allow capturing another app's window directly"
         )
 
-    def _grab(self):
-        """Portal screenshot → ``(QImage, (origin_x, origin_y), scale)``."""
+    def _grab(self, interactive: bool = False):
+        """Portal screenshot → ``(QImage, (origin_x, origin_y), scale)``.
+
+        ``interactive`` lets the compositor show its own area/window/screen
+        picker and return the frame the user selected (already cropped); the
+        default grabs the whole virtual desktop without a prompt."""
         from PySide6.QtGui import QImage
 
-        uri = self._request_screenshot_uri(interactive=False)
+        uri = self._request_screenshot_uri(interactive=interactive)
         path = _uri_to_path(uri)
         # The portal writes the frame to disk and hands back a URI purely as an
         # IPC transport. Read the bytes ourselves and drop the file rather than
