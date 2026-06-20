@@ -113,7 +113,9 @@ The parts agents rely on:
   prints *where* they differ as a pixel box (`changed: x,y,w,h`), or notes a size
   mismatch. `--threshold N` absorbs anti-aliasing/compression noise (default `0` =
   exact, right for lossless PNG); `--json` gives the structured verdict. Either
-  argument may be `-` to read one image from stdin.
+  argument may be `-` to read one image from stdin. See
+  [`skills/golden-image/SKILL.md`](../skills/golden-image/SKILL.md) for the
+  capture-deterministic → diff-against-baseline recipe.
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.

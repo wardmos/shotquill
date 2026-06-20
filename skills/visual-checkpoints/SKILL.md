@@ -64,6 +64,10 @@ record_start  →  (work normally)  →  record_frame + assert at each checkpoin
    user at it. **Always end**, even on failure — a trail that stops at the broken
    checkpoint is exactly what a reviewer needs.
 
+To hand off, list, or clear sessions afterwards, the same `record_export` /
+`record_list` / `record_prune` tools apply — see
+[`flight-recorder`](../flight-recorder/SKILL.md) ("After the session").
+
 ## Capture to look, record_frame to commit a checkpoint
 
 - Use **`capture`** (or **`ocr`**) when you just need to *see* the screen to
@@ -88,16 +92,15 @@ that matter, and the recording itself is the pass/fail evidence.
 
 ## Privacy
 
-- Blocklist redaction is **on and cannot be turned off** mid-session, so an app
-  the user blocklisted (a password manager, say) is masked out of the archive.
-- This is **not** a guarantee the frames are free of user content — your app and
-  the user's data can be the same pixels. Don't tell the user a recording is
-  "safe to share"; it is minimized and stays local.
+- Blocklist redaction is **on and cannot be turned off** mid-session, and frames
+  never leave the machine on their own — but redaction only removes the *known*
+  apps the user listed, so a frame is **not** guaranteed free of user content.
+  Tell the user a recording is minimized and local, never that it's "safe to
+  share". (Same model as [`flight-recorder`](../flight-recorder/SKILL.md) —
+  see its Privacy note for the full version.)
 - **Narrow the surface**: pass `app` / `window_id` / `region` so each frame is
   just the app under test, not the whole desktop. That is the simplest privacy
   win and makes the trace clearer.
-- Frames never leave the machine on their own. ShotQuill makes no network
-  requests; the session is files on disk until someone moves them.
 
 ## Setup
 

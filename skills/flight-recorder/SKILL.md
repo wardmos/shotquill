@@ -100,6 +100,40 @@ for a person who wasn't there:
 - Good: `tool: "type"`, `label: "enter the 2FA code from the authenticator"`
 - Weak: `tool: "step"`, `label: "frame 3"` — says nothing the timestamp doesn't.
 
+## After the session: share, list, clear
+
+`record_end` closes a session and leaves it on disk. Three more tools manage what
+happens to it next — each has an MCP tool and a `squill record …` CLI form.
+
+- **Hand off a single trace** with `record_export`: it bundles one session
+  (manifest + frames + filmstrip) into a single archive a reviewer can open
+  elsewhere. `format` is `tar.gz` (default) or `zip`. Pass `fail_on_pii: true`
+  (CLI `--fail-on-pii`) to **refuse the export** (exit `6`) if any frame still
+  carries a best-effort PII flag — so a flagged trace isn't shared off the
+  machine by accident. Exporting still does not make the frames "safe": see
+  Privacy below.
+
+  ```bash
+  squill record export --session "$DIR" --format zip --fail-on-pii
+  ```
+
+- **See what's accumulated** with `record_list`: every session newest-first with
+  its id, status, frame count, and size on disk — so you know what's there before
+  you export or prune.
+
+- **Cap disk cost** with `record_prune`: delete old **complete** sessions by
+  `max_age_days` and/or `max_sessions` (it keeps the newest N). It needs at least
+  one bound. Pass `dry_run: true` first to see what *would* go — it reports the
+  ids and bytes it would free without deleting:
+
+  ```bash
+  squill record prune --max-sessions 20 --dry-run   # preview
+  squill record prune --max-sessions 20             # then delete
+  ```
+
+  Pruning only ever touches finished sessions, so an open recording is never
+  removed out from under you.
+
 ## Privacy: what recording does and does not do
 
 - Blocklist redaction is **on by default and cannot be turned off** mid-session,
