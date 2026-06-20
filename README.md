@@ -76,7 +76,8 @@ editor to annotate, redact, and extract text first.
   Tesseract on Linux (when installed), and the WinRT engine on Windows (via the
   optional `windows-ocr` extra).
 - **Scriptable & agent-ready** — a headless CLI
-  (`squill capture` / `windows` / `ocr` / `doctor` — one path on stdout, exit
+  (`squill capture` / `windows` / `displays` / `ocr` / `diff` / `record` /
+  `doctor` / `mcp`, plus `blocklist` / `allowlist` — one path on stdout, exit
   codes as the contract) and a built-in MCP server that gives AI
   agents eyes on your screen. Every programmatic capture is audit-logged.
   See [Scripting & agents](docs/scripting.md).
@@ -246,12 +247,15 @@ Run bare it launches the GUI; with a subcommand it stays headless and prints one
 path on stdout (warnings on stderr), with exit codes as the contract. It captures
 one image (`capture`), reads or asserts on-screen text (`ocr`), or records an
 ordered trail of frames an agent leaves behind (`record`) — and the same loop is
-exposed to MCP clients as eight tools.
+exposed to MCP clients as eleven tools.
 
 **→ Full reference: [docs/scripting.md](docs/scripting.md)** — the stdout/exit-code
 contract, capture flags (`--json` / `--max-width` / `--deterministic` / `--mask` /
 `--reveal`),
-OCR assertions, the flight recorder + OpenTelemetry trace export, and the MCP
+OCR assertions, **best-effort PII redaction** (`capture --redact-pii`,
+`record frame --scan-pii` / `--redact-pii`, `record export --fail-on-pii` —
+OCR the frame and mask or flag likely emails, cards, SSNs before output),
+the flight recorder + OpenTelemetry trace export, and the MCP
 tools. The exit-code contract is also printed in every `squill … --help`.
 
 ---
@@ -500,6 +504,12 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
   nothing is uploaded, and it works with no network connection.
 - **Redaction is real.** The mosaic tool rewrites the underlying pixels before
   export, so blurred-out content isn't recoverable from the saved image.
+- **PII can be redacted automatically.** Programmatic captures can OCR a frame
+  and mask likely personal data — emails, card numbers, SSNs — before it ever
+  leaves ShotQuill (`squill capture --redact-pii`, `record frame --scan-pii` /
+  `--redact-pii`, `record export --fail-on-pii`). It is best-effort, not a
+  guarantee, and runs fully on-device. See
+  [Scripting & agents](docs/scripting.md).
 - **Sensitive apps can be blocklisted.** Name a password manager (or any app)
   and ShotQuill refuses to capture its windows and paints it out of full-screen
   shots — for the GUI, CLI, and agents alike. See [App blocklist](#app-blocklist).
@@ -524,15 +534,15 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 Python 3.10+ + [PySide6](https://doc.qt.io/qtforpython/) (Qt) for a self-drawn,
 cross-platform UI:
 
-| Concern               | macOS                                                 | Linux                                                  |
-| --------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
-| GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                  | same                                                   |
-| Screen capture        | ScreenCaptureKit (macOS 14+), `CGWindowList*` fallback | X11: `QScreen.grabWindow`; Wayland: `xdg-desktop-portal` over QtDBus |
-| Window enumeration    | `CGWindowList` (always available)                     | X11: EWMH over `python-xlib`; Wayland: by design refuses |
-| Global hotkeys        | `pynput` (Quartz event tap; needs Input Monitoring)   | `pynput` X11 listener (no permission needed); Wayland refuses (use compositor shortcuts) |
-| Launch at login       | per-user `LaunchAgent`                                | XDG `~/.config/autostart/shotquill.desktop`            |
-| Image processing      | Qt (`QImage`)                                          | same                                                   |
-| OCR                   | `pyobjc` → Apple Vision                                | `tesseract` CLI (when installed)                       |
+| Concern               | macOS                                                 | Linux                                                  | Windows                                                |
+| --------------------- | ----------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
+| GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                  | same                                                   | same                                                   |
+| Screen capture        | ScreenCaptureKit (macOS 14+), `CGWindowList*` fallback | X11: `QScreen.grabWindow`; Wayland: `xdg-desktop-portal` over QtDBus | `QScreen.grabWindow` (per-window via `user32`) |
+| Window enumeration    | `CGWindowList` (always available)                     | X11: EWMH over `python-xlib`; Wayland: by design refuses | `user32` `EnumWindows` (Z-order top-level windows)   |
+| Global hotkeys        | `pynput` (Quartz event tap; needs Input Monitoring)   | `pynput` X11 listener (no permission needed); Wayland refuses (use compositor shortcuts) | `pynput` Win32 listener (no permission needed) |
+| Launch at login       | per-user `LaunchAgent`                                | XDG `~/.config/autostart/shotquill.desktop`            | per-user `Run` key (`HKCU\…\CurrentVersion\Run`)       |
+| Image processing      | Qt (`QImage`)                                          | same                                                   | same                                                   |
+| OCR                   | `pyobjc` → Apple Vision                                | `tesseract` CLI (when installed)                       | WinRT `Windows.Media.Ocr` (optional `windows-ocr` extra) |
 
 Platform-specific code (capture, hotkeys, OCR, autostart) sits behind small
 `base.py` interfaces, so the editor and output layers stay portable and adding a
@@ -652,7 +662,8 @@ pipx uninstall shotquill               # pipx install
 - [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
 - [x] On-device OCR (macOS Vision; Linux Tesseract)
 - [x] Hands-free auto save + clipboard
-- [x] CLI for scripts & AI agents (`squill capture` / `windows` / `ocr` / `doctor`)
+- [x] CLI for scripts & AI agents (`squill capture` / `windows` / `displays` /
+      `ocr` / `diff` / `record` / `doctor` / `mcp`, plus `blocklist` / `allowlist`)
 - [x] MCP server, so agents can capture and read the screen over Model Context Protocol
 - [x] **Linux / X11 backends — GUI, CLI, and MCP**: menu-bar app via PySide6 +
       XDG autostart, full-screen / region capture via `QScreen.grabWindow`,

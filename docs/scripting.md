@@ -266,14 +266,15 @@ or in `claude_desktop_config.json`:
 }
 ```
 
-Nine tools: **capture** (full screen / window by id or app+title / one
+Eleven tools: **capture** (full screen / window by id or app+title / one
 monitor by `display` index / region; returns the image inline — pass
 `max_width` to downscale and save context; `save_path` optionally persists),
 **list_windows**, **list_displays**, **ocr** (a file, or
 capture-and-recognize fully in memory so reading on-screen text costs no
 image tokens), **doctor**, and the flight-recorder tools **record_start** /
-**record_frame** / **record_end** / **record_export** (the CLI `record` session
-above, driven by an agent: frames go to disk, not into the agent's context).
+**record_frame** / **record_end** / **record_export** / **record_list** /
+**record_prune** (the CLI `record` session above, driven by an agent: frames
+go to disk, not into the agent's context).
 Built for agent ergonomics: every tool
 declares an `outputSchema` and returns typed `structuredContent` (no
 re-parsing JSON out of text), the read-only tools are annotated
