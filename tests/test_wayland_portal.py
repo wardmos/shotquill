@@ -28,6 +28,15 @@ def _write_png(path, width, height, rgb=(200, 30, 30)) -> str:
     return QUrl.fromLocalFile(str(path)).toString()
 
 
+def _file_uri(path) -> str:
+    """A portable ``file://`` URI for a local path. ``f"file://{path}"`` is
+    malformed on Windows, where the drive letter (``C:``) is parsed as the URI
+    host, so the path no longer resolves back to the file."""
+    from PySide6.QtCore import QUrl
+
+    return QUrl.fromLocalFile(str(path)).toString()
+
+
 @pytest.fixture
 def capturer(qapp):
     from shotquill.capture.wayland import PortalScreenCapturer
@@ -79,7 +88,7 @@ def test_region_outside_screen_is_rejected(capturer, monkeypatch, tmp_path):
 
 def test_unreadable_portal_image_is_typed_unsupported(capturer, monkeypatch, tmp_path):
     missing = tmp_path / "gone.png"  # never written → QImage load fails
-    _stub_uri(monkeypatch, capturer, f"file://{missing}")
+    _stub_uri(monkeypatch, capturer, _file_uri(missing))
     with pytest.raises(headless.CapabilityUnsupported):
         capturer.capture_fullscreen()
 
@@ -103,7 +112,7 @@ def test_portal_temp_file_removed_even_when_image_is_unreadable(capturer, monkey
 
     junk = tmp_path / "broken.png"
     junk.write_bytes(b"not a png")
-    _stub_uri(monkeypatch, capturer, f"file://{junk}")
+    _stub_uri(monkeypatch, capturer, _file_uri(junk))
     monkeypatch.setattr(wayland, "_ephemeral_roots", lambda: [tmp_path])
     with pytest.raises(headless.CapabilityUnsupported):
         capturer.capture_fullscreen()
