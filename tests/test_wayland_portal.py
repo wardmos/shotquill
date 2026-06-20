@@ -28,6 +28,15 @@ def _write_png(path, width, height, rgb=(200, 30, 30)) -> str:
     return QUrl.fromLocalFile(str(path)).toString()
 
 
+def _file_uri(path) -> str:
+    """A portable ``file://`` URI for a local path. ``f"file://{path}"`` is
+    malformed on Windows, where the drive letter (``C:``) is parsed as the URI
+    host, so the path no longer resolves back to the file."""
+    from PySide6.QtCore import QUrl
+
+    return QUrl.fromLocalFile(str(path)).toString()
+
+
 @pytest.fixture
 def capturer(qapp):
     from shotquill.capture.wayland import PortalScreenCapturer
@@ -79,9 +88,49 @@ def test_region_outside_screen_is_rejected(capturer, monkeypatch, tmp_path):
 
 def test_unreadable_portal_image_is_typed_unsupported(capturer, monkeypatch, tmp_path):
     missing = tmp_path / "gone.png"  # never written → QImage load fails
-    _stub_uri(monkeypatch, capturer, f"file://{missing}")
+    _stub_uri(monkeypatch, capturer, _file_uri(missing))
     with pytest.raises(headless.CapabilityUnsupported):
         capturer.capture_fullscreen()
+
+
+def test_portal_temp_file_is_removed_after_read(capturer, monkeypatch, tmp_path):
+    # The portal's on-disk PNG is a plaintext-screen copy; once read into memory
+    # it must not linger in scratch space.
+    from shotquill.capture import wayland
+
+    shot = tmp_path / "shot.png"
+    _stub_uri(monkeypatch, capturer, _write_png(shot, 8, 6))
+    monkeypatch.setattr(wayland, "_ephemeral_roots", lambda: [tmp_path])
+    result = capturer.capture_fullscreen()
+    assert (result.width, result.height) == (8, 6)  # read succeeded
+    assert not shot.exists()  # and the file did not linger
+
+
+def test_portal_temp_file_removed_even_when_image_is_unreadable(capturer, monkeypatch, tmp_path):
+    # An undecodable frame is still a plaintext file on disk; clean it up too.
+    from shotquill.capture import wayland
+
+    junk = tmp_path / "broken.png"
+    junk.write_bytes(b"not a png")
+    _stub_uri(monkeypatch, capturer, _file_uri(junk))
+    monkeypatch.setattr(wayland, "_ephemeral_roots", lambda: [tmp_path])
+    with pytest.raises(headless.CapabilityUnsupported):
+        capturer.capture_fullscreen()
+    assert not junk.exists()
+
+
+def test_portal_file_outside_ephemeral_root_is_kept(capturer, monkeypatch, tmp_path):
+    # A backend that routes the screenshot into the user's own folder owns that
+    # file — never delete it.
+    from shotquill.capture import wayland
+
+    pictures = tmp_path / "Pictures"
+    pictures.mkdir()
+    shot = pictures / "Screenshot.png"
+    _stub_uri(monkeypatch, capturer, _write_png(shot, 8, 6))
+    monkeypatch.setattr(wayland, "_ephemeral_roots", lambda: [tmp_path / "ephemeral"])
+    capturer.capture_fullscreen()
+    assert shot.exists()
 
 
 def test_portal_failure_propagates(capturer, monkeypatch):
@@ -105,6 +154,19 @@ def test_uri_to_path_handles_file_uri_and_bare_path():
 
     assert _uri_to_path("file:///tmp/a.png") == "/tmp/a.png"
     assert _uri_to_path("/tmp/b.png") == "/tmp/b.png"
+
+
+def test_request_handle_path_derives_per_portal_spec():
+    # Subscribing to Response before the call needs the request path computed up
+    # front: the unique name loses its leading ':' and every '.' becomes '_'.
+    from shotquill.capture.wayland import _request_handle_path
+
+    assert (
+        _request_handle_path(":1.42", "shotquill_abc")
+        == "/org/freedesktop/portal/desktop/request/1_42/shotquill_abc"
+    )
+    # An already-sanitized name (no leading colon) only gets the dot swap.
+    assert _request_handle_path("1.512", "t") == "/org/freedesktop/portal/desktop/request/1_512/t"
 
 
 def test_wayland_session_detection(monkeypatch):
