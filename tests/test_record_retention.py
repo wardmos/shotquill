@@ -239,6 +239,16 @@ def test_export_session_rejects_unknown_format(tmp_path):
         record.export_session(session, fmt="rar")
 
 
+def test_export_session_rejects_traversing_id(tmp_path):
+    # Defence in depth: a Session whose id is a path (e.g. from a hand-edited
+    # manifest's conversation_id) must not produce a Zip/Tar-Slip archive.
+    session = record.start_session(records_root=tmp_path, session_id="conv-ok", now=_at(1))
+    record.record_frame(session, image_bytes=_PNG_A, tool="t", target="x", now=_at(1))
+    poisoned = record.Session(id="../evil", dir=session.dir)
+    with pytest.raises(record.RecordError, match="unsafe session id"):
+        record.export_session(poisoned, tmp_path / "out.tar.gz")
+
+
 # --- export: CLI + MCP surfaces ---------------------------------------------
 
 

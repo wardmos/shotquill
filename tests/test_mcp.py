@@ -485,6 +485,16 @@ def test_ocr_path_and_capture_target_is_invalid_arguments(fake_recognizer, fake_
     assert fake_capturer.calls == []  # neither interpretation was guessed at
 
 
+def test_ocr_empty_path_is_invalid_arguments_not_a_screen_capture(fake_recognizer, fake_capturer):
+    # A present-but-empty path must error, not silently fall through to OCRing
+    # the live screen (which would widen the read past what the agent asked for).
+    for blank in ("", "   "):
+        result = call("ocr", {"path": blank})["result"]
+        assert result["isError"] is True
+        assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
+    assert fake_capturer.calls == []  # no capture was triggered
+
+
 def test_ocr_text_block_strips_control_chars(fake_capturer, isolated_audit, monkeypatch):
     # OCR'd text is attacker-controllable; the rendered text block must drop
     # control chars (an MCP host may show it in a terminal), while the structured
