@@ -797,3 +797,22 @@ def test_width_spinbox_never_takes_keyboard_focus(qtbot, config):
     spinbox = window.findChild(QSpinBox)
     assert spinbox.focusPolicy() == Qt.NoFocus
     assert spinbox.lineEdit().focusPolicy() == Qt.NoFocus
+
+
+def test_closing_editor_closes_the_crop_overlay(qtbot, config):
+    # The crop-adjust surface is a separate top-level window held only by the
+    # editor; closing the editor (e.g. Cmd-Q while it is up) must close it too
+    # and drop the reference, so it can't outlive its host with dangling signals.
+    screenshot = _image(100, 50)
+    origin = QRect(10, 10, 30, 20)
+    window = EditorWindow(
+        screenshot.copy(origin), config, origin, RegionContext(screenshot, QRect(0, 0, 100, 50))
+    )
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+
+    window.enter_crop_adjust((False, False, True, False))
+    assert window._crop_overlay is not None
+
+    window.close()
+    assert window._crop_overlay is None  # closed + ref dropped, no dangling signals
