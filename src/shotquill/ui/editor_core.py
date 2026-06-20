@@ -221,6 +221,16 @@ class EditorCoreMixin:
     def crop_adjustable(self) -> bool:
         return self._can_adjust()
 
+    def _crop_bounds(self) -> QRectF:
+        """The rect the crop may roam in — the whole captured desktop by default.
+
+        A shell that only covers ONE screen (the spotlight surface) narrows this
+        to that screen, so a keyboard nudge can't push the crop off the window it
+        lives in (which would slide the canvas child out of view). The framed
+        window re-places its top-level, so it keeps the full desktop.
+        """
+        return QRectF(self._region.geometry)
+
     def _adjust_crop(self, event) -> None:
         dx, dy = _ARROW_DELTAS[event.key()]
         step = _NUDGE_COARSE if event.modifiers() & Qt.ShiftModifier else 1
@@ -230,7 +240,7 @@ class EditorCoreMixin:
         lx = dx * step / self._region_sx
         ly = dy * step / self._region_sy
         sel = QRectF(self._selection)
-        bounds = QRectF(self._region.geometry)
+        bounds = self._crop_bounds()
         if event.modifiers() & Qt.AltModifier:
             # Option+arrows move the right/bottom edge; combined with plain
             # arrows (which move the whole box) any edge can be placed exactly.

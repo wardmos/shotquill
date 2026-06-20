@@ -216,6 +216,15 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         # Before teardown fires a focus-out on any active text item, tell the
         # canvas to stop committing it onto the dying undo stack.
         self._canvas.begin_teardown()
+        # The crop-adjust surface is a separate top-level window only this editor
+        # holds; close it with the editor (e.g. on Cmd-Q while it is up) so it
+        # can't outlive its host. Disconnect first so its teardown can't call
+        # back into this (WA_DeleteOnClose) editor as it is destroyed.
+        if self._crop_overlay is not None:
+            overlay, self._crop_overlay = self._crop_overlay, None
+            overlay.region_selected.disconnect(self._crop_adjusted)
+            overlay.destroyed.disconnect(self._crop_adjust_finished)
+            overlay.close()
         if self._backdrop is not None:
             self._backdrop.close()
             self._backdrop.deleteLater()

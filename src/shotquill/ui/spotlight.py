@@ -26,7 +26,16 @@ import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence, QPainter, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QGuiApplication,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QShortcut,
+)
 from PySide6.QtWidgets import QFrame, QLabel, QWidget
 
 from shotquill.ocr import get_recognizer
@@ -45,6 +54,29 @@ if TYPE_CHECKING:
     from shotquill.config import Config
 
 _TOOLBAR_GAP = 8  # logical points between the selection and the floating toolbar
+
+
+class _DimScreen(QWidget):
+    """A bare dim layer over one *other* screen, so the whole desktop darkens
+    around the spotlight — not just the selection's screen. Inert: it never takes
+    focus and only paints the dim (the surface itself covers the selection's
+    screen). Tracks the surface's activation so it doesn't darken whatever the
+    user switches to."""
+
+    def __init__(self, geometry: QRect) -> None:
+        super().__init__()
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus
+            | Qt.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setGeometry(geometry)
+
+    def paintEvent(self, event) -> None:
+        QPainter(self).fillRect(self.rect(), _BACKDROP_DIM)
 
 
 class SpotlightSurface(EditorCoreMixin, QWidget):
@@ -68,8 +100,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._drag: tuple[bool, bool, bool, bool] | None = None
         self._live_sel: QRectF | None = None  # selection (surface-local) while dragging
 
-        # Cover the screen the selection sits on (single window — no per-screen
-        # mirroring needed, and today's backdrop only dims one screen anyway).
+        # Cover the screen the selection sits on with one window (no per-screen
+        # mirroring of the interactive canvas needed); the other screens each get
+        # a bare dim layer (see _dim_screens below).
         screen = (QGuiApplication.screenAt(origin.center()) if origin else None) or (
             QGuiApplication.primaryScreen()
         )
@@ -109,6 +142,14 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # (the viewport needs its own tracking flag, not just the view's).
         self._canvas.viewport().setMouseTracking(True)
         self._canvas.viewport().installEventFilter(self)
+
+        # Dim the OTHER screens too (shown/hidden with the surface's activation),
+        # so the whole desktop darkens around the spotlight.
+        self._dim_screens = [
+            _DimScreen(s.geometry())
+            for s in QGuiApplication.screens()
+            if s.geometry() != self._screen_geo
+        ]
         self._wire_adjust_hint()
 
     # --- screen-local geometry helpers ------------------------------------
@@ -120,6 +161,12 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     def _sel_local(self) -> QRectF:
         """The committed selection in surface-local logical points."""
         return QRectF(self._to_local(self._origin))
+
+    def _crop_bounds(self) -> QRectF:
+        # Keep keyboard nudges on the screen this surface covers (mouse drags are
+        # already bounded to the surface). Pushing the crop onto a neighbouring
+        # screen would slide the canvas child out of this window.
+        return QRectF(self._region.geometry).intersected(QRectF(self._screen_geo))
 
     def _build_screen_pixmap(self):
         from PySide6.QtGui import QPixmap
@@ -142,6 +189,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._cover_menubar()
+        self._show_dim_screens()
         if not self._placed:
             self._placed = True
             self._place_canvas()
@@ -151,9 +199,25 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # push back above it each time so it stays covered (and the crop stays
         # adjustable all the way up to the screen top). The capture overlay is
         # transient so it never hits this; the editor is where the user stays.
-        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
-            self._cover_menubar()
+        # The other-screen dim layers track activation too, so they don't darken
+        # whatever the user switches to.
+        if event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow():
+                self._cover_menubar()
+                self._show_dim_screens()
+            else:
+                self._hide_dim_screens()
         super().changeEvent(event)
+
+    def _show_dim_screens(self) -> None:
+        for dim in self._dim_screens:
+            dim.show()
+            if sys.platform == "darwin":
+                macos_window.raise_above_menubar(dim)
+
+    def _hide_dim_screens(self) -> None:
+        for dim in self._dim_screens:
+            dim.hide()
 
     def _cover_menubar(self) -> None:
         # Match the capture overlay's proven sequence: set the resizable style
@@ -171,6 +235,10 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     def closeEvent(self, event) -> None:
         # Stop a late text focus-out from committing onto the dying undo stack.
         self._canvas.begin_teardown()
+        for dim in self._dim_screens:
+            dim.close()
+            dim.deleteLater()
+        self._dim_screens = []
         super().closeEvent(event)
 
     def keyPressEvent(self, event) -> None:
@@ -218,9 +286,11 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
             painter.drawPixmap(self.rect(), self._screen_pixmap)
         painter.fillRect(self.rect(), _BACKDROP_DIM)
         if self._drag is not None and self._live_sel is not None:
-            # Canvas is hidden mid-drag; paint the live lit selection ourselves.
+            # Canvas is hidden mid-drag; paint the live lit selection ourselves,
+            # plus the running size readout.
             self._paint_lit_slice(painter, self._live_sel)
             self._paint_handles(painter, self._live_sel)
+            self._paint_size_label(painter, self._live_sel)
         elif self.crop_adjustable():
             self._paint_handles(painter, self._sel_local())
 
@@ -237,21 +307,52 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         painter.drawPixmap(sel, self._screen_pixmap, source)
 
     def _paint_handles(self, painter: QPainter, sel: QRectF) -> None:
-        painter.setPen(_ACCENT)
+        # Outline + the eight grab handles, both drawn just OUTSIDE the lit
+        # selection so the canvas child (which fills the selection exactly) can't
+        # cover them — the handles read fully, even at rest.
+        painter.setPen(QPen(_ACCENT, 2))
         painter.setBrush(Qt.NoBrush)
-        painter.drawRect(sel)
+        painter.drawRect(sel.adjusted(-1, -1, 1, 1))
+        painter.setPen(QPen(_ACCENT, 1))
         painter.setBrush(QColor("white"))
-        for hx, hy in self._handle_centers(sel):
-            painter.drawRect(
-                QRectF(hx - _HANDLE_SIZE / 2, hy - _HANDLE_SIZE / 2, _HANDLE_SIZE, _HANDLE_SIZE)
-            )
+        for rect in self._handle_rects(sel):
+            painter.drawRect(rect)
 
     @staticmethod
-    def _handle_centers(sel: QRectF) -> list[tuple[float, float]]:
+    def _handle_rects(sel: QRectF) -> list[QRectF]:
+        """The eight grab-handle squares, each sitting just outside the matching
+        edge/corner of ``sel`` (so the canvas child can't hide it)."""
         cx, cy = sel.center().x(), sel.center().y()
-        xs = (sel.left(), cx, sel.right())
-        ys = (sel.top(), cy, sel.bottom())
-        return [(x, y) for y in ys for x in xs if not (x == cx and y == cy)]
+        half = _HANDLE_SIZE / 2
+        rects = []
+        for ax in (sel.left(), cx, sel.right()):
+            for ay in (sel.top(), cy, sel.bottom()):
+                if ax == cx and ay == cy:
+                    continue
+                dx = -1 if ax < cx else (1 if ax > cx else 0)
+                dy = -1 if ay < cy else (1 if ay > cy else 0)
+                hx, hy = ax + dx * half, ay + dy * half
+                rects.append(QRectF(hx - half, hy - half, _HANDLE_SIZE, _HANDLE_SIZE))
+        return rects
+
+    def _size_text(self, sel: QRectF) -> str:
+        """The selection size in native screenshot pixels, e.g. ``240 × 120``."""
+        w = int(round(sel.width() * self._region_sx))
+        h = int(round(sel.height() * self._region_sy))
+        return f"{w} × {h}"
+
+    def _paint_size_label(self, painter: QPainter, sel: QRectF) -> None:
+        if self._region is None:
+            return
+        label = self._size_text(sel)
+        font = QFont(self.font())
+        font.setPointSize(12)
+        painter.setFont(font)
+        width = painter.fontMetrics().horizontalAdvance(label) + 12
+        box = QRect(int(sel.x()), max(int(sel.y()) - 24, 2), width, 20)
+        painter.fillRect(box, QColor(0, 0, 0, 160))
+        painter.setPen(Qt.white)
+        painter.drawText(box, Qt.AlignCenter, label)
 
     # --- mouse: handle drags (eventFilter on the canvas + bare-area presses) ---
 

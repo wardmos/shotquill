@@ -1223,3 +1223,23 @@ def test_apply_settings_reloads_finish_keys_on_both_shells(qapp, config, fakes, 
     finally:
         surface.close()
         window.close()
+
+
+def test_make_editor_uses_framed_window_on_wayland(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill.ui.editor import EditorWindow
+
+    # Wayland's compositor ignores a set window position, so the spotlight
+    # surface can't align with the shot — fall back to the framed window even
+    # for a single-screen region with the backdrop on.
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(qapp, "screenAt", lambda pt: _fake_screen(QRect(0, 0, 1920, 1080)))
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    origin = QRect(100, 100, 300, 200)
+    editor = app._make_editor(QImage(300, 200, QImage.Format.Format_ARGB32), origin, None)
+    try:
+        assert isinstance(editor, EditorWindow)
+    finally:
+        editor.close()

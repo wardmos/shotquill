@@ -22,11 +22,14 @@ _SCREEN = QRect(1000, 500, 400, 300)
 
 
 class _FakeScreen:
+    def __init__(self, geo=None):
+        self._geo = geo if geo is not None else _SCREEN
+
     def geometry(self):
-        return _SCREEN
+        return self._geo
 
     def availableGeometry(self):
-        return _SCREEN
+        return self._geo
 
 
 def _image(width, height, color="white") -> QImage:
@@ -35,9 +38,10 @@ def _image(width, height, color="white") -> QImage:
     return image
 
 
-def _surface(qtbot, config, monkeypatch, *, origin=None, screenshot=None, show=True):
+def _surface(qtbot, config, monkeypatch, *, origin=None, screenshot=None, show=True, screens=None):
     monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
     monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: screens or [_FakeScreen()])
     # Region geometry == the screen (sx = sy = 1): surface-local == global - origin.
     origin = origin if origin is not None else QRect(1100, 580, 200, 120)
     shot = screenshot if screenshot is not None else _image(_SCREEN.width(), _SCREEN.height())
@@ -154,6 +158,7 @@ def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
     # A window/fullscreen capture has no RegionContext: no handles, pure dim.
     monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
     monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
     surface = SpotlightSurface(_image(200, 120), config, QRect(1100, 580, 200, 120), None)
     surface.setAttribute(Qt.WA_DeleteOnClose, False)
     qtbot.addWidget(surface)
@@ -225,3 +230,67 @@ def test_reactivation_re_covers_the_menu_bar(qtbot, config, monkeypatch):
     monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
     surface.changeEvent(QEvent(QEvent.ActivationChange))
     assert calls == [surface]
+
+
+def test_handles_sit_outside_the_selection(qtbot, config, monkeypatch):
+    # The eight handles must sit just outside the selection so the canvas child
+    # (which fills the selection exactly) can't cover them — fully visible.
+    surface = _surface(qtbot, config, monkeypatch)
+    sel = QRectF(100, 80, 200, 120)
+    rects = surface._handle_rects(sel)
+    assert len(rects) == 8
+    for r in rects:
+        assert not sel.contains(r.center())  # every handle centre is outside
+
+
+def test_size_text_is_native_pixels(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch)  # region geometry == screen, sx = sy = 1
+    assert surface._size_text(QRectF(0, 0, 240, 120)) == "240 × 120"
+
+
+def test_single_screen_has_no_dim_layers(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch, show=False)  # one screen
+    assert surface._dim_screens == []
+
+
+def test_dims_only_the_other_screens(qtbot, config, monkeypatch):
+    other = QRect(1400, 500, 300, 200)
+    surface = _surface(
+        qtbot, config, monkeypatch, show=False, screens=[_FakeScreen(), _FakeScreen(other)]
+    )
+    assert len(surface._dim_screens) == 1  # the selection's screen is the surface itself
+    assert surface._dim_screens[0].geometry() == other
+
+
+def test_dim_layers_hide_when_the_surface_deactivates(qtbot, config, monkeypatch):
+    from PySide6.QtCore import QEvent
+
+    other = QRect(1400, 500, 300, 200)
+    surface = _surface(qtbot, config, monkeypatch, screens=[_FakeScreen(), _FakeScreen(other)])
+    dim = surface._dim_screens[0]
+    assert dim.isVisible()  # shown with the surface
+    monkeypatch.setattr(surface, "isActiveWindow", lambda: False)
+    surface.changeEvent(QEvent(QEvent.ActivationChange))
+    assert not dim.isVisible()  # must not darken whatever the user switched to
+
+
+def test_arrow_nudge_is_bounded_to_the_surface_screen(qtbot, config, monkeypatch):
+    # Virtual desktop wider than this surface's screen (a second screen to the
+    # right): _SCREEN is its left half. A keyboard nudge must keep the crop on
+    # the surface's own screen, not push it onto the neighbour — which would
+    # slide the canvas child out of this window.
+    desktop = QRect(1000, 500, 800, 300)
+    monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
+    shot = _image(desktop.width(), desktop.height())
+    origin = QRect(1100, 580, 200, 120)
+    crop = shot.copy(origin.translated(-desktop.topLeft()))
+    surface = SpotlightSurface(crop, config, origin, RegionContext(shot, desktop))
+    surface.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(surface)
+    surface.show()
+    qtbot.waitExposed(surface)
+    for _ in range(60):  # hammer right; unbounded this would reach the desktop edge (1800)
+        qtbot.keyClick(surface, Qt.Key_Right, Qt.ShiftModifier)
+    assert surface._origin.right() <= _SCREEN.right()  # pinned at the surface's screen edge
