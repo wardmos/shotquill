@@ -51,6 +51,7 @@ Issues = "https://github.com/wardmos/shotquill/issues"
 dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
+    "pytest-cov>=5.0",
     "ruff==0.15.17",
 ]
 # On-device OCR on Windows via the WinRT Windows.Media.Ocr engine. Optional and
@@ -96,3 +97,20 @@ select = ["E", "F", "I", "W", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Coverage is opt-in (run ``pytest --cov``) so the default test run and every CI
+# matrix leg stay fast; the dedicated ``coverage`` CI job passes the flags. These
+# sections only configure *how* coverage measures when asked.
+[tool.coverage.run]
+source = ["shotquill"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# Platform backends guard their OS-only calls with ``# pragma: no cover`` (AppKit,
+# WinRT, the live X/Wayland paths) since no single CI OS exercises all of them;
+# the default already drops those lines plus the type-checking-only imports.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
