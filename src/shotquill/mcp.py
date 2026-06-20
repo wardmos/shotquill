@@ -422,7 +422,13 @@ def _tool_list_displays(args: dict):
 def _tool_ocr(args: dict):
     recognizer = headless.get_recognizer()  # fail fast before any capture
     path = args.get("path")
-    if path and any(
+    # A present-but-empty path is a mistake, not a request to OCR the screen:
+    # treating it as "no path" would silently widen the read from a file to the
+    # live screen — a different question than the agent asked. Match the CLI,
+    # which keys the file-vs-capture branch on whether path was given at all.
+    if path is not None and not (isinstance(path, str) and path.strip()):
+        raise ValueError("path must be a non-empty string")
+    if path is not None and any(
         args.get(key) is not None for key in ("window_id", "app", "title", "region", "display")
     ):
         # Silently OCRing the file while ignoring the capture target would
@@ -430,7 +436,7 @@ def _tool_ocr(args: dict):
         raise ValueError(
             "path and capture targets (window_id/app/title/region/display) are exclusive"
         )
-    if path:
+    if path is not None:
         from PySide6.QtGui import QImage
 
         file_path = Path(str(path)).expanduser()

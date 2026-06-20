@@ -40,6 +40,7 @@ import hashlib
 import html
 import json
 import os
+import re
 import shutil
 import tarfile
 import uuid
@@ -143,6 +144,29 @@ def new_session_id(now: dt.datetime | None = None, *, suffix: str | None = None)
     return f"conv-{moment:%Y%m%d-%H%M%S}-{tail}"
 
 
+# A caller-supplied session id becomes a path segment (``<records>/<id>/``) and
+# the top-level folder of an export archive, so it must be an inert *name*, never
+# a path. The blocklist threat model includes an injected agent driving the CLI/
+# MCP, and ``record start --id ../x`` would otherwise file a session outside the
+# records root or smuggle a ``..`` entry into a zip/tar (Zip/Tar Slip). Allow
+# only a conservative charset, no leading dot (forbids ``.``/``..``/hidden); the
+# generated ids (``conv-<date>-<hex>``) already fit. ``--dir`` stays the escape
+# hatch for pinning an exact location on purpose.
+_SESSION_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def validate_session_id(session_id: str) -> str:
+    """Return ``session_id`` unchanged if it is a safe path segment, else raise.
+
+    Safe means a non-empty run of ``[A-Za-z0-9._-]`` not starting with a dot, so
+    it can never traverse out of the records root or add a ``..`` entry to an
+    export archive.
+    """
+    if not _SESSION_ID_RE.match(session_id):
+        raise RecordError(f"invalid session id {session_id!r}: use only letters, digits, . _ -")
+    return session_id
+
+
 @dataclass(frozen=True)
 class Session:
     """A live handle to a session directory (the manifest is the durable truth)."""
@@ -185,7 +209,7 @@ def start_session(
     ``directory`` to pin an exact location (e.g. a CI artifact path); that
     directory then *is* the handle later commands resolve.
     """
-    sid = session_id or new_session_id(now)
+    sid = validate_session_id(session_id) if session_id else new_session_id(now)
     if directory is not None:
         session_dir = Path(directory).expanduser()
     else:
@@ -423,6 +447,13 @@ def export_session(session: Session, out_path: Path | None = None, *, fmt: str =
         raise RecordError(f"export format must be one of {EXPORT_FORMATS}, got {fmt!r}")
     if not session.dir.is_dir():
         raise SessionNotFound(f"session directory not found: {session.dir}")
+    # Defence in depth against Zip/Tar Slip: ``start_session`` already validates
+    # caller ids, but ``session.id`` can also come from a (possibly hand-edited)
+    # manifest via ``resolve_session``. Refuse any id that is a path rather than a
+    # name, so the archive's top-level folder can never traverse out on extract.
+    top = session.id
+    if os.sep in top or (os.altsep and os.altsep in top) or ".." in Path(top).parts:
+        raise RecordError(f"unsafe session id for export: {session.id!r}")
     ext = "zip" if fmt == "zip" else "tar.gz"
     out_path = (
         Path(out_path) if out_path is not None else session.dir.parent / f"{session.id}.{ext}"
