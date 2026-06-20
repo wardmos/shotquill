@@ -162,6 +162,12 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         """The committed selection in surface-local logical points."""
         return QRectF(self._to_local(self._origin))
 
+    def _crop_bounds(self) -> QRectF:
+        # Keep keyboard nudges on the screen this surface covers (mouse drags are
+        # already bounded to the surface). Pushing the crop onto a neighbouring
+        # screen would slide the canvas child out of this window.
+        return QRectF(self._region.geometry).intersected(QRectF(self._screen_geo))
+
     def _build_screen_pixmap(self):
         from PySide6.QtGui import QPixmap
 

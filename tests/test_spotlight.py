@@ -272,3 +272,25 @@ def test_dim_layers_hide_when_the_surface_deactivates(qtbot, config, monkeypatch
     monkeypatch.setattr(surface, "isActiveWindow", lambda: False)
     surface.changeEvent(QEvent(QEvent.ActivationChange))
     assert not dim.isVisible()  # must not darken whatever the user switched to
+
+
+def test_arrow_nudge_is_bounded_to_the_surface_screen(qtbot, config, monkeypatch):
+    # Virtual desktop wider than this surface's screen (a second screen to the
+    # right): _SCREEN is its left half. A keyboard nudge must keep the crop on
+    # the surface's own screen, not push it onto the neighbour — which would
+    # slide the canvas child out of this window.
+    desktop = QRect(1000, 500, 800, 300)
+    monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
+    shot = _image(desktop.width(), desktop.height())
+    origin = QRect(1100, 580, 200, 120)
+    crop = shot.copy(origin.translated(-desktop.topLeft()))
+    surface = SpotlightSurface(crop, config, origin, RegionContext(shot, desktop))
+    surface.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(surface)
+    surface.show()
+    qtbot.waitExposed(surface)
+    for _ in range(60):  # hammer right; unbounded this would reach the desktop edge (1800)
+        qtbot.keyClick(surface, Qt.Key_Right, Qt.ShiftModifier)
+    assert surface._origin.right() <= _SCREEN.right()  # pinned at the surface's screen edge
