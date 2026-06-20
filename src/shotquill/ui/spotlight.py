@@ -56,6 +56,29 @@ if TYPE_CHECKING:
 _TOOLBAR_GAP = 8  # logical points between the selection and the floating toolbar
 
 
+class _DimScreen(QWidget):
+    """A bare dim layer over one *other* screen, so the whole desktop darkens
+    around the spotlight — not just the selection's screen. Inert: it never takes
+    focus and only paints the dim (the surface itself covers the selection's
+    screen). Tracks the surface's activation so it doesn't darken whatever the
+    user switches to."""
+
+    def __init__(self, geometry: QRect) -> None:
+        super().__init__()
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus
+            | Qt.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setGeometry(geometry)
+
+    def paintEvent(self, event) -> None:
+        QPainter(self).fillRect(self.rect(), _BACKDROP_DIM)
+
+
 class SpotlightSurface(EditorCoreMixin, QWidget):
     #: Same contract as EditorWindow: the annotated image + the capture's
     #: on-screen rect, so a pin can size itself for the right screen.
@@ -77,8 +100,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._drag: tuple[bool, bool, bool, bool] | None = None
         self._live_sel: QRectF | None = None  # selection (surface-local) while dragging
 
-        # Cover the screen the selection sits on (single window — no per-screen
-        # mirroring needed, and today's backdrop only dims one screen anyway).
+        # Cover the screen the selection sits on with one window (no per-screen
+        # mirroring of the interactive canvas needed); the other screens each get
+        # a bare dim layer (see _dim_screens below).
         screen = (QGuiApplication.screenAt(origin.center()) if origin else None) or (
             QGuiApplication.primaryScreen()
         )
@@ -118,6 +142,14 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # (the viewport needs its own tracking flag, not just the view's).
         self._canvas.viewport().setMouseTracking(True)
         self._canvas.viewport().installEventFilter(self)
+
+        # Dim the OTHER screens too (shown/hidden with the surface's activation),
+        # so the whole desktop darkens around the spotlight.
+        self._dim_screens = [
+            _DimScreen(s.geometry())
+            for s in QGuiApplication.screens()
+            if s.geometry() != self._screen_geo
+        ]
         self._wire_adjust_hint()
 
     # --- screen-local geometry helpers ------------------------------------
@@ -151,6 +183,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._cover_menubar()
+        self._show_dim_screens()
         if not self._placed:
             self._placed = True
             self._place_canvas()
@@ -160,9 +193,25 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # push back above it each time so it stays covered (and the crop stays
         # adjustable all the way up to the screen top). The capture overlay is
         # transient so it never hits this; the editor is where the user stays.
-        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
-            self._cover_menubar()
+        # The other-screen dim layers track activation too, so they don't darken
+        # whatever the user switches to.
+        if event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow():
+                self._cover_menubar()
+                self._show_dim_screens()
+            else:
+                self._hide_dim_screens()
         super().changeEvent(event)
+
+    def _show_dim_screens(self) -> None:
+        for dim in self._dim_screens:
+            dim.show()
+            if sys.platform == "darwin":
+                macos_window.raise_above_menubar(dim)
+
+    def _hide_dim_screens(self) -> None:
+        for dim in self._dim_screens:
+            dim.hide()
 
     def _cover_menubar(self) -> None:
         # Match the capture overlay's proven sequence: set the resizable style
@@ -180,6 +229,10 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     def closeEvent(self, event) -> None:
         # Stop a late text focus-out from committing onto the dying undo stack.
         self._canvas.begin_teardown()
+        for dim in self._dim_screens:
+            dim.close()
+            dim.deleteLater()
+        self._dim_screens = []
         super().closeEvent(event)
 
     def keyPressEvent(self, event) -> None:
