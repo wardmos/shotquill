@@ -59,7 +59,6 @@ from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
 from shotquill.i18n import t
 from shotquill.ui.geometry import (
     crop_edge_hits,
-    loupe_anchor,
     move_rect_within,
     rect_containing,
     resize_selection,
@@ -68,6 +67,7 @@ from shotquill.ui.geometry import (
     selection_rect,
     window_at_point,
 )
+from shotquill.ui.loupe import paint_loupe
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -80,12 +80,8 @@ _MIN_SIZE = 2
 # How far the pointer must travel after a press before we treat it as a region
 # drag rather than a click on the hovered window / full screen.
 _DRAG_THRESHOLD = 4
-# Pixel loupe that follows the pointer so region edges can be placed precisely.
-_LOUPE_W = 120  # loupe display size, logical points
-_LOUPE_H = 90
-_LOUPE_ZOOM = 4  # one native pixel becomes a 4x4-point block inside the loupe
-_LOUPE_OFFSET = 20  # gap between the pointer and the loupe
-_LOUPE_LABEL_H = 20  # readout strip under the magnified pixels
+# The pixel loupe that follows the pointer so region edges can be placed
+# precisely lives in shotquill.ui.loupe (shared with the spotlight editor).
 # How long the pointer must rest on a window before its un-occluded preview is
 # fetched — sweeping across windows must not fire a capture per window passed.
 _PREVIEW_DELAY_MS = 120
@@ -440,50 +436,18 @@ class SmartOverlay(QWidget):
         painter.restore()
 
     def _paint_loupe(self, painter: QPainter) -> None:
-        cx, cy = self._cursor.x(), self._cursor.y()
-        # Native pixel under the pointer (clamped so edge hovering stays valid).
-        px = min(max(int(cx * self._sx), 0), self._screenshot.width() - 1)
-        py = min(max(int(cy * self._sy), 0), self._screenshot.height() - 1)
-        ax, ay = loupe_anchor(
-            cx, cy, _LOUPE_W, _LOUPE_H + _LOUPE_LABEL_H, self.width(), self.height(), _LOUPE_OFFSET
+        paint_loupe(
+            painter,
+            pixmap=self._pixmap,
+            image=self._screenshot,
+            cursor=self._cursor,
+            sx=self._sx,
+            sy=self._sy,
+            bound_w=self.width(),
+            bound_h=self.height(),
+            accent=_ACCENT,
+            font=self.font(),
         )
-        view = QRectF(ax, ay, _LOUPE_W, _LOUPE_H)
-
-        # A native-resolution patch centred on the pointer, blown up without
-        # smoothing so individual pixels (and thus the exact region boundary)
-        # stay visible. Near screen edges the patch is clamped to the
-        # screenshot and the remainder left dark.
-        painter.fillRect(view, QColor(0, 0, 0, 220))
-        src_w = _LOUPE_W / _LOUPE_ZOOM
-        src_h = _LOUPE_H / _LOUPE_ZOOM
-        source = QRectF(px + 0.5 - src_w / 2, py + 0.5 - src_h / 2, src_w, src_h)
-        clamped = source.intersected(QRectF(0, 0, self._pixmap.width(), self._pixmap.height()))
-        if not clamped.isEmpty():
-            target = QRectF(
-                ax + (clamped.x() - source.x()) * _LOUPE_ZOOM,
-                ay + (clamped.y() - source.y()) * _LOUPE_ZOOM,
-                clamped.width() * _LOUPE_ZOOM,
-                clamped.height() * _LOUPE_ZOOM,
-            )
-            painter.drawPixmap(target, self._pixmap, clamped)
-
-        # Crosshair over the centre pixel, then a frame around the loupe.
-        painter.setPen(QPen(_ACCENT, 1))
-        center = view.center()
-        painter.drawLine(QPointF(view.left(), center.y()), QPointF(view.right(), center.y()))
-        painter.drawLine(QPointF(center.x(), view.top()), QPointF(center.x(), view.bottom()))
-        painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRect(view)
-
-        # Pointer position (native pixels) and the colour under it.
-        color = self._screenshot.pixelColor(px, py)
-        label = f"({px}, {py})  {color.name().upper()}"
-        box = QRectF(ax, ay + _LOUPE_H, _LOUPE_W, _LOUPE_LABEL_H)
-        painter.fillRect(box, QColor(0, 0, 0, 200))
-        painter.setFont(self._label_font(10))
-        painter.setPen(Qt.white)
-        painter.drawText(box, Qt.AlignCenter, label)
 
     def _draw_hint(self, painter: QPainter) -> None:
         hint = t("smart.hint")

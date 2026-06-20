@@ -48,6 +48,7 @@ from shotquill.ui.editor_core import (
     _toolbar_placement,
 )
 from shotquill.ui.geometry import crop_edge_hits, resize_selection, scale_rect_edges
+from shotquill.ui.loupe import paint_loupe
 from shotquill.ui.smart_overlay import _ACCENT, _HANDLE_GRAB, _HANDLE_SIZE
 
 if TYPE_CHECKING:
@@ -99,6 +100,8 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._placed = False
         self._drag: tuple[bool, bool, bool, bool] | None = None
         self._live_sel: QRectF | None = None  # selection (surface-local) while dragging
+        # Pointer (surface-local) while dragging; drives the loupe.
+        self._cursor: QPointF | None = None
 
         # Cover the screen the selection sits on with one window (no per-screen
         # mirroring of the interactive canvas needed); the other screens each get
@@ -132,6 +135,11 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # This screen's slice of the frozen desktop shot, painted dimmed as
         # context (None for non-region captures — then the surface is pure dim).
         self._screen_pixmap = self._build_screen_pixmap()
+        # A QImage of that slice for the loupe's colour/coord readout — the shot
+        # is frozen, so it is converted once here rather than per paint.
+        self._screen_image = (
+            self._screen_pixmap.toImage() if self._screen_pixmap is not None else None
+        )
 
         self.reload_finish_keys()
         close_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
@@ -287,10 +295,12 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         painter.fillRect(self.rect(), _BACKDROP_DIM)
         if self._drag is not None and self._live_sel is not None:
             # Canvas is hidden mid-drag; paint the live lit selection ourselves,
-            # plus the running size readout.
+            # plus the running size readout and a pixel loupe at the dragged edge
+            # so the crop boundary can be placed exactly.
             self._paint_lit_slice(painter, self._live_sel)
             self._paint_handles(painter, self._live_sel)
             self._paint_size_label(painter, self._live_sel)
+            self._paint_loupe(painter)
         elif self.crop_adjustable():
             self._paint_handles(painter, self._sel_local())
 
@@ -353,6 +363,24 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         painter.fillRect(box, QColor(0, 0, 0, 160))
         painter.setPen(Qt.white)
         painter.drawText(box, Qt.AlignCenter, label)
+
+    def _paint_loupe(self, painter: QPainter) -> None:
+        # Same magnifier the capture overlay uses, sampling this screen's frozen
+        # slice; only shown mid-drag (the canvas child hides it otherwise).
+        if self._cursor is None or self._screen_pixmap is None:
+            return
+        paint_loupe(
+            painter,
+            pixmap=self._screen_pixmap,
+            image=self._screen_image,
+            cursor=self._cursor,
+            sx=self._region_sx,
+            sy=self._region_sy,
+            bound_w=self.width(),
+            bound_h=self.height(),
+            accent=_ACCENT,
+            font=self.font(),
+        )
 
     # --- mouse: handle drags (eventFilter on the canvas + bare-area presses) ---
 
@@ -432,6 +460,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
             _MIN_CROP,
         )
         self._live_sel = QRectF(*new)
+        self._cursor = QPointF(surface_pos)  # the loupe magnifies around the dragged edge
         self.update()
 
     def _end_handle_drag(self, surface_pos: QPointF) -> None:
@@ -439,6 +468,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         if self.mouseGrabber() is self:
             self.releaseMouse()
         self._drag = None
+        self._cursor = None  # drag over: the loupe disappears with it
         # Commit: surface-local selection → global, then re-crop + re-place.
         self._selection = QRectF(self._live_sel).translated(self._screen_geo.topLeft())
         self._live_sel = None
