@@ -182,6 +182,47 @@ def test_paint_smoke_adjustable_and_dragging(qtbot, config, monkeypatch):
     painter.end()
 
 
+def test_drag_tracks_the_cursor_for_the_loupe(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch)
+    assert surface._cursor is None  # no loupe at rest
+    surface._try_begin_handle_drag(QPointF(300, 140))  # right-edge midpoint (local)
+    surface._update_handle_drag(QPointF(340, 150))
+    assert surface._cursor is not None
+    assert (surface._cursor.x(), surface._cursor.y()) == (340, 150)
+    surface._end_handle_drag(QPointF(340, 150))
+    assert surface._cursor is None  # drag over -> loupe gone
+
+
+def test_paint_loupe_mid_drag_does_not_crash(qtbot, config, monkeypatch):
+    from PySide6.QtGui import QPainter, QPixmap
+
+    surface = _surface(qtbot, config, monkeypatch)
+    surface._try_begin_handle_drag(QPointF(300, 140))
+    surface._update_handle_drag(QPointF(395, 295))  # near the surface corner -> loupe flips/clamps
+    canvas = QPixmap(_SCREEN.width(), _SCREEN.height())
+    painter = QPainter(canvas)
+    surface.render(canvas)  # full mid-drag paint path, loupe included
+    painter.end()
+
+
+def test_non_region_surface_paints_no_loupe(qtbot, config, monkeypatch):
+    # A non-region capture has no frozen slice to magnify: the loupe stays away
+    # even if a stray cursor/drag state is set.
+    monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
+    surface = SpotlightSurface(_image(200, 120), config, QRect(1100, 580, 200, 120), None)
+    surface.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(surface)
+    assert surface._screen_image is None
+    surface._cursor = QPointF(50, 50)
+    from PySide6.QtGui import QPainter
+
+    painter = QPainter(surface)
+    surface._paint_loupe(painter)  # guarded by the None pixmap -> no crash
+    painter.end()
+
+
 def test_hover_over_an_edge_shows_a_resize_cursor(qtbot, config, monkeypatch):
     # Bug fix: hovering a crop edge must show a resize cursor (and the view must
     # not reset it back to the default on the same hover move).
