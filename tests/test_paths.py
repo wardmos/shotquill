@@ -78,8 +78,9 @@ def test_audit_log_path_honors_xdg_state_home(tmp_path, monkeypatch):
     log = paths.audit_log_path()
 
     assert log == tmp_path / "state" / "shotquill" / "audit.log"
-    # The parent is created so callers can append without ceremony.
-    assert log.parent.is_dir()
+    # Resolving the path is pure: reporting it (e.g. ``squill doctor``) must not
+    # create directories. The writer (audit.record) makes the parent on append.
+    assert not log.parent.exists()
 
 
 def test_audit_log_path_empty_xdg_falls_back_to_local_state(tmp_path, monkeypatch):
