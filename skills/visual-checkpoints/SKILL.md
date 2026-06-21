@@ -7,7 +7,7 @@ description: >-
   show the thing to check: capture the state and OCR-assert that the right thing
   is on screen, so a failed check becomes a replayable trace a human or a
   reviewing AI can open later. Record the verification points, not your edits or
-  shell output. Wraps ShotQuill's `record_start` / `record_frame` / `capture` /
+  shell output. Wraps ShotQuill's `session_start` / `session_frame` / `capture` /
   `ocr` MCP tools.
 ---
 
@@ -31,11 +31,11 @@ on screen when it broke.
 ## The loop
 
 ```
-record_start  →  (work normally)  →  record_frame + assert at each checkpoint  →  record_end
+session_start  →  (work normally)  →  session_frame + assert at each checkpoint  →  session_end
 ```
 
 1. **Start once, at the beginning of the task.**
-   Call `record_start` with an `agent` name and a `label` for the whole task
+   Call `session_start` with an `agent` name and a `label` for the whole task
    ("add the export button", "fix the login redirect"). Keep the returned
    `conversation_id` — every later call passes it as `session`.
 
@@ -44,7 +44,7 @@ record_start  →  (work normally)  →  record_frame + assert at each checkpoin
    scouting buries the checkpoints that matter.
 
 3. **Checkpoint when you have made the screen show what you need to verify.**
-   Once the page/app is displaying the result, call `record_frame` with:
+   Once the page/app is displaying the result, call `session_frame` with:
    - `session`: the `conversation_id` from start.
    - `tool`: a short kind for the step — `verify`, `render-check`, `smoke`.
    - `label`: what you are checking, for the reviewer — "signup page after the
@@ -60,21 +60,21 @@ record_start  →  (work normally)  →  record_frame + assert at each checkpoin
    marked in the filmstrip and set to error in the trace.
 
 4. **End once, when the task is done (or has failed).**
-   Call `record_end` with the `session`. It returns the filmstrip path; point the
+   Call `session_end` with the `session`. It returns the filmstrip path; point the
    user at it. **Always end**, even on failure — a trail that stops at the broken
    checkpoint is exactly what a reviewer needs.
 
-To hand off, list, or clear sessions afterwards, the same `record_export` /
-`record_list` / `record_prune` tools apply — see
+To hand off, list, or clear sessions afterwards, the same `session_export` /
+`session_list` / `session_prune` tools apply — see
 [`flight-recorder`](../flight-recorder/SKILL.md) ("After the session").
 
-## Capture to look, record_frame to commit a checkpoint
+## Capture to look, session_frame to commit a checkpoint
 
 - Use **`capture`** (or **`ocr`**) when you just need to *see* the screen to
-  decide what to do — e.g. read an error. While a session is active these are
-  auto-mirrored as `observation` frames (pass `record: false` to skip one), so
-  you do **not** separately record your scouting.
-- Use **`record_frame`** when you are deliberately *checkpointing* — leaving
+  decide what to do — e.g. read an error. These don't record by default; pass the
+  session handle as `capture`'s `session` argument if you want a scouting glance
+  filed as an `observation` frame (kept separate from action frames).
+- Use **`session_frame`** when you are deliberately *checkpointing* — leaving
   evidence and (usually) an assertion. One checkpoint per claim that matters
   beats a frame after every action.
 
@@ -111,7 +111,7 @@ claude mcp add shotquill -- squill mcp
 ```
 
 This needs a **real display and screen-recording permission** on the machine
-where you run the app under test — that is what `record_frame` / `capture`
+where you run the app under test — that is what `session_frame` / `capture`
 photograph. Fully headless CI is not yet supported; run on a local or headed
 runner. If a capture is refused, call `doctor` for the per-platform fix.
 
@@ -121,4 +121,4 @@ runner. If a capture is refused, call `doctor` for the per-platform fix.
 - Don't assert on incidental chrome; assert on rendered, semantic content that
   proves the step worked.
 - Don't start a second session inside an unfinished one; one task, one session.
-- Don't leave a session open. If you stop early, still call `record_end`.
+- Don't leave a session open. If you stop early, still call `session_end`.

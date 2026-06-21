@@ -2,7 +2,7 @@
 # Copyright (C) 2026 wardmos
 """Agent flight-recorder sessions: a trace of frames, not a single capture.
 
-Where ``squill capture`` returns one image, ``squill record`` accumulates a
+Where ``squill capture`` returns one image, ``squill session`` accumulates a
 *session* — an ordered run of frames an agent leaves behind as it operates a
 real screen, so a human or a reviewing AI can see what it did, step by step.
 

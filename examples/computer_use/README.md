@@ -13,7 +13,7 @@ and an OTLP/JSON projection, all on the local machine.
 
 | File | What it is |
 | --- | --- |
-| `shotquill_flight_recorder.py` | **Provider-neutral.** The adapter: `describe_action()` / `ActionMap` map an action to a frame; `FlightRecorder` drives the `squill record` CLI over a run. Does not import any model SDK. |
+| `shotquill_flight_recorder.py` | **Provider-neutral.** The adapter: `describe_action()` / `ActionMap` map an action to a frame; `FlightRecorder` drives the `squill session` CLI over a run. Does not import any model SDK. |
 | `desktop.py` | **Provider-neutral.** Driving the desktop: `Outcome`, the `ComputerExecutor` protocol, and `DryRunExecutor` (real screenshots, logged actions). |
 | `agent.py` | **Anthropic-specific.** A runnable Claude computer-use loop that reuses the two modules above. |
 | `agent_openai.py` | **OpenAI-specific.** A runnable Responses API / `computer_use_preview` loop with the same recorder and executor seam. |
@@ -36,7 +36,7 @@ refactor:
 
 OpenAI support is implemented by the `OPENAI_COMPUTER_USE` table and the sibling
 `agent_openai.py` loop (OpenAI talks to a different endpoint and tool-call shape),
-with the recorder, the `squill record` contract, redaction, and `desktop.py`
+with the recorder, the `squill session` contract, redaction, and `desktop.py`
 untouched. An action in neither `rules` nor `observations` is skipped (an unknown
 action is treated as an observation, not recorded blind).
 
@@ -46,7 +46,7 @@ the *reference* runtime for v1; other providers are a deliberate follow-on.
 
 ## How it records (and why through the CLI)
 
-The adapter shells out to the public `squill record` CLI — the same contract in
+The adapter shells out to the public `squill session` CLI — the same contract in
 [`skills/flight-recorder/SKILL.md`](../../skills/flight-recorder/SKILL.md) — not
 to ShotQuill internals. That buys two things:
 

@@ -84,7 +84,7 @@ def data_dir() -> Path:
 def records_dir() -> Path:
     """Default root for flight-recorder sessions (``<data>/records``).
 
-    Each ``squill record start`` creates one ``<records>/<session-id>/`` beneath
+    Each ``squill session start`` creates one ``<records>/<session-id>/`` beneath
     it (unless the caller pins an explicit directory). Not created here — the
     session writer makes the leaf directory it owns.
     """

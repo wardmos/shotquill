@@ -11,12 +11,12 @@ reviewable, redacted, replayable trace.
 
 How it records
 --------------
-The adapter shells out to the public ``squill record`` CLI (the same contract
+The adapter shells out to the public ``squill session`` CLI (the same contract
 documented in ``skills/flight-recorder/SKILL.md``), not to ShotQuill internals.
 That is the seam a third party actually integrates against, and it carries two
 properties for free:
 
-* **Redaction stays on.** ``squill record frame`` captures the *live* screen
+* **Redaction stays on.** ``squill session frame`` captures the *live* screen
   through ShotQuill's blocklist path, so a blocklisted app (a password manager,
   say) is masked out of the archived frame. The screenshot the model sees is the
   computer-use harness's own high-fidelity capture; the screenshot that lands in
@@ -33,9 +33,10 @@ adapter files an **action** frame only for state-changing computer-use actions
 (clicks, typing, key presses, scrolls, drags). Pure observation actions the
 model takes to *see* the screen (``screenshot``, ``zoom``, ``cursor_position``,
 ``mouse_move``, ``wait``) are skipped — recording them would bury the actions
-that matter under the agent's scouting. (While a session is active, ShotQuill's
-MCP path mirrors those observations automatically as ``observation`` frames; the
-CLI path used here simply omits them.)
+that matter under the agent's scouting. (ShotQuill can still file a scouting
+glance as an ``observation`` frame when a ``capture`` is given the session
+handle — over MCP via ``capture``'s ``session`` argument, or on the CLI via
+``squill capture --session`` — but this adapter records only action frames.)
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ EXIT_ASSERTION_FAILED = 20
 
 
 class RecorderError(RuntimeError):
-    """A ``squill record`` invocation failed for a reason that isn't a verdict."""
+    """A ``squill session`` invocation failed for a reason that isn't a verdict."""
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,7 @@ class ActionMap:
 
     Injecting an :class:`ActionMap` is the seam for pointing the recorder at a
     *different* computer-use runtime — a non-Anthropic provider, or your own
-    desktop harness — without touching the recorder, the ``squill record``
+    desktop harness — without touching the recorder, the ``squill session``
     contract, or redaction. Writing one is writing a table, not subclassing::
 
         MY_PROVIDER = ActionMap(
@@ -270,7 +271,7 @@ def describe_action(
 
 
 class FlightRecorder:
-    """Drive a ``squill record`` session over a computer-use run.
+    """Drive a ``squill session`` session over a computer-use run.
 
     Use it as a context manager around the agent loop; call
     :meth:`record_action` once per executed computer-use tool call and
@@ -319,7 +320,7 @@ class FlightRecorder:
 
     def start(self) -> str:
         """Open the session; returns its directory (the handle for later calls)."""
-        argv = [self._squill, "record", "start", "--agent", self._agent]
+        argv = [self._squill, "session", "start", "--agent", self._agent]
         if self._label is not None:
             argv += ["--label", self._label]
         if self._agent_id is not None:
@@ -329,14 +330,14 @@ class FlightRecorder:
         result = self._run(argv)
         self.session_dir = result.stdout.strip()
         if not self.session_dir:
-            raise RecorderError("`squill record start` did not print a session directory")
+            raise RecorderError("`squill session start` did not print a session directory")
         return self.session_dir
 
     def end(self) -> str | None:
         """Close the session and render its filmstrip + OTLP projection."""
         if self.session_dir is None:
             return None
-        result = self._run([self._squill, "record", "end", "--session", self.session_dir, "--json"])
+        result = self._run([self._squill, "session", "end", self.session_dir, "--json"])
         try:
             self.filmstrip_path = json.loads(result.stdout).get("filmstrip")
         except json.JSONDecodeError:
@@ -421,7 +422,7 @@ class FlightRecorder:
         extra: Sequence[str] = (),
         allow_codes: Sequence[int] = (),
     ) -> subprocess.CompletedProcess[str]:
-        argv = [self._squill, "record", "frame", "--session", str(self.session_dir), "--tool", tool]
+        argv = [self._squill, "session", "frame", str(self.session_dir), "--tool", tool]
         if label is not None:
             argv += ["--label", label]
         for flag, value in self._target.items():

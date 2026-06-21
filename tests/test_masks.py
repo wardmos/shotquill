@@ -125,9 +125,9 @@ def test_cli_capture_bad_mask_is_usage_error(fake_capturer, capsys):
 
 
 def test_cli_record_frame_mask_files_masked_pixels(fake_capturer, capsys, tmp_path):
-    cli.main(["record", "start", "--id", "conv-mask"])
+    cli.main(["session", "start", "--id", "conv-mask"])
     capsys.readouterr()
-    rc = cli.main(["record", "frame", "--session", "conv-mask", "--tool", "x", "--mask", "0,0,4,4"])
+    rc = cli.main(["session", "frame", "conv-mask", "--tool", "x", "--mask", "0,0,4,4"])
     assert rc == 0
     img = _load(str(tmp_path / "records" / "conv-mask" / "frames" / "0001.png"))
     assert _black(img, 1, 1)  # inside the mask

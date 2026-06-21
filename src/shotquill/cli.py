@@ -25,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from shotquill import __version__, audit, headless, paths
+from shotquill import __version__, audit, command_spec, headless, paths
 
 _EXIT_USAGE = 2
 
@@ -40,15 +40,6 @@ _EXIT_USAGE = 2
 # band without collision. 20 also dodges the shell-reserved codes (126+, 255).
 _EXIT_ASSERTION_FAILED = 20
 
-# Shown in every --help: agents discover the exit-code contract the same way
-# they discover the flags, instead of needing the README.
-_EXIT_CODE_EPILOG = (
-    "exit codes: 0 ok; errors 1-19 (1 error, 2 usage, 3 permission denied, "
-    "4 capability unavailable on this platform/session, 5 no window or display "
-    "matched, 6 blocked by the blocklist or not on the allowlist, 7 invalid input); "
-    "assertion results 20+ (20 OCR assertion failed)"
-)
-
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:]) if argv is None else list(argv)
@@ -59,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return run()
 
-    parser = _build_parser()
+    parser = command_spec.build_argparse(__version__, _handlers())
     args = parser.parse_args(argv)
     try:
         return args.func(args)
@@ -92,457 +83,36 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="squill",
-        description="Screenshot & OCR for scripts and agents (run bare for the GUI).",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    parser.add_argument("--version", action="version", version=f"shotquill {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+def _handlers() -> dict:
+    """Map each registry command's ``handler`` key to its callable.
 
-    capture = sub.add_parser(
-        "capture",
-        help="capture the screen, a window, or a region",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    _add_target_options(capture)
-    capture.add_argument(
-        "--interactive",
-        action="store_true",
-        help="frame the shot interactively — the compositor's own picker chooses "
-        "a window, region, or screen (Wayland only for now; meant for a "
-        "compositor-bound hotkey where global key grabs are blocked)",
-    )
-    capture.add_argument(
-        "-o",
-        "--output",
-        help="output file path, or '-' for image bytes on stdout (default: temp dir)",
-    )
-    capture.add_argument("--format", choices=("png", "jpg"), default="png")
-    capture.add_argument(
-        "--max-width",
-        type=int,
-        metavar="PX",
-        help="downscale to at most this many pixels wide (keeps aspect ratio)",
-    )
-    capture.add_argument(
-        "--json",
-        action="store_true",
-        help="print JSON metadata (path, target, size, matches) instead of the bare path",
-    )
-    capture.add_argument(
-        "--include-cursor", action="store_true", help="composite the pointer (best effort)"
-    )
-    capture.add_argument(
-        "--deterministic",
-        action="store_true",
-        help=(
-            "byte-stable output for golden-image/diff tests: pin the embedded DPI "
-            "and strip PNG timestamp/text chunks (forces the cursor off)"
-        ),
-    )
-    capture.add_argument(
-        "--session",
-        help="also file this capture as an observation frame in a recording session "
-        "(handle from `record start`)",
-    )
-    capture.add_argument(
-        "--dedup",
-        action="store_true",
-        help="when filing the observation frame (with --session), reference the "
-        "previous frame instead of writing a duplicate if the screen is unchanged",
-    )
-    capture.add_argument(
-        "--mask",
-        action="append",
-        metavar="X,Y,W,H",
-        help="black out a rectangle (image-relative logical coords) before output; "
-        "repeatable. A caller-controlled redaction layered on the blocklist.",
-    )
-    capture.add_argument(
-        "--reveal",
-        action="append",
-        metavar="X,Y,W,H",
-        help="mosaic the whole frame, keeping only these rectangle(s) sharp; "
-        "repeatable. Minimizes exposure to just the action (image-relative coords).",
-    )
-    capture.add_argument(
-        "--redact-pii",
-        action="store_true",
-        help="OCR the frame and mask the pixels of any likely PII (email, card, "
-        "SSN, …) before output; best-effort, not a guarantee",
-    )
-    capture.set_defaults(func=_cmd_capture)
-
-    windows = sub.add_parser(
-        "windows",
-        help="list on-screen windows, front-most first",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    windows.add_argument("--json", action="store_true", help="machine-readable output")
-    windows.set_defaults(func=_cmd_windows)
-
-    displays = sub.add_parser(
-        "displays",
-        help="list monitors and their indexes (for `capture --display N`)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    displays.add_argument("--json", action="store_true", help="machine-readable output")
-    displays.set_defaults(func=_cmd_displays)
-
-    ocr = sub.add_parser(
-        "ocr",
-        help="extract text from an image file, stdin, or straight off the screen (on-device)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    ocr.add_argument(
-        "path",
-        nargs="?",
-        help=(
-            "image file, or '-' for image bytes on stdin; omit to capture-and-"
-            "recognize in one step (target options below pick what, like `capture`)"
-        ),
-    )
-    _add_target_options(ocr)
-    ocr.add_argument(
-        "--contains",
-        action="append",
-        metavar="TEXT",
-        help="assert the recognized text contains TEXT (repeatable; all must hold)",
-    )
-    ocr.add_argument(
-        "--matches",
-        action="append",
-        metavar="REGEX",
-        help="assert the recognized text matches REGEX (repeatable; all must hold)",
-    )
-    ocr.add_argument(
-        "-i",
-        "--ignore-case",
-        action="store_true",
-        help="make --contains / --matches case-insensitive (OCR case is noisy)",
-    )
-    ocr.add_argument(
-        "--boxes",
-        action="store_true",
-        help="print each line as 'x,y,w,h<TAB>text' (pixel box in the image) and "
-        "report where any --contains / --matches landed",
-    )
-    ocr.set_defaults(func=_cmd_ocr)
-
-    diff = sub.add_parser(
-        "diff",
-        help="compare two images and report where they differ (for golden-image checks)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    diff.add_argument("a", help="first image file (or '-' for image bytes on stdin)")
-    diff.add_argument("b", help="second image file (or '-' for image bytes on stdin)")
-    diff.add_argument(
-        "--threshold",
-        type=int,
-        default=0,
-        metavar="N",
-        help="per-channel delta that counts as a change (0 = exact; raise to absorb "
-        "anti-aliasing/compression noise)",
-    )
-    diff.add_argument(
-        "--json",
-        action="store_true",
-        help="print a JSON object (changed, box, sizes) instead of a human line",
-    )
-    diff.set_defaults(func=_cmd_diff)
-
-    doctor = sub.add_parser(
-        "doctor",
-        help="report platform capabilities and permissions",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    doctor.add_argument("--json", action="store_true", help="machine-readable output")
-    doctor.set_defaults(func=_cmd_doctor)
-
-    _add_record_parser(sub)
-
-    mcp = sub.add_parser("mcp", help="serve the MCP stdio protocol (for AI agent hosts)")
-    mcp.add_argument(
-        "--timeout",
-        type=int,
-        metavar="SECONDS",
-        help="exit after this many seconds (bound the session; default: until EOF)",
-    )
-    mcp.set_defaults(func=_cmd_mcp)
-
-    install_desktop = sub.add_parser(
-        "install-desktop-entry",
-        help="install the Linux .desktop entry and icon under ~/.local/share",
-        description=(
-            "Copy the bundled .desktop launcher and icon to ~/.local/share so "
-            "ShotQuill shows up in the GNOME / KDE / XFCE application menu. "
-            "Needed after `pipx install shotquill`, because pipx puts data-files "
-            "inside its private venv where the desktop never looks. Idempotent."
-        ),
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    install_desktop.add_argument(
-        "--print-paths",
-        action="store_true",
-        help="show the resolved source and destination paths, then exit (no copy)",
-    )
-    install_desktop.set_defaults(func=_cmd_install_desktop_entry)
-
-    blocklist = sub.add_parser(
-        "blocklist",
-        help="manage the app blocklist (apps that are never captured)",
-    )
-    bl_sub = blocklist.add_subparsers(dest="blocklist_command", required=True)
-
-    bl_list = bl_sub.add_parser("list", help="show the current rules")
-    bl_list.add_argument("--json", action="store_true", help="machine-readable output")
-    bl_list.set_defaults(func=_cmd_blocklist_list)
-
-    bl_add = bl_sub.add_parser("add", help="add a rule")
-    _add_app_rule_selector(bl_add)
-    bl_add.set_defaults(func=_cmd_blocklist_add)
-
-    bl_remove = bl_sub.add_parser("remove", help="remove a matching rule")
-    _add_app_rule_selector(bl_remove)
-    bl_remove.set_defaults(func=_cmd_blocklist_remove)
-
-    allowlist = sub.add_parser(
-        "allowlist",
-        help="manage the capture allowlist (when enabled, ONLY these apps are captured)",
-    )
-    al_sub = allowlist.add_subparsers(dest="allowlist_command", required=True)
-
-    al_list = al_sub.add_parser("list", help="show whether enabled and the current rules")
-    al_list.add_argument("--json", action="store_true", help="machine-readable output")
-    al_list.set_defaults(func=_cmd_allowlist_list)
-
-    al_add = al_sub.add_parser("add", help="add a rule")
-    _add_app_rule_selector(al_add)
-    al_add.set_defaults(func=_cmd_allowlist_add)
-
-    al_remove = al_sub.add_parser("remove", help="remove a matching rule")
-    _add_app_rule_selector(al_remove)
-    al_remove.set_defaults(func=_cmd_allowlist_remove)
-
-    al_enable = al_sub.add_parser(
-        "enable", help="turn the allowlist on (only listed apps can then be captured)"
-    )
-    al_enable.set_defaults(func=_cmd_allowlist_enable)
-
-    al_disable = al_sub.add_parser("disable", help="turn the allowlist off (capture normally)")
-    al_disable.set_defaults(func=_cmd_allowlist_disable)
-
-    return parser
-
-
-def _add_app_rule_selector(command: argparse.ArgumentParser) -> None:
-    """The bundle-id / name choice shared by ``blocklist`` and ``allowlist`` add/remove."""
-    target = command.add_mutually_exclusive_group(required=True)
-    target.add_argument("--bundle-id", help="match the owning app's bundle id exactly")
-    target.add_argument("--name", help="match the app name as a case-insensitive substring")
-
-
-def _add_record_parser(sub) -> None:
-    """The ``record`` flight-recorder commands: start → frame… → end.
-
-    ``start`` prints the session directory on stdout — that path is the handle
-    the caller threads back into ``--session`` for every later ``frame`` and the
-    closing ``end``. Keeping the handle explicit (rather than an ambient "current
-    session") is what makes concurrent agents and CI runs safe.
+    The argparse tree itself is generated from :mod:`shotquill.command_spec`;
+    this is the only place the CLI binds command names to behaviour.
     """
-    record = sub.add_parser(
-        "record",
-        help="record a session of frames an agent leaves behind (a flight recorder)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    rec_sub = record.add_subparsers(dest="record_command", required=True)
-
-    start = rec_sub.add_parser(
-        "start",
-        help="open a session; prints its directory (pass it back as --session)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    start.add_argument("--label", help="human-readable note for the whole session")
-    start.add_argument("--agent", help="name of the agent being recorded (gen_ai.agent.name)")
-    start.add_argument("--agent-id", help="stable id of the agent (gen_ai.agent.id)")
-    start.add_argument(
-        "--id", dest="session_id", help="set the conversation id (default: generated)"
-    )
-    start.add_argument(
-        "--dir",
-        help="pin the session directory (default: a generated dir under the data folder)",
-    )
-    start.add_argument("--json", action="store_true", help="machine-readable output")
-    start.set_defaults(func=_cmd_record_start)
-
-    frame = rec_sub.add_parser(
-        "frame",
-        help="capture one frame into a session (redaction stays on)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    frame.add_argument("--session", required=True, help="session handle from `record start`")
-    frame.add_argument(
-        "--tool", required=True, help="the action this frame documents (gen_ai.tool.name)"
-    )
-    frame.add_argument("--label", help="human-readable note for this frame")
-    _add_target_options(frame)
-    frame.add_argument(
-        "--contains",
-        action="append",
-        metavar="TEXT",
-        help="OCR the frame and assert it contains TEXT (repeatable; all must hold)",
-    )
-    frame.add_argument(
-        "--matches",
-        action="append",
-        metavar="REGEX",
-        help="OCR the frame and assert it matches REGEX (repeatable; all must hold)",
-    )
-    frame.add_argument(
-        "-i",
-        "--ignore-case",
-        action="store_true",
-        help="make --contains / --matches case-insensitive",
-    )
-    frame.add_argument(
-        "--mask",
-        action="append",
-        metavar="X,Y,W,H",
-        help="black out a rectangle (image-relative logical coords) before filing; repeatable",
-    )
-    frame.add_argument(
-        "--reveal",
-        action="append",
-        metavar="X,Y,W,H",
-        help="mosaic the whole frame, keeping only these rectangle(s) sharp; repeatable",
-    )
-    frame.add_argument(
-        "--scan-pii",
-        action="store_true",
-        help="OCR the frame and flag likely PII kinds + counts on it (best-effort, "
-        "not a guarantee; records the kind/count only, never the value)",
-    )
-    frame.add_argument(
-        "--redact-pii",
-        action="store_true",
-        help="OCR the frame and mask the pixels of any likely PII before filing "
-        "(best-effort, not a guarantee); the redacted frame is what gets asserted/scanned",
-    )
-    phase = frame.add_mutually_exclusive_group()
-    phase.add_argument(
-        "--before",
-        dest="phase",
-        action="store_const",
-        const="before",
-        help="file this frame as the 'before' half of a before/after pair around an action",
-    )
-    phase.add_argument(
-        "--after",
-        dest="phase",
-        action="store_const",
-        const="after",
-        help="file this frame as the 'after' half, paired with the most recent --before",
-    )
-    frame.add_argument(
-        "--dedup",
-        action="store_true",
-        help="if this frame is identical to the previous one, reference it instead "
-        "of writing a duplicate image (cost control)",
-    )
-    frame.add_argument(
-        "--max-dimension",
-        type=int,
-        default=0,
-        metavar="PX",
-        help="cap the frame's longer edge to PX pixels before filing (0 = keep native size)",
-    )
-    frame.add_argument("--json", action="store_true", help="machine-readable output")
-    frame.set_defaults(func=_cmd_record_frame)
-
-    end = rec_sub.add_parser(
-        "end",
-        help="close a session and render its HTML filmstrip",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    end.add_argument("--session", required=True, help="session handle from `record start`")
-    end.add_argument("--json", action="store_true", help="machine-readable output")
-    end.set_defaults(func=_cmd_record_end)
-
-    ls = rec_sub.add_parser(
-        "list",
-        help="list recorded sessions (newest first) with size and frame count",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    ls.add_argument("--json", action="store_true", help="machine-readable output")
-    ls.set_defaults(func=_cmd_record_list)
-
-    prune = rec_sub.add_parser(
-        "prune",
-        help="delete old recorded sessions to cap disk cost (complete sessions only)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    prune.add_argument(
-        "--max-age-days",
-        type=float,
-        metavar="DAYS",
-        help="remove sessions started more than DAYS ago",
-    )
-    prune.add_argument(
-        "--max-sessions",
-        type=int,
-        metavar="N",
-        help="keep only the newest N sessions",
-    )
-    prune.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="report what would be removed without deleting anything",
-    )
-    prune.add_argument("--json", action="store_true", help="machine-readable output")
-    prune.set_defaults(func=_cmd_record_prune)
-
-    export = rec_sub.add_parser(
-        "export",
-        help="bundle a session into one shareable archive (manifest + frames + filmstrip)",
-        epilog=_EXIT_CODE_EPILOG,
-    )
-    export.add_argument("session", help="session id or directory (from `record start`)")
-    export.add_argument(
-        "-o",
-        "--output",
-        help="archive path to write (default: <session-id>.<ext> next to the session)",
-    )
-    export.add_argument(
-        "--format",
-        choices=("tar.gz", "zip"),
-        default="tar.gz",
-        help="archive format (default: tar.gz)",
-    )
-    export.add_argument(
-        "--fail-on-pii",
-        action="store_true",
-        help="refuse to export (exit 6) if any frame carries a best-effort PII flag "
-        "(from `record frame --scan-pii`)",
-    )
-    export.add_argument("--json", action="store_true", help="machine-readable output")
-    export.set_defaults(func=_cmd_record_export)
-
-
-def _add_target_options(command: argparse.ArgumentParser) -> None:
-    """The shared what-to-capture options (`capture` and screen-`ocr`)."""
-    target = command.add_mutually_exclusive_group()
-    target.add_argument("--window-id", type=int, help="exact window id (see `squill windows`)")
-    target.add_argument("--app", help="pick the front-most window of a matching app (substring)")
-    target.add_argument("--region", help="logical-coordinate rectangle as x,y,w,h")
-    target.add_argument(
-        "--display",
-        type=int,
-        metavar="N",
-        help="capture one monitor by index (see `squill displays`; 0 = primary)",
-    )
-    command.add_argument("--title", help="narrow --app matches by title substring")
+    return {
+        "capture": _cmd_capture,
+        "window_list": _cmd_windows,
+        "display_list": _cmd_displays,
+        "ocr": _cmd_ocr,
+        "diff": _cmd_diff,
+        "doctor": _cmd_doctor,
+        "session_start": _cmd_session_start,
+        "session_frame": _cmd_session_frame,
+        "session_end": _cmd_session_end,
+        "session_list": _cmd_session_list,
+        "session_prune": _cmd_session_prune,
+        "session_export": _cmd_session_export,
+        "mcp": _cmd_mcp,
+        "desktop_install": _cmd_install_desktop_entry,
+        "blocklist_list": _cmd_blocklist_list,
+        "blocklist_add": _cmd_blocklist_add,
+        "blocklist_remove": _cmd_blocklist_remove,
+        "allowlist_list": _cmd_allowlist_list,
+        "allowlist_add": _cmd_allowlist_add,
+        "allowlist_remove": _cmd_allowlist_remove,
+        "allowlist_enable": _cmd_allowlist_enable,
+        "allowlist_disable": _cmd_allowlist_disable,
+    }
 
 
 def _usage_error(message: str) -> int:
@@ -794,7 +364,7 @@ def _save_image(image, path: Path, format_hint: str, *, deterministic: bool = Fa
         raise OSError(f"failed to write {path}")
 
 
-def _cmd_record_start(args: argparse.Namespace) -> int:
+def _cmd_session_start(args: argparse.Namespace) -> int:
     from shotquill import record
 
     session = record.start_session(
@@ -824,7 +394,7 @@ def _cmd_record_start(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_record_frame(args: argparse.Namespace) -> int:
+def _cmd_session_frame(args: argparse.Namespace) -> int:
     from shotquill import pii, record, textassert
 
     try:
@@ -846,20 +416,20 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     redacting = bool(args.redact_pii)
     recognizer = headless.get_recognizer() if (asserting or scanning or redacting) else None
 
-    # Redaction stays on for the record path: the blocklist is loaded and applied
-    # by perform_capture, and a non-empty list means protection was in force for
-    # this frame (recorded as `redacted` — see record.py for the honest meaning).
-    blocklist = headless.active_blocklist()
-    capturer = headless.get_capturer()
-    result, target, matched = headless.perform_capture(
-        capturer,
+    # The blocklist-enforced capture + redaction/reveal/downscale/encode pipeline
+    # is shared with the MCP path (single-sourced in headless so the
+    # security-sensitive ordering can't drift). `blocklist` non-empty means
+    # protection was in force (recorded as `redacted` — see record.py).
+    image, image_bytes, target, matched, blocklist = headless.render_recorded_frame(
         window_id=args.window_id,
         app=args.app,
         title=args.title,
         region=region,
         display=args.display,
-        blocklist=blocklist,
-        via="record",
+        masks=masks,
+        reveal=reveal,
+        redact_recognizer=recognizer if redacting else None,
+        max_dimension=args.max_dimension,
     )
     if matched > 1 and not args.json:
         print(
@@ -867,23 +437,6 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
             " (use --window-id for an exact pick)",
             file=sys.stderr,
         )
-
-    # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
-    # from the assertion, not just the archived frame.
-    result = headless.apply_masks(result, masks)
-    # Mask likely PII before the frame is filed (and before the assert/scan OCR
-    # below), so the redacted pixels are what gets archived, asserted, and scanned.
-    if redacting:
-        result = headless.redact_pii(result, recognizer)
-    from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
-
-    image = pixelate_except(result_to_qimage(result), reveal, result.scale)
-    # Cap the long edge before OCR/encoding so the archived frame and the
-    # assertion read the very same (possibly shrunk) pixels (cost control).
-    image = downscale_to_max(image, args.max_dimension)
-    # Deterministic encoding (pinned DPI, no volatile PNG chunks) so an unchanged
-    # screen encodes byte-for-byte the same and `--dedup` can spot it.
-    image_bytes = headless.encode_qimage(image, "png", deterministic=True)
 
     # Assert on the very pixels being filed (post-redaction), so the recorded
     # frame and its verdict always agree.
@@ -963,7 +516,7 @@ def _cmd_record_frame(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_record_end(args: argparse.Namespace) -> int:
+def _cmd_session_end(args: argparse.Namespace) -> int:
     from shotquill import record
 
     try:
@@ -1000,7 +553,7 @@ def _cmd_record_end(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_record_export(args: argparse.Namespace) -> int:
+def _cmd_session_export(args: argparse.Namespace) -> int:
     from shotquill import record
 
     try:
@@ -1055,7 +608,7 @@ def _format_size(num_bytes: int) -> str:
     return f"{size:.1f}GB"
 
 
-def _cmd_record_list(args: argparse.Namespace) -> int:
+def _cmd_session_list(args: argparse.Namespace) -> int:
     from shotquill import record
 
     summaries = record.list_sessions()
@@ -1090,11 +643,11 @@ def _cmd_record_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_record_prune(args: argparse.Namespace) -> int:
+def _cmd_session_prune(args: argparse.Namespace) -> int:
     from shotquill import record
 
     if args.max_age_days is None and args.max_sessions is None:
-        return _usage_error("record prune needs --max-age-days and/or --max-sessions")
+        return _usage_error("session prune needs --max-age-days and/or --max-sessions")
     removed = record.prune_sessions(
         max_age_days=args.max_age_days,
         max_sessions=args.max_sessions,
@@ -1187,11 +740,10 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
                 return 1
             source = str(path.resolve())
 
-        from PySide6.QtGui import QImage
-
-        image = QImage.fromData(data)
-        if image.isNull():
-            print(f"squill: {source} is not a decodable image", file=sys.stderr)
+        try:
+            image = headless.decode_qimage(data, label=source)
+        except ValueError as exc:
+            print(f"squill: {exc}", file=sys.stderr)
             return 1
     else:
         # Capture-and-recognize in memory (no file, no clipboard): one step
@@ -1243,7 +795,6 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
 
 
 def _cmd_diff(args: argparse.Namespace) -> int:
-    from PySide6.QtGui import QImage
 
     from shotquill import imaging
 
@@ -1255,20 +806,21 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     def load(arg: str):
         if arg == "-":
             data = headless.read_image_bytes(sys.stdin.buffer, label="stdin")
+            label = "stdin"
         else:
             path = Path(arg).expanduser()
+            label = str(path)
             try:
                 with path.open("rb") as fh:
-                    data = headless.read_image_bytes(fh, label=str(path))
+                    data = headless.read_image_bytes(fh, label=label)
             except OSError as exc:
                 print(f"squill: cannot read {arg}: {exc}", file=sys.stderr)
                 return None
-        image = QImage.fromData(data)
-        if image.isNull():
-            label = "stdin" if arg == "-" else str(Path(arg).expanduser())
-            print(f"squill: {label} is not a decodable image", file=sys.stderr)
+        try:
+            return headless.decode_qimage(data, label=label)
+        except ValueError as exc:
+            print(f"squill: {exc}", file=sys.stderr)
             return None
-        return image
 
     a_img = load(args.a)
     if a_img is None:
@@ -1522,7 +1074,7 @@ def _cmd_install_desktop_entry(args: argparse.Namespace) -> int:
     """
     if not sys.platform.startswith("linux"):
         print(
-            "squill: install-desktop-entry is Linux-only "
+            "squill: desktop install is Linux-only "
             "(this platform doesn't use freedesktop launchers)",
             file=sys.stderr,
         )

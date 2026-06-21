@@ -5,7 +5,7 @@
 The adapter lives under ``examples/`` (it has an Anthropic-SDK dependency and is
 not part of the importable ``shotquill`` package), so this file puts it on the
 path explicitly. Everything tested here is pure: the action→frame mapping, and
-the ``squill record`` command construction driven through an injected fake runner
+the ``squill session`` command construction driven through an injected fake runner
 — no subprocess, no Qt, no network.
 """
 
@@ -195,7 +195,7 @@ def test_start_parses_session_dir():
     rec = _started(runner, label="book a flight", agent_id="a-1")
     assert rec.session_dir == "/tmp/records/conv-1"
     start_argv = runner.calls[0]
-    assert start_argv[:4] == ["squill", "record", "start", "--agent"]
+    assert start_argv[:4] == ["squill", "session", "start", "--agent"]
     assert "--label" in start_argv and "book a flight" in start_argv
     assert "--agent-id" in start_argv and "a-1" in start_argv
 
@@ -212,11 +212,10 @@ def test_record_action_builds_frame_command_with_target_and_dedup():
     filed = rec.record_action("left_click", {"coordinate": [7, 8]})
     assert filed is True
     frame_argv = runner.calls[-1]
-    assert frame_argv[:6] == [
+    assert frame_argv[:5] == [
         "squill",
-        "record",
+        "session",
         "frame",
-        "--session",
         "/tmp/records/conv-1",
         "--tool",
     ]

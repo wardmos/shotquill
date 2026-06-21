@@ -167,11 +167,11 @@ def test_cli_list_and_prune_json(tmp_path, monkeypatch, capsys):
     _session(root, "conv-1", when=_at(1))
     _session(root, "conv-2", when=_at(2))
 
-    assert cli.main(["record", "list", "--json"]) == 0
+    assert cli.main(["session", "list", "--json"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert [s["conversation_id"] for s in listed] == ["conv-2", "conv-1"]
 
-    assert cli.main(["record", "prune", "--max-sessions", "1", "--json"]) == 0
+    assert cli.main(["session", "prune", "--max-sessions", "1", "--json"]) == 0
     pruned = json.loads(capsys.readouterr().out)
     assert pruned["removed"] == ["conv-1"]
     assert pruned["count"] == 1
@@ -183,7 +183,7 @@ def test_cli_prune_requires_a_limit(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(paths, "records_dir", lambda: tmp_path / "records")
     # No --max-age-days / --max-sessions: a usage error, nothing deleted.
-    assert cli.main(["record", "prune"]) != 0
+    assert cli.main(["session", "prune"]) != 0
 
 
 # --- export: aggregate_pii + export_session (pure) --------------------------
@@ -274,7 +274,7 @@ def _flagged_session(root, sid):
 def test_cli_record_export_prints_archive_path(tmp_path, monkeypatch, capsys):
     root = _isolate(monkeypatch, tmp_path)
     _session(root, "conv-e", when=_at(1))
-    assert cli.main(["record", "export", "conv-e"]) == 0
+    assert cli.main(["session", "export", "conv-e"]) == 0
     out = capsys.readouterr().out.strip()
     assert out.endswith("conv-e.tar.gz")
     assert pathlib.Path(out).is_file()
@@ -283,7 +283,7 @@ def test_cli_record_export_prints_archive_path(tmp_path, monkeypatch, capsys):
 def test_cli_record_export_fail_on_pii_blocks_and_writes_nothing(tmp_path, monkeypatch, capsys):
     root = _isolate(monkeypatch, tmp_path)
     _flagged_session(root, "conv-g")
-    rc = cli.main(["record", "export", "conv-g", "--fail-on-pii"])
+    rc = cli.main(["session", "export", "conv-g", "--fail-on-pii"])
     assert rc == 6  # EXIT_BLOCKED
     assert "likely PII" in capsys.readouterr().err
     assert not (root / "conv-g.tar.gz").exists()  # refused before writing
@@ -292,7 +292,7 @@ def test_cli_record_export_fail_on_pii_blocks_and_writes_nothing(tmp_path, monke
 def test_cli_record_export_fail_on_pii_ok_when_clean(tmp_path, monkeypatch, capsys):
     root = _isolate(monkeypatch, tmp_path)
     _session(root, "conv-clean", when=_at(1))  # no PII flags
-    assert cli.main(["record", "export", "conv-clean", "--fail-on-pii"]) == 0
+    assert cli.main(["session", "export", "conv-clean", "--fail-on-pii"]) == 0
 
 
 def _mcp_export(args):
@@ -301,7 +301,7 @@ def _mcp_export(args):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "record_export", "arguments": args},
+            "params": {"name": "session_export", "arguments": args},
         }
     )
     fout = io.StringIO()

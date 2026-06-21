@@ -509,16 +509,11 @@ def _empty_blocklist(monkeypatch):
 def test_cli_round_trip(fake_capturer, monkeypatch, capsys, tmp_path):
     _empty_blocklist(monkeypatch)
 
-    assert cli.main(["record", "start", "--id", "conv-cli", "--agent", "builder"]) == 0
+    assert cli.main(["session", "start", "--id", "conv-cli", "--agent", "builder"]) == 0
     session_dir = capsys.readouterr().out.strip()
     assert session_dir.endswith("conv-cli")
 
-    assert (
-        cli.main(
-            ["record", "frame", "--session", session_dir, "--tool", "click", "--label", "submit"]
-        )
-        == 0
-    )
+    assert cli.main(["session", "frame", session_dir, "--tool", "click", "--label", "submit"]) == 0
     image_path = capsys.readouterr().out.strip()
     # The returned path is absolute and uses native separators (backslashes on
     # Windows); the stored relative field stays forward-slashed.
@@ -526,7 +521,7 @@ def test_cli_round_trip(fake_capturer, monkeypatch, capsys, tmp_path):
     with open(image_path, "rb") as fh:
         assert fh.read(4) == b"\x89PNG"
 
-    assert cli.main(["record", "end", "--session", session_dir]) == 0
+    assert cli.main(["session", "end", session_dir]) == 0
     html_path = capsys.readouterr().out.strip()
     assert html_path.endswith("index.html")
 
@@ -538,22 +533,12 @@ def test_cli_round_trip(fake_capturer, monkeypatch, capsys, tmp_path):
 
 def test_cli_before_after_pairs_frames(fake_capturer, monkeypatch, capsys, tmp_path):
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-ba"])
+    cli.main(["session", "start", "--id", "conv-ba"])
     capsys.readouterr()
 
-    assert (
-        cli.main(
-            ["record", "frame", "--session", "conv-ba", "--tool", "click", "--before", "--json"]
-        )
-        == 0
-    )
+    assert cli.main(["session", "frame", "conv-ba", "--tool", "click", "--before", "--json"]) == 0
     before = json.loads(capsys.readouterr().out)
-    assert (
-        cli.main(
-            ["record", "frame", "--session", "conv-ba", "--tool", "click", "--after", "--json"]
-        )
-        == 0
-    )
+    assert cli.main(["session", "frame", "conv-ba", "--tool", "click", "--after", "--json"]) == 0
     after = json.loads(capsys.readouterr().out)
     assert before["phase"] == "before" and after["phase"] == "after"
     assert before["pair_id"] == after["pair_id"]
@@ -561,30 +546,28 @@ def test_cli_before_after_pairs_frames(fake_capturer, monkeypatch, capsys, tmp_p
 
 def test_cli_lone_after_is_an_error(fake_capturer, monkeypatch, capsys):
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-lone-cli"])
+    cli.main(["session", "start", "--id", "conv-lone-cli"])
     capsys.readouterr()
-    rc = cli.main(["record", "frame", "--session", "conv-lone-cli", "--tool", "click", "--after"])
+    rc = cli.main(["session", "frame", "conv-lone-cli", "--tool", "click", "--after"])
     assert rc == 1
     assert "no open '--before'" in capsys.readouterr().err
 
 
 def test_cli_before_and_after_are_mutually_exclusive(fake_capturer, monkeypatch, capsys):
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-excl"])
+    cli.main(["session", "start", "--id", "conv-excl"])
     capsys.readouterr()
     with pytest.raises(SystemExit) as exc:
-        cli.main(
-            ["record", "frame", "--session", "conv-excl", "--tool", "click", "--before", "--after"]
-        )
+        cli.main(["session", "frame", "conv-excl", "--tool", "click", "--before", "--after"])
     assert exc.value.code == 2  # argparse usage error
 
 
 def test_cli_frame_resolves_id_against_default_root(fake_capturer, monkeypatch, capsys):
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-byid"])
+    cli.main(["session", "start", "--id", "conv-byid"])
     capsys.readouterr()
     # Thread the bare id (not the path) back; it resolves under records_dir().
-    assert cli.main(["record", "frame", "--session", "conv-byid", "--tool", "type"]) == 0
+    assert cli.main(["session", "frame", "conv-byid", "--tool", "type"]) == 0
 
 
 def test_cli_frame_redacted_flag_tracks_blocklist(fake_capturer, monkeypatch, capsys):
@@ -593,16 +576,16 @@ def test_cli_frame_redacted_flag_tracks_blocklist(fake_capturer, monkeypatch, ca
     monkeypatch.setattr(
         headless, "active_blocklist", lambda: bl.Blocklist((bl.BlockRule(name="1Password"),))
     )
-    cli.main(["record", "start", "--id", "conv-redact"])
+    cli.main(["session", "start", "--id", "conv-redact"])
     session_dir = capsys.readouterr().out.strip()
-    assert cli.main(["record", "frame", "--session", session_dir, "--tool", "click", "--json"]) == 0
+    assert cli.main(["session", "frame", session_dir, "--tool", "click", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["redacted"] is True
 
 
 def test_cli_frame_missing_session_is_error(fake_capturer, monkeypatch, capsys):
     _empty_blocklist(monkeypatch)
-    assert cli.main(["record", "frame", "--session", "ghost", "--tool", "click"]) == 1
+    assert cli.main(["session", "frame", "ghost", "--tool", "click"]) == 1
     assert "no recording session" in capsys.readouterr().err
 
 
@@ -610,10 +593,10 @@ def test_cli_frame_dedup_references_previous(fake_capturer, monkeypatch, capsys,
     # The FakeCapturer returns identical pixels each call; deterministic encoding
     # makes them byte-identical, so --dedup files the second frame as a reference.
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-dedup"])
+    cli.main(["session", "start", "--id", "conv-dedup"])
     session_dir = capsys.readouterr().out.strip()
-    cli.main(["record", "frame", "--session", session_dir, "--tool", "a", "--dedup"])
-    cli.main(["record", "frame", "--session", session_dir, "--tool", "b", "--dedup"])
+    cli.main(["session", "frame", session_dir, "--tool", "a", "--dedup"])
+    cli.main(["session", "frame", session_dir, "--tool", "b", "--dedup"])
     capsys.readouterr()
 
     frames_dir = tmp_path / "records" / "conv-dedup" / "frames"
@@ -627,10 +610,10 @@ def test_cli_frame_max_dimension_shrinks_the_stored_image(fake_capturer, monkeyp
     from PySide6.QtGui import QImage
 
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-small"])
+    cli.main(["session", "start", "--id", "conv-small"])
     session_dir = capsys.readouterr().out.strip()
     # FakeCapturer yields a 2x2 frame; cap the long edge to 1 -> a 1x1 archive.
-    cli.main(["record", "frame", "--session", session_dir, "--tool", "a", "--max-dimension", "1"])
+    cli.main(["session", "frame", session_dir, "--tool", "a", "--max-dimension", "1"])
     image_path = capsys.readouterr().out.strip()
     stored = QImage(image_path)
     assert (stored.width(), stored.height()) == (1, 1)
@@ -638,10 +621,10 @@ def test_cli_frame_max_dimension_shrinks_the_stored_image(fake_capturer, monkeyp
 
 def test_cli_record_audits_via_record(fake_capturer, monkeypatch, capsys, tmp_path):
     _empty_blocklist(monkeypatch)
-    cli.main(["record", "start", "--id", "conv-audit"])
+    cli.main(["session", "start", "--id", "conv-audit"])
     session_dir = capsys.readouterr().out.strip()
-    cli.main(["record", "frame", "--session", session_dir, "--tool", "click"])
-    cli.main(["record", "end", "--session", session_dir])
+    cli.main(["session", "frame", session_dir, "--tool", "click"])
+    cli.main(["session", "end", session_dir])
     capsys.readouterr()
 
     entries = [

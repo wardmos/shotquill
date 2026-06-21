@@ -22,7 +22,7 @@ editor to annotate, redact, and extract text first.
 
 - **macOS** — full GUI, CLI, MCP, and on-device OCR (Apple Vision).
 - **Linux / X11** — full menu-bar GUI plus CLI / MCP, including window
-  enumeration (smart-capture window highlight, `squill windows`, and blocklist
+  enumeration (smart-capture window highlight, `squill window list`, and blocklist
   redaction of full-screen grabs) and on-device OCR via Tesseract when it's
   installed.
 - **Linux / Wayland** — CLI / MCP via `xdg-desktop-portal`. Global hotkeys are
@@ -134,13 +134,13 @@ Two channels, pick by what you need:
 
 ```bash
 pipx install shotquill                # menu-bar app, plus `shotquill` and `squill`
-squill install-desktop-entry          # add ShotQuill to your app menu (pipx-only step)
+squill desktop install          # add ShotQuill to your app menu (pipx-only step)
 shotquill                             # launch the menu-bar app
 ```
 
 `pipx upgrade shotquill` keeps it current. `pip install --user shotquill` works
 too if you prefer pip — in that case the `.desktop` launcher and icon land
-under `~/.local/share` automatically, so you can skip the `install-desktop-entry`
+under `~/.local/share` automatically, so you can skip the `desktop install`
 step. (`pipx` stores data files inside its private venv, which the desktop
 doesn't search, hence the one-liner.)
 
@@ -240,7 +240,7 @@ the screen without the GUI:
 ```bash
 squill capture --app safari -o shot.png    # capture a window to a file
 squill ocr --window-id 42 --contains Login # capture + assert on-screen text (exit 20 if absent)
-squill record start --agent builder        # begin a replayable session trace
+squill session start --agent builder        # begin a replayable session trace
 squill mcp                                 # serve the Model Context Protocol over stdio
 ```
 
@@ -254,7 +254,7 @@ exposed to MCP clients as eleven tools.
 contract, capture flags (`--json` / `--max-width` / `--deterministic` / `--mask` /
 `--reveal`),
 OCR assertions, **best-effort PII redaction** (`capture --redact-pii`,
-`record frame --scan-pii` / `--redact-pii`, `record export --fail-on-pii` —
+`session frame --scan-pii` / `--redact-pii`, `session export --fail-on-pii` —
 OCR the frame and mask or flag likely emails, cards, SSNs before output),
 the flight recorder + OpenTelemetry trace export, and the MCP
 tools. The exit-code contract is also printed in every `squill … --help`.
@@ -465,7 +465,7 @@ when the portal is reachable.
 available once the `tesseract` binary is on `PATH`. macOS uses Apple Vision and
 needs no extra install.
 
-**`squill windows` fails with "no EWMH-compatible window manager is running"
+**`squill window list` fails with "no EWMH-compatible window manager is running"
 (or "cannot connect to the X server").** X11 enumeration reads the window
 manager's EWMH properties, so it needs a running, EWMH-compliant WM (virtually
 all modern ones are) and a reachable display. Under Wayland it stays
@@ -507,8 +507,8 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
   export, so blurred-out content isn't recoverable from the saved image.
 - **PII can be redacted automatically.** Programmatic captures can OCR a frame
   and mask likely personal data — emails, card numbers, SSNs — before it ever
-  leaves ShotQuill (`squill capture --redact-pii`, `record frame --scan-pii` /
-  `--redact-pii`, `record export --fail-on-pii`). It is best-effort, not a
+  leaves ShotQuill (`squill capture --redact-pii`, `session frame --scan-pii` /
+  `--redact-pii`, `session export --fail-on-pii`). It is best-effort, not a
   guarantee, and runs fully on-device. See
   [Scripting & agents](docs/scripting.md).
 - **Sensitive apps can be blocklisted.** Name a password manager (or any app)
@@ -670,14 +670,14 @@ pipx uninstall shotquill               # pipx install
       XDG autostart, full-screen / region capture via `QScreen.grabWindow`,
       global hotkeys via `pynput`
 - [x] **Linux / Wayland CLI + MCP** via `xdg-desktop-portal` (Screenshot portal)
-- [x] **Multi-monitor selection** — `squill displays` + `capture --display N`
-      (and the matching MCP `list_displays` tool / `display` argument)
+- [x] **Multi-monitor selection** — `squill display list` + `capture --display N`
+      (and the matching MCP `display_list` tool / `display` argument)
 - [x] **Linux OCR backend** (Tesseract) — `squill ocr` and the editor's
       extract-text action when the `tesseract` CLI is installed
 - [ ] **Linux GUI on Wayland** — global hotkeys need the GlobalShortcuts portal
       (the OS forbids out-of-band key grabs), and the smart-capture overlay
       needs to play nicely with compositor full-screen rules
-- [x] **X11 window enumeration** — `squill windows`, smart-capture window
+- [x] **X11 window enumeration** — `squill window list`, smart-capture window
       highlight, and full-screen blocklist redaction, via EWMH over `python-xlib`
       (Wayland forbids enumerating other apps' windows, so it stays unsupported
       there by design)
