@@ -158,30 +158,27 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
 
-        # The toolbar lands in the corner nearest the pointer (e.g. the
+        # The tool row lands in the corner nearest the pointer (e.g. the
         # bottom-right after a region drag towards the bottom of the screen), so
-        # finishing a shot never means crossing the whole capture. The copy/save
-        # finish buttons ride a sibling no-collapse bar placed right after the
-        # tool row, so they stay visible while the tool row folds on narrow shots.
+        # finishing a shot never means crossing the whole capture.
         area, align_right = _toolbar_placement(QCursor.pos(), origin)
+        self.addToolBar(area, toolbar)
+        # The copy/save finish buttons never fold, so they go on a sibling bar in
+        # the opposite edge's area rather than sharing the tool row's. Sharing a
+        # row would peg the window's minimum width to the sum of both bars — wider
+        # than a narrow shot, which then stretches the canvas off the capture; in
+        # separate areas the minimum is just the wider single bar. It also keeps
+        # each edge a single row, so the shot still lands exactly on its capture.
         outputs = toolbar.outputs_toolbar
         if align_right:
-            # Right edge: the tool row sits leading, the outputs bar absorbs the
-            # slack (it's last in the area) and a leading spacer pushes its
-            # copy/save buttons to the trailing edge nearest the pointer.
+            # Hug copy/save to the pointer's horizontal side: a leading expanding
+            # spacer pushes them to the trailing edge of their (slack-absorbing,
+            # since it's the only bar in its area) row.
             spacer = QWidget()
             spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             outputs.insertWidget(outputs.actions()[0], spacer)
-        self.addToolBar(area, toolbar)
-        # The outputs bar never folds, so sharing a row with the (folding) tool
-        # row sets the window's minimum width to the sum of both — and when that
-        # exceeds the shot's width the window can't shrink to the capture, so the
-        # canvas is stretched off it. When that would happen, drop the outputs bar
-        # onto its own row: the row minimum becomes the wider of the two bars, not
-        # their sum, so the window still matches the shot (just one row taller).
-        if origin is not None and self._outputs_needs_own_row(toolbar, outputs, origin):
-            self.addToolBarBreak(area)
-        self.addToolBar(area, outputs)
+        opposite = Qt.BottomToolBarArea if area == Qt.TopToolBarArea else Qt.TopToolBarArea
+        self.addToolBar(opposite, outputs)
         # Resolves the (configurable, possibly disabled) finish keys and sets the
         # matching tooltips; re-run by the app whenever Settings changes.
         self.reload_finish_keys()
@@ -272,20 +269,6 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         # The framed shell re-places its top-level window over the new crop.
         self._place_over_origin()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
-
-    @staticmethod
-    def _outputs_needs_own_row(toolbar, outputs, origin) -> bool:
-        """Whether the non-folding outputs bar must move off the tool row's row.
-
-        Sharing a row pins the row's minimum width to the sum of the (foldable)
-        tool row's minimum and the (fixed) outputs bar's width. Once that sum is
-        wider than the shot, the window can't size down to the capture. Splitting
-        the rows drops the requirement to the wider single bar, which fits any
-        shot at least as wide as the two output buttons.
-        """
-        target_width = min(origin.width(), _MAX_INITIAL_WIDTH)
-        one_row = toolbar.minimumSizeHint().width() + outputs.minimumSizeHint().width()
-        return one_row > target_width
 
     def _place_over_origin(self) -> None:
         """Open the editor so the screenshot appears to stay where it was shot.

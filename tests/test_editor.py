@@ -273,8 +273,10 @@ def test_toolbar_moves_to_bottom_right_when_pointer_ends_there(qtbot, config, mo
     window.setAttribute(Qt.WA_DeleteOnClose, False)
     toolbar = window._toolbar
     outputs = toolbar.outputs_toolbar
+    # The tool row follows the pointer; the no-collapse copy/save bar takes the
+    # opposite edge so the two never share (and widen) a row.
     assert window.toolBarArea(toolbar) == Qt.BottomToolBarArea
-    assert window.toolBarArea(outputs) == Qt.BottomToolBarArea
+    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
     # Right alignment pushes the copy/save bar's buttons to the trailing edge via
     # an expanding spacer ahead of its actions.
     assert isinstance(outputs.actions()[0], QWidgetAction)
@@ -300,19 +302,24 @@ def test_copy_and_save_stay_visible_when_the_editor_is_narrow(qtbot, config, mon
     assert outputs.widgetForAction(window._save_action).isVisible()
 
 
-def test_outputs_drop_to_their_own_row_on_a_narrow_shot(qtbot, config):
-    # When the shot is too narrow for the tool row and the no-collapse outputs
-    # bar to share a row, the outputs bar moves to its own row instead of forcing
-    # the window wider than the capture; copy/save stay visible either way.
-    origin = QRect(100, 100, 80, 100)  # narrower than the two bars side by side
-    window = EditorWindow(_image(), config, origin)
+def test_outputs_take_the_opposite_edge_and_dont_widen_a_narrow_shot(qtbot, config):
+    # The no-collapse outputs bar sits in the opposite edge's area, so the window
+    # minimum width is the wider single bar rather than the sum of both — a narrow
+    # shot keeps its width (the canvas stays exactly over the capture) and copy/
+    # save stay visible.
+    origin = QRect(100, 100, 80, 100)  # narrower than the tool row plus outputs
+    screenshot = _image(400, 300)
+    window = EditorWindow(
+        screenshot.copy(origin), config, origin, RegionContext(screenshot, QRect(0, 0, 400, 300))
+    )
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
     window.show()
     qtbot.waitExposed(window)
     toolbar = window._toolbar
     outputs = toolbar.outputs_toolbar
-    assert toolbar.y() != outputs.y()  # split across two rows
+    assert window.toolBarArea(toolbar) != window.toolBarArea(outputs)
+    assert window._canvas.viewport().size() == origin.size()
     assert outputs.widgetForAction(window._copy_action).isVisible()
     assert outputs.widgetForAction(window._save_action).isVisible()
 
@@ -328,7 +335,7 @@ def test_toolbar_stays_top_left_when_pointer_ends_there(qtbot, config, monkeypat
     toolbar = window._toolbar
     outputs = toolbar.outputs_toolbar
     assert window.toolBarArea(toolbar) == Qt.TopToolBarArea
-    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
+    assert window.toolBarArea(outputs) == Qt.BottomToolBarArea
     assert not isinstance(outputs.actions()[0], QWidgetAction)
 
 
