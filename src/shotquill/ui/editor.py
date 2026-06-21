@@ -143,7 +143,9 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
 
         # get_recognizer is resolved here (a module the tests can patch) and
         # handed to the core, which omits the OCR button when it is None.
-        toolbar = self._init_editor_core(image, config, origin, region, get_recognizer())
+        toolbar = self._init_editor_core(
+            image, config, origin, region, get_recognizer(), split_outputs=True
+        )
         self.setCentralWidget(self._canvas)
         # Region captures stay adjustable: let the canvas hand off an edge press
         # to this window, which opens the full-screen adjust surface.
@@ -158,13 +160,20 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
 
         # The toolbar lands in the corner nearest the pointer (e.g. the
         # bottom-right after a region drag towards the bottom of the screen), so
-        # finishing a shot never means crossing the whole capture.
+        # finishing a shot never means crossing the whole capture. The copy/save
+        # finish buttons ride a sibling no-collapse bar placed right after the
+        # tool row, so they stay visible while the tool row folds on narrow shots.
         area, align_right = _toolbar_placement(QCursor.pos(), origin)
+        outputs = toolbar.outputs_toolbar
         if align_right:
+            # Right edge: the tool row sits leading, the outputs bar absorbs the
+            # slack (it's last in the area) and a leading spacer pushes its
+            # copy/save buttons to the trailing edge nearest the pointer.
             spacer = QWidget()
             spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            toolbar.insertWidget(toolbar.actions()[0], spacer)
+            outputs.insertWidget(outputs.actions()[0], spacer)
         self.addToolBar(area, toolbar)
+        self.addToolBar(area, outputs)
         # Resolves the (configurable, possibly disabled) finish keys and sets the
         # matching tooltips; re-run by the app whenever Settings changes.
         self.reload_finish_keys()

@@ -125,11 +125,15 @@ class EditorCoreMixin:
 
     # --- setup (called from the shell's __init__) -------------------------
 
-    def _init_editor_core(self, image, config, origin, region, recognizer):
+    def _init_editor_core(self, image, config, origin, region, recognizer, split_outputs=False):
         """Create the canvas + toolbar and wire OCR; return the toolbar.
 
         ``recognizer`` is passed in (not fetched here) so the shell decides it on
         a module the tests can patch. The shell positions the returned toolbar.
+
+        ``split_outputs`` peels the copy/save buttons onto the toolbar's sibling
+        ``outputs_toolbar`` so a width-constrained host can keep them visible (see
+        create_toolbar); the shell must then place that bar too.
         """
         self._config = config
         self._origin = origin
@@ -158,6 +162,7 @@ class EditorCoreMixin:
             self._ocr if recognizer is not None else None,
             self._pin,
             style=config.toolbar_style(),
+            split_outputs=split_outputs,
         )
         self._copy_action = self._toolbar.copy_action
         self._save_action = self._toolbar.save_action

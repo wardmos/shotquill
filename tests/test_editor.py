@@ -264,30 +264,55 @@ def _fake_cursor(monkeypatch, x, y):
 
 
 def test_toolbar_moves_to_bottom_right_when_pointer_ends_there(qtbot, config, monkeypatch):
-    from PySide6.QtWidgets import QToolBar, QWidgetAction
+    from PySide6.QtWidgets import QWidgetAction
 
     origin = QRect(100, 100, 200, 100)
     _fake_cursor(monkeypatch, 280, 190)  # released near the bottom-right corner
     window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    toolbar = window.findChild(QToolBar)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
     assert window.toolBarArea(toolbar) == Qt.BottomToolBarArea
-    # Right alignment comes from an expanding spacer ahead of the actions.
-    assert isinstance(toolbar.actions()[0], QWidgetAction)
+    assert window.toolBarArea(outputs) == Qt.BottomToolBarArea
+    # Right alignment pushes the copy/save bar's buttons to the trailing edge via
+    # an expanding spacer ahead of its actions.
+    assert isinstance(outputs.actions()[0], QWidgetAction)
+
+
+def test_copy_and_save_stay_visible_when_the_editor_is_narrow(qtbot, config, monkeypatch):
+    # The shot's finish buttons must never fold behind the tool row's overflow
+    # chevron: on a capture far narrower than the full row, the tool buttons fold
+    # but copy/save ride a no-collapse sibling bar that keeps them on the row.
+    _fake_cursor(monkeypatch, 120, 110)
+    window = EditorWindow(_image(), config, QRect(100, 100, 200, 100))
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.resize(140, 300)
+    window.show()
+    qtbot.waitExposed(window)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
+    # The tool row has folded (its trailing button is hidden behind the chevron)...
+    assert not toolbar.widgetForAction(toolbar.actions()[-1]).isVisible()
+    # ...yet copy and save are still shown.
+    assert outputs.widgetForAction(window._copy_action).isVisible()
+    assert outputs.widgetForAction(window._save_action).isVisible()
 
 
 def test_toolbar_stays_top_left_when_pointer_ends_there(qtbot, config, monkeypatch):
-    from PySide6.QtWidgets import QToolBar, QWidgetAction
+    from PySide6.QtWidgets import QWidgetAction
 
     origin = QRect(100, 100, 200, 100)
     _fake_cursor(monkeypatch, 120, 110)
     window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    toolbar = window.findChild(QToolBar)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
     assert window.toolBarArea(toolbar) == Qt.TopToolBarArea
-    assert not isinstance(toolbar.actions()[0], QWidgetAction)
+    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
+    assert not isinstance(outputs.actions()[0], QWidgetAction)
 
 
 def test_editor_places_canvas_over_origin_with_bottom_toolbar(qtbot, config, monkeypatch):

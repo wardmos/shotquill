@@ -93,6 +93,21 @@ _TIGHT_STYLE = (
 _WIDTH_FIELD_PADDING = 22
 
 
+class _NoCollapseToolBar(QToolBar):
+    """A toolbar that never hides items behind the overflow chevron.
+
+    QToolBar folds its trailing buttons into an extension popup once the row is
+    narrower than its contents. Reporting the full size hint as the minimum keeps
+    the host (the editor window's toolbar area) from ever shrinking the bar below
+    that, so every button stays on the row. Used for the copy/save outputs so
+    finishing a shot is always one visible click away, no matter how narrow the
+    capture is (the tool row keeps Qt's normal folding — see create_toolbar).
+    """
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+
 def _pick_color(canvas: AnnotationCanvas) -> None:
     color = QColorDialog.getColor(canvas.color(), None, t("dialog.pick_color"))
     if color.isValid():
@@ -106,6 +121,7 @@ def create_toolbar(
     on_ocr: Callable[[], None] | None,
     on_pin: Callable[[], None],
     style: str = DEFAULT_TOOLBAR_STYLE,
+    split_outputs: bool = False,
 ) -> QToolBar:
     toolbar = QToolBar()
     toolbar.setToolButtonStyle(_BUTTON_STYLES.get(style, _BUTTON_STYLES[DEFAULT_TOOLBAR_STYLE]))
@@ -240,13 +256,31 @@ def create_toolbar(
     copy_action.setShortcut(QKeySequence.Copy)
     copy_action.setToolTip(t("toolbar.copy_tip"))
     copy_action.triggered.connect(on_copy)
-    toolbar.addAction(copy_action)
 
     save_action = QAction(sized_icon("save"), t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
     save_action.setToolTip(t("toolbar.save_tip"))
     save_action.triggered.connect(on_save)
-    toolbar.addAction(save_action)
+
+    # Copy/save are the shot's finish actions, so they must never fold away. When
+    # the host can constrain the bar's width (the framed editor's toolbar area),
+    # split them onto a sibling no-collapse bar that keeps them visible while the
+    # tool row above still folds normally; otherwise (the spotlight surface,
+    # whose floating bar is sized to its contents and never folds) keep the
+    # single-bar layout.
+    if split_outputs:
+        outputs = _NoCollapseToolBar()
+        outputs.setToolButtonStyle(toolbar.toolButtonStyle())
+        outputs.setIconSize(toolbar.iconSize())
+        outputs.setStyleSheet(_TIGHT_STYLE)
+        outputs.setMovable(False)
+        outputs.addAction(copy_action)
+        outputs.addAction(save_action)
+        toolbar.outputs_toolbar = outputs
+    else:
+        toolbar.addAction(copy_action)
+        toolbar.addAction(save_action)
+        toolbar.outputs_toolbar = None
 
     # Exposed so EditorWindow can keep these tooltips in sync with the
     # configurable finish keys (see EditorWindow._refresh_finish_tips).

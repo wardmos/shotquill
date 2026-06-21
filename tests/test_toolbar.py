@@ -134,6 +134,38 @@ def test_copy_and_save_callbacks_are_wired(qtbot):
     assert set(calls) == {"copy", "save", "ocr", "pin"}
 
 
+def test_outputs_stay_on_the_main_bar_by_default(qtbot):
+    # The single-bar layout (used by the floating spotlight toolbar, which is
+    # sized to its contents and never folds) keeps copy/save inline.
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert toolbar.outputs_toolbar is None
+    assert toolbar.copy_action in toolbar.actions()
+    assert toolbar.save_action in toolbar.actions()
+
+
+def test_split_outputs_moves_copy_save_to_a_no_collapse_sibling_bar(qtbot):
+    # The framed editor constrains the bar's width, so copy/save are peeled onto
+    # a sibling that never folds them behind the overflow chevron.
+    from shotquill.ui.toolbar import _NoCollapseToolBar
+
+    canvas = _canvas(qtbot)
+    toolbar = create_toolbar(
+        canvas, lambda: None, lambda: None, lambda: None, lambda: None, split_outputs=True
+    )
+    qtbot.addWidget(toolbar)
+    outputs = toolbar.outputs_toolbar
+    assert isinstance(outputs, _NoCollapseToolBar)
+    qtbot.addWidget(outputs)
+    # The tool row no longer carries copy/save; the outputs bar does.
+    assert toolbar.copy_action not in toolbar.actions()
+    assert toolbar.save_action not in toolbar.actions()
+    assert toolbar.copy_action in outputs.actions()
+    assert toolbar.save_action in outputs.actions()
+    # A no-collapse bar reserves room for every button (min == preferred), so it
+    # never hides one behind a chevron.
+    assert outputs.minimumSizeHint() == outputs.sizeHint()
+
+
 def test_ocr_action_present_when_callback_given(qtbot):
     _canvas_, toolbar = _toolbar(qtbot, on_ocr=lambda: None)
     assert "Copy Text" in {a.text() for a in toolbar.actions()}
