@@ -80,11 +80,15 @@ def test_headless_factory_raises_with_install_hint_when_unavailable(monkeypatch)
         raise AssertionError("expected CapabilityUnsupported")
 
 
-def test_doctor_reports_backend_name(monkeypatch):
+def test_doctor_reports_backend_name(tmp_path, monkeypatch):
     # The doctor surfaces which engine answered; on Windows that's "Windows OCR".
     # Short-circuit the capture probes (Qt + real Win32) so this isolates the
     # ocr check — those paths have their own tests.
     monkeypatch.setattr(headless.sys, "platform", "win32")
+    # doctor_checks() resolves the audit-log path, whose Windows branch creates
+    # %LOCALAPPDATA%\shotquill\Logs as a side effect; pin it to tmp so the test
+    # doesn't fall back to ~/AppData in a real home directory.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     monkeypatch.setattr(ocr_windows, "is_available", lambda: True)
 
     def _no_capture(*a, **kw):
