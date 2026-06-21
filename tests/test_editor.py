@@ -300,6 +300,23 @@ def test_copy_and_save_stay_visible_when_the_editor_is_narrow(qtbot, config, mon
     assert outputs.widgetForAction(window._save_action).isVisible()
 
 
+def test_outputs_drop_to_their_own_row_on_a_narrow_shot(qtbot, config):
+    # When the shot is too narrow for the tool row and the no-collapse outputs
+    # bar to share a row, the outputs bar moves to its own row instead of forcing
+    # the window wider than the capture; copy/save stay visible either way.
+    origin = QRect(100, 100, 80, 100)  # narrower than the two bars side by side
+    window = EditorWindow(_image(), config, origin)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
+    assert toolbar.y() != outputs.y()  # split across two rows
+    assert outputs.widgetForAction(window._copy_action).isVisible()
+    assert outputs.widgetForAction(window._save_action).isVisible()
+
+
 def test_toolbar_stays_top_left_when_pointer_ends_there(qtbot, config, monkeypatch):
     from PySide6.QtWidgets import QWidgetAction
 
