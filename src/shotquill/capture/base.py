@@ -21,6 +21,10 @@ class Rect:
     width: int
     height: int
 
+    def center(self) -> tuple[int, int]:
+        """The rectangle's centre point in logical coordinates."""
+        return (self.x + self.width // 2, self.y + self.height // 2)
+
 
 @dataclass(frozen=True)
 class CaptureResult:

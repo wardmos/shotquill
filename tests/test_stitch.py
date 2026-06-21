@@ -1,0 +1,284 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 wardmos
+"""Tests for stitching scrolling frames into one long image."""
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+from PySide6.QtGui import (  # noqa: E402
+    QColor,
+    QImage,
+)
+
+from shotquill.stitch import (  # noqa: E402
+    ScrollAccumulator,
+    detect_sticky_bands,
+    estimate_vertical_offset,
+    stitch_vertical,
+)
+
+
+def _row_color(seed: int) -> QColor:
+    # Distinct, deterministic per-row colour so every row is unique and the
+    # overlap matcher has an unambiguous alignment to find.
+    return QColor(seed % 251, (seed * 7) % 251, (seed * 13) % 251)
+
+
+def _image(width: int, row_colors: list[QColor]) -> QImage:
+    img = QImage(width, len(row_colors), QImage.Format.Format_RGBA8888)
+    for y, color in enumerate(row_colors):
+        for x in range(width):
+            img.setPixelColor(x, y, color)
+    return img
+
+
+def _tall(width: int, n_rows: int, start: int = 0) -> list[QColor]:
+    return [_row_color(start + y) for y in range(n_rows)]
+
+
+def _crop(source: QImage, y: int, height: int) -> QImage:
+    return source.copy(0, y, source.width(), height)
+
+
+def _row_seed(img: QImage, y: int) -> tuple[int, int, int]:
+    c = img.pixelColor(0, y)
+    return (c.red(), c.green(), c.blue())
+
+
+# --- estimate_vertical_offset -------------------------------------------------
+
+
+def test_estimate_offset_finds_the_scroll_distance():
+    source = _image(10, _tall(10, 40))
+    prev = _crop(source, 0, 20)
+    curr = _crop(source, 5, 20)  # scrolled down 5px (15-row overlap)
+    assert estimate_vertical_offset(prev, curr) == 5
+
+
+def test_estimate_offset_zero_for_identical_frames():
+    frame = _image(10, _tall(10, 12))
+    assert estimate_vertical_offset(frame, frame) == 0
+
+
+def test_estimate_offset_none_when_disjoint():
+    # Two crops far enough apart that they share no rows → no overlap to find.
+    source = _image(10, _tall(10, 60))
+    prev = _crop(source, 0, 12)
+    curr = _crop(source, 40, 12)
+    assert estimate_vertical_offset(prev, curr) is None
+
+
+def test_estimate_offset_none_on_size_mismatch():
+    a = _image(10, _tall(10, 12))
+    b = _image(8, _tall(8, 12))
+    assert estimate_vertical_offset(a, b) is None
+
+
+def test_estimate_offset_respects_sticky_header():
+    # A fixed 3-row header sits on top. Without excluding it the anchor leads with
+    # the header rows, which only line up at dy=0 where the band disagrees — so the
+    # match fails (None). Telling it head=3 skips the header and recovers the scroll.
+    header = [_row_color(900 + i) for i in range(3)]
+    band = _tall(10, 40, start=100)
+    prev = _image(10, header + band[0:20])
+    curr = _image(10, header + band[5:25])
+    assert estimate_vertical_offset(prev, curr) is None  # misled by the header
+    assert estimate_vertical_offset(prev, curr, head=3) == 5
+
+
+# --- detect_sticky_bands ------------------------------------------------------
+
+
+def test_detect_sticky_header_and_footer():
+    header = [_row_color(900 + i) for i in range(3)]
+    footer = [_row_color(800 + i) for i in range(2)]
+    band = _tall(10, 30, start=100)
+    prev = _image(10, header + band[0:7] + footer)
+    curr = _image(10, header + band[5:12] + footer)
+    assert detect_sticky_bands(prev, curr) == (3, 2)
+
+
+def test_detect_sticky_none_when_everything_scrolls():
+    source = _image(10, _tall(10, 40))
+    prev = _crop(source, 0, 12)
+    curr = _crop(source, 4, 12)
+    assert detect_sticky_bands(prev, curr) == (0, 0)
+
+
+# --- stitch_vertical ----------------------------------------------------------
+
+
+def test_stitch_single_frame_returns_a_copy():
+    frame = _image(10, _tall(10, 12))
+    out = stitch_vertical([frame])
+    assert (out.width(), out.height()) == (10, 12)
+    assert out is not frame
+
+
+def test_stitch_empty_raises():
+    with pytest.raises(ValueError, match="at least one"):
+        stitch_vertical([])
+
+
+def test_stitch_rejects_width_mismatch():
+    with pytest.raises(ValueError, match="differ in size"):
+        stitch_vertical([_image(10, _tall(10, 8)), _image(8, _tall(8, 8))])
+
+
+def test_stitch_reconstructs_the_scrolled_content():
+    # Frames are 12-row windows onto a 24-row page, stepping 4px each.
+    source = _image(10, _tall(10, 24))
+    frames = [_crop(source, off, 12) for off in (0, 4, 8, 12)]
+    out = stitch_vertical(frames)
+    # Height = first frame (12) + 3 steps × 4 = 24, the whole page.
+    assert (out.width(), out.height()) == (10, 24)
+    for y in range(24):
+        assert _row_seed(out, y) == _row_seed(source, y)
+
+
+def test_stitch_identical_frames_collapse_to_one():
+    # No scroll happened (reached bottom immediately) → just the single frame.
+    frame = _image(10, _tall(10, 12))
+    out = stitch_vertical([frame, frame, frame])
+    assert (out.width(), out.height()) == (10, 12)
+
+
+def test_stitch_keeps_sticky_header_and_footer_once():
+    header = [_row_color(900 + i) for i in range(3)]
+    footer = [_row_color(800 + i) for i in range(2)]
+    band_src = _tall(10, 40, start=100)  # the scrolling content
+    # Two frames, band window of 20 rows, stepping 5px (15-row overlap).
+    frames = [
+        _image(10, header + band_src[0:20] + footer),
+        _image(10, header + band_src[5:25] + footer),
+    ]
+    out = stitch_vertical(frames)
+    # Height = frame (25) + one 5px step = 30.
+    assert (out.width(), out.height()) == (10, 30)
+    # Header once at the very top.
+    for i in range(3):
+        assert _row_seed(out, i) == (header[i].red(), header[i].green(), header[i].blue())
+    # Footer once at the very bottom.
+    for i in range(2):
+        c = footer[i]
+        assert _row_seed(out, 28 + i) == (c.red(), c.green(), c.blue())
+    # Continuous band in between: rows 3..28 are band_src[0:25].
+    for j in range(25):
+        c = band_src[j]
+        assert _row_seed(out, 3 + j) == (c.red(), c.green(), c.blue())
+
+
+def test_stitch_disjoint_pair_appends_whole_band():
+    # A gap too large to overlap: content is appended rather than dropped, so the
+    # stitched height is the sum of both frames (no overlap removed).
+    source = _image(10, _tall(10, 80))
+    frames = [_crop(source, 0, 12), _crop(source, 60, 12)]
+    out = stitch_vertical(frames)
+    assert out.height() == 24
+
+
+# --- ScrollAccumulator (the live sample → decide → stitch driver) -------------
+
+
+def _acc(max_height=10000, settle=3, max_frames=600):
+    return ScrollAccumulator(max_height=max_height, settle=settle, max_frames=max_frames)
+
+
+def test_accumulator_keeps_going_while_content_scrolls():
+    page = _image(10, _tall(10, 100))
+    acc = _acc()
+    assert acc.add(_crop(page, 0, 30)) is True
+    assert acc.add(_crop(page, 10, 30)) is True
+    assert acc.frame_count == 2
+    assert acc.done is False
+
+
+def test_accumulator_stops_after_settle_and_drops_duplicates():
+    page = _image(10, _tall(10, 100))
+    a, b = _crop(page, 0, 30), _crop(page, 10, 30)
+    acc = _acc(settle=2)
+    assert acc.add(a) is True
+    assert acc.add(b) is True
+    assert acc.add(b) is True  # 1st still frame
+    assert acc.add(b) is False  # 2nd still frame → settled
+    assert acc.done is True
+    assert acc.frame_count == 2  # the duplicates never joined the stitch
+    assert acc.result().height() == 40
+
+
+def test_accumulator_stops_at_max_height():
+    page = _image(10, _tall(10, 100))
+    acc = _acc(max_height=35)
+    assert acc.add(_crop(page, 0, 30)) is True  # approx height 30
+    assert acc.add(_crop(page, 10, 30)) is False  # +10 → 40 ≥ 35, stop
+    assert acc.result().height() == 35  # stitched 40, cropped back to the cap
+
+
+def test_accumulator_stops_at_max_frames():
+    page = _image(10, _tall(10, 100))
+    acc = _acc(max_frames=2)
+    assert acc.add(_crop(page, 0, 30)) is True
+    assert acc.add(_crop(page, 10, 30)) is False  # hit the 2-frame cap
+    assert acc.frame_count == 2
+
+
+def test_accumulator_reconstructs_scrolled_content():
+    page = _image(10, _tall(10, 60))
+    acc = _acc()
+    for off in (0, 8, 16):
+        acc.add(_crop(page, off, 30))
+    out = acc.result()
+    assert out.height() == 46  # 30 + 8 + 8
+    for y in range(46):
+        assert _row_seed(out, y) == _row_seed(page, y)
+
+
+def test_accumulator_matches_batch_stitch_vertical():
+    # The incremental accumulator and the batch stitch_vertical must agree pixel
+    # for pixel on the same frame run (no drops / caps in play).
+    page = _image(10, _tall(10, 80))
+    frames = [_crop(page, off, 30) for off in (0, 8, 16, 24)]
+    acc = _acc()
+    for f in frames:
+        acc.add(f)
+    incremental = acc.result()
+    batch = stitch_vertical(frames)
+    assert (incremental.width(), incremental.height()) == (batch.width(), batch.height())
+    for y in range(incremental.height()):
+        assert _row_seed(incremental, y) == _row_seed(batch, y)
+
+
+def test_accumulator_handles_sticky_header_instead_of_collapsing():
+    # Regression: a fixed top bar >= min_overlap rows used to make every real
+    # scroll read as "no motion" (the anchor was the header), so the capture
+    # settled after one frame. The accumulator must detect the sticky band and
+    # keep scrolling, with the header composited once.
+    header = [_row_color(900 + i) for i in range(8)]
+    band = _tall(10, 60, start=100)
+    frames = [_image(10, header + band[off : off + 20]) for off in (0, 5, 10)]
+    acc = _acc(settle=2)
+    for f in frames:
+        acc.add(f)
+    acc.add(frames[-1])  # 1st still frame
+    acc.add(frames[-1])  # 2nd → settle
+    assert acc.frame_count == 3  # not collapsed to a single frame
+    out = acc.result()
+    assert out.height() == 38  # header 8 + band 20 + two 5px steps
+    for i in range(8):  # header kept once at the top
+        assert _row_seed(out, i) == (header[i].red(), header[i].green(), header[i].blue())
+    for j in range(30):  # continuous band below it
+        c = band[j]
+        assert _row_seed(out, 8 + j) == (c.red(), c.green(), c.blue())
+
+
+def test_estimate_offset_rejects_false_anchor_match_in_repeating_region():
+    # Regression: the k-row anchor matches inside a repeating stripe at dy=0, but
+    # the full overlap only agrees at the true scroll of 2. Verifying the whole
+    # overlap (not just the anchor) picks the right offset.
+    a, b = _row_color(1000), _row_color(1001)
+    rows = [a if i % 2 == 0 else b for i in range(12)] + [_row_color(12 + i) for i in range(20)]
+    page = _image(10, rows)
+    prev = _crop(page, 0, 20)
+    curr = _crop(page, 2, 20)
+    assert estimate_vertical_offset(prev, curr) == 2

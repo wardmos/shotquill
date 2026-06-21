@@ -1243,3 +1243,117 @@ def test_make_editor_uses_framed_window_on_wayland(qapp, config, fakes, monkeypa
         assert isinstance(editor, EditorWindow)
     finally:
         editor.close()
+
+
+# --- long screenshot (scrolling) ---------------------------------------------
+
+
+class _FakeScroller:
+    def __init__(self):
+        self.calls = []
+
+    def scroll(self, clicks, *, at=None):
+        self.calls.append((clicks, at))
+
+
+def _scroll_results(width, frame_h, offsets):
+    """Pre-baked region grabs: distinct-per-row crops of a tall virtual page."""
+
+    def _res(start):
+        seeds = list(range(start, start + frame_h))
+        px = bytearray()
+        for s in seeds:
+            px += bytes([s % 251, (s * 7) % 251, (s * 13) % 251, 255]) * width
+        return CaptureResult(width=width, height=frame_h, scale=1.0, pixels=bytes(px))
+
+    return [_res(off) for off in offsets]
+
+
+def test_scrolling_region_collects_frames_and_delivers(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+    capturer = fakes[0]
+    results = _scroll_results(10, 30, (0, 10, 20))
+    state = {"i": 0}
+
+    def _capture_region(region):
+        result = results[min(state["i"], len(results) - 1)]
+        state["i"] += 1
+        return result
+
+    monkeypatch.setattr(capturer, "capture_region", _capture_region)
+    scroller = _FakeScroller()
+    monkeypatch.setattr(app_module, "get_scroller", lambda: scroller)
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *a, **k: delivered.append(image))
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    # The QTimer is never spun in the test; drive ticks by hand until delivery.
+    for _ in range(20):
+        if delivered:
+            break
+        app._scrolling_tick()
+
+    assert delivered, "the long screenshot was never delivered"
+    assert delivered[0].height() == 50  # 30 + 10 + 10 stitched
+    assert scroller.calls  # the wheel was turned to advance the page
+    assert all(clicks < 0 for clicks, _at in scroller.calls)  # downward
+    assert app._scroll is None  # state torn down after delivery
+    app.shutdown()
+
+
+def test_scrolling_region_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),))
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    assert not delivered
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_unavailable_when_scroller_refused(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+
+    def _refuse():
+        raise app_module.CapabilityUnsupported("auto-scroll", "Wayland blocks synthetic input")
+
+    monkeypatch.setattr(app_module, "get_scroller", _refuse)
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    assert notified
+    assert app._scroll is None  # nothing started
+    app.shutdown()
+
+
+def test_scrolling_needs_region_notifies(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+
+    app = _build_app(qapp, fakes)
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._scrolling_needs_region(5, QRect(0, 0, 2, 2))  # window_selected shape
+    app._scrolling_needs_region()  # fullscreen_selected shape
+    assert len(notified) == 2
+    app.shutdown()

@@ -21,6 +21,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Tray menu
     "menu.smart": {"en": "Capture", "zh": "截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
+    "menu.scrolling": {"en": "Long Screenshot", "zh": "长截图"},
     "menu.open_folder": {"en": "Open Save Folder", "zh": "打开保存文件夹"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
@@ -45,6 +46,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Your allowlist is on, so only specific apps can be captured — "
         "full-screen and region capture are off. Pick an allowlisted window.",
         "zh": "你的白名单已开启，只能截取指定应用——全屏和区域截图已停用。请选择白名单内的窗口。",
+    },
+    "notify.scrolling_needs_region": {
+        "en": "A long screenshot needs a region — drag to frame the area to scroll.",
+        "zh": "长截图需要先框选一个区域——请拖拽框出要滚动的范围。",
+    },
+    "notify.scrolling_unavailable": {
+        "en": "Auto-scroll isn't available here: {reason}",
+        "zh": "此环境无法自动滚动：{reason}",
     },
     "notify.allowlist_unreadable": {
         "en": "Your allowlist couldn't be read, so ShotQuill won't capture "

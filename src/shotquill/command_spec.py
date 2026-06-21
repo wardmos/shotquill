@@ -29,6 +29,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from shotquill.headless import (
+    SCROLL_CLICKS_DEFAULT,
+    SCROLL_INTERVAL_DEFAULT,
+    SCROLL_MAX_HEIGHT_DEFAULT,
+)
+
 # Shown in every CLI ``--help``: agents discover the exit-code contract the same
 # way they discover the flags. Kept here so cli.py and the docs generator share
 # one copy.
@@ -290,6 +296,48 @@ REGISTRY: tuple[Command, ...] = (
                 "region, or screen (Wayland only for now; meant for a compositor-bound hotkey "
                 "where global key grabs are blocked)",
                 kind="flag",
+                cli_only=True,
+            ),
+            Param(
+                "scrolling",
+                "long screenshot: sample --region while you scroll within it and stitch the "
+                "frames into one tall image (manual scroll, or --auto to drive the wheel; stops "
+                "when the view settles or --max-height is reached)",
+                kind="flag",
+                cli_only=True,
+            ),
+            Param(
+                "auto",
+                "with --scrolling, drive the scroll automatically by synthesizing the mouse "
+                "wheel (not on Wayland, which blocks synthetic input — scroll manually there). "
+                "Point at the area to scroll before it starts.",
+                kind="flag",
+                cli_only=True,
+            ),
+            Param(
+                "max_height",
+                f"cap the stitched long screenshot's height (--scrolling only; "
+                f"default {SCROLL_MAX_HEIGHT_DEFAULT})",
+                kind="int",
+                metavar="PX",
+                default=SCROLL_MAX_HEIGHT_DEFAULT,
+                cli_only=True,
+            ),
+            Param(
+                "scroll_interval",
+                f"seconds between samples while scrolling (--scrolling only; "
+                f"default {SCROLL_INTERVAL_DEFAULT})",
+                kind="float",
+                metavar="SEC",
+                default=SCROLL_INTERVAL_DEFAULT,
+                cli_only=True,
+            ),
+            Param(
+                "scroll_clicks",
+                f"wheel notches to turn per step in --auto mode (default {SCROLL_CLICKS_DEFAULT})",
+                kind="int",
+                metavar="N",
+                default=SCROLL_CLICKS_DEFAULT,
                 cli_only=True,
             ),
             Param(
