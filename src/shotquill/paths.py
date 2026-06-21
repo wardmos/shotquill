@@ -114,24 +114,20 @@ def allowlist_path() -> Path:
 
 
 def audit_log_path() -> Path:
-    """Where the JSONL audit log lives (parent directory is created).
+    """Where the JSONL audit log lives (computed, not created).
 
     macOS uses ``~/Library/Logs`` (visible in Console.app); Windows uses
     machine-local ``%LOCALAPPDATA%`` (logs are local state, not roaming config);
     elsewhere we follow XDG and put state where it belongs, honoring
-    ``$XDG_STATE_HOME``.
+    ``$XDG_STATE_HOME``. Like :func:`config_dir` and :func:`data_dir`, the parent
+    directory is created by the writer (see ``audit.record``), not here — so
+    merely reporting the path (e.g. ``squill doctor``) has no side effects.
     """
     if sys.platform == "darwin":
         base = Path.home() / "Library" / "Logs"
     elif sys.platform.startswith("win"):
         local = os.environ.get("LOCALAPPDATA", "") or Path.home() / "AppData" / "Local"
-        directory = Path(local) / "shotquill" / "Logs"
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory / "audit.log"
+        return Path(local) / "shotquill" / "Logs" / "audit.log"
     else:
         base = Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local" / "state")
-    directory = base / "shotquill"
-    # ``0o700``: the audit log records what was captured, when, and by which
-    # process — metadata other local users have no business reading.
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return directory / "audit.log"
+    return base / "shotquill" / "audit.log"

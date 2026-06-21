@@ -59,6 +59,10 @@ def record(
     line = json.dumps(entry, ensure_ascii=False)
     try:
         log_path = paths.audit_log_path()
+        # ``0o700``: the audit log records what was captured, when, and by which
+        # process — metadata other local users have no business reading. The
+        # path resolver no longer creates this, so the writer owns it.
+        log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         _rotate_if_needed(log_path)
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
