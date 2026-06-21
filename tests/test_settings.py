@@ -144,12 +144,12 @@ def test_dialog_save_persists_editor_backdrop(qtbot, config):
 def test_dialog_prefills_toolbar_style_from_config(qtbot, config):
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    assert dialog._toolbar_style.currentData() == "both"  # icon and text by default
+    assert dialog._toolbar_style.currentData() == "icon"  # icon-only by default
 
-    config.set_toolbar_style("icon")
+    config.set_toolbar_style("both")
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    assert dialog._toolbar_style.currentData() == "icon"
+    assert dialog._toolbar_style.currentData() == "both"
 
 
 def test_dialog_save_persists_toolbar_style(qtbot, config):

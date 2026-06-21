@@ -129,7 +129,7 @@ def create_toolbar(
     # larger glyph than the captioned "both" layout. Render every glyph at that
     # size and match the toolbar's icon size to it, so the buttons don't pad the
     # glyph back out (the platform default, 24+, would).
-    icon_px = _ICON_SIZES.get(style, ICON_SIZE)
+    icon_px = _ICON_SIZES.get(style, _ICON_SIZES[DEFAULT_TOOLBAR_STYLE])
 
     def sized_icon(name: str) -> QIcon:
         # The stroke scales with the glyph, so the larger icon-only glyph draws
