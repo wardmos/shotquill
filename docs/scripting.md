@@ -38,14 +38,14 @@ headless:
 squill capture                            # full screen → temp file, path on stdout
 squill capture --app safari -o shot.png   # front-most matching window
 squill capture --region 0,0,800,600 -o -  # stream PNG bytes to a pipe
-squill capture --display 1 -o second.png  # one monitor (`squill displays` lists them)
+squill capture --display 1 -o second.png  # one monitor (`squill display list` lists them)
 squill capture --json --max-width 1024    # downscaled, JSON metadata on stdout
 squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
 squill capture --reveal 40,12,180,20 -o shot.png # mosaic all but this rectangle
 squill capture --redact-pii -o shot.png   # OCR and mask likely PII before output
-squill windows --json                     # list windows, front-most first
-squill displays                           # list monitors and their indexes
+squill window list --json                     # list windows, front-most first
+squill display list                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
 squill ocr --window-id 42 --contains Login # assert text is on screen (exit 20 if not)
 squill ocr --app safari --boxes           # each line as 'x,y,w,h<TAB>text' (pixel box)
@@ -68,7 +68,7 @@ The parts agents rely on:
   a rectangle — in the captured frame's own logical coordinates — before the
   image reaches a file, a pipe, or a model. A caller-controlled redaction
   layered on the app blocklist: blank a field you know holds a secret. The MCP
-  `capture` and `record frame` tools take the same `mask` (as `{x,y,width,height}`
+  `capture` and `session frame` tools take the same `mask` (as `{x,y,width,height}`
   objects); on a recorded frame the mask also hides the region from the OCR
   assertion, not just the archive.
 - **Or reveal only the action.** `--reveal X,Y,W,H` (repeatable) is the inverse:
@@ -82,8 +82,8 @@ The parts agents rely on:
   pixels of any text that looks like PII (email, credit card, SSN, IBAN, IPv4,
   phone) before output — you don't have to know the coordinates. It reuses the
   same hardened fill as `--mask`, layers on the blocklist, and applies before
-  `--reveal`; on `record frame` the redacted pixels are what gets archived,
-  asserted, and scanned. The MCP `capture` and `record_frame` tools take the same
+  `--reveal`; on `session frame` the redacted pixels are what gets archived,
+  asserted, and scanned. The MCP `capture` and `session_frame` tools take the same
   `redact_pii`. **Best-effort, not a guarantee** — it can only mask what OCR
   reads and the detectors catch; for a field you already know holds a secret,
   `--mask` is the certain tool.
@@ -153,27 +153,29 @@ shell-reserved codes (126+, 255). Every `--help` prints the current list.
 
 ## Flight recorder (record a session)
 
-Where `capture` returns one image, `squill record` accumulates a **session** —
+Where `capture` returns one image, `squill session` accumulates a **session** —
 an ordered trail of frames an agent leaves behind as it operates the screen, so
 a human or a reviewing AI can replay what it did, step by step. Frames are
 written to disk (never returned into the agent's context), and the blocklist
 redaction stays on the whole time.
 
 ```bash
-DIR=$(squill record start --agent builder --label "login flow")  # prints the session dir
-squill record frame --session "$DIR" --tool click --label "click submit"
-squill record frame --session "$DIR" --tool type  --label "enter email" --app safari
-squill record frame --session "$DIR" --tool assert --contains "Welcome"  # OCR + assert (exit 20 if absent)
-squill record frame --session "$DIR" --tool click --before   # snapshot before an action…
-squill record frame --session "$DIR" --tool click --after    # …and after, paired for a diff
-squill record end --session "$DIR"                                # prints the HTML filmstrip path
-squill record export "$DIR" --fail-on-pii         # bundle the session into one archive (refuse if PII flagged)
+DIR=$(squill session start --agent builder --label "login flow")  # prints the session dir
+squill session frame "$DIR" --tool click --label "click submit"
+squill session frame "$DIR" --tool type  --label "enter email" --app safari
+squill session frame "$DIR" --tool assert --contains "Welcome"  # OCR + assert (exit 20 if absent)
+squill session frame "$DIR" --tool click --before   # snapshot before an action…
+squill session frame "$DIR" --tool click --after    # …and after, paired for a diff
+squill session end "$DIR"                            # prints the HTML filmstrip path
+squill session export "$DIR" --fail-on-pii          # bundle into one archive (refuse if PII flagged)
 ```
 
-- **`start` prints the session directory; thread it back as `--session`.**
-  Keeping the handle explicit (rather than an ambient "current session") is
-  what makes concurrent agents and CI runs safe — `--session` also accepts the
-  bare conversation id. Pin a location with `--dir` (e.g. a CI artifact path).
+- **`start` prints the session directory; thread it back as the session handle.**
+  Later commands take it as a positional argument (`session frame <handle>`,
+  `session end <handle>`, …). Keeping the handle explicit (rather than an ambient
+  "current session") is what makes concurrent agents and CI runs safe — the
+  handle also accepts the bare conversation id. Pin a location with `--dir`
+  (e.g. a CI artifact path).
 - **Each session is a directory**: `manifest.json` (the trace), `frames/NNNN.png`
   (one file per frame), and — written at `end` — `index.html` (a static
   filmstrip for a human) plus `trace.otlp.json` (the same trace as
@@ -188,36 +190,37 @@ squill record export "$DIR" --fail-on-pii         # bundle the session into one 
   so the egress decision, and the credentials for it, stay yours. The GenAI
   semantic conventions are still experimental; the version the fields track is
   recorded on the trace's resource.
-- **Pair a before and after frame around an action.** `record frame --before`
-  snapshots the screen before a step; after the action, `record frame --after`
+- **Pair a before and after frame around an action.** `session frame … --before`
+  snapshots the screen before a step; after the action, `session frame … --after`
   files the result and links the two (they share a `pair_id`; `phase` says which
   is which). Pairs nest like brackets — each `--after` closes the most recent open
   `--before` — and a lone `--after` is an error. The filmstrip renders the two
   halves **side by side** in one block, and outlines the region that changed
   between them, so a reviewer can see *what changed* when the agent acted, not
   just the end state (a frame captured between them keeps its own slot). The MCP
-  `record_frame` tool takes the same as `phase: "before" | "after"`.
+  `session_frame` tool takes the same as `phase: "before" | "after"`.
 - **Redaction is on by default and cannot be turned off mid-trace**, so a
   blocklisted app cannot be filed into an archive by an agent that "forgot" to
   mask it. The manifest's `redacted` flag means *blocklist protection was in
   force* — not that the frame is free of user content. Agent actions and user
   pixels are the same pixels; redaction only covers the apps you listed.
-- **Captures the agent takes to *see* the screen are logged too.** While a
-  session is recording, the MCP `capture` tool also files what it grabbed as an
-  *observation* frame (pass `record: false` to skip a one-off); on the CLI,
-  `squill capture --session <id>` does the same explicitly. Observation frames
-  are kept distinct from deliberate `record frame` *action* frames — dimmed in
+- **Captures the agent takes to *see* the screen can be logged too.** Pass a
+  session handle to a capture — `capture` with `session: <handle>` over MCP, or
+  `squill capture --session <id>` on the CLI — and it also files what it grabbed
+  as an *observation* frame (omit the handle and the capture records nothing;
+  there is no ambient "current session"). Observation frames
+  are kept distinct from deliberate `session frame` *action* frames — dimmed in
   the filmstrip, and attached to the trace's root span rather than masquerading
   as a tool call — so a passive glance never reads as a step.
 - **A frame can assert, so a failed test is a replayable trace.** Add
-  `--contains TEXT` / `--matches REGEX` (`-i` to ignore case) to `record frame`
+  `--contains TEXT` / `--matches REGEX` (`-i` to ignore case) to `session frame`
   and it OCRs the frame it just captured and records the verdict: a failed
   assertion exits `20`, marks the card in the filmstrip, and sets that step's
   OTLP span to error — while still recording the frame, so the failure is
   replayable. This is where the screenshot backend and the flight recorder meet:
   the failing step of a test *is* a frame in the trace.
 - **A frame can flag likely PII, or redact it (best-effort, not a guarantee).**
-  Add `--scan-pii` to `record frame` (or `scan_pii: true` on the MCP tool) and it
+  Add `--scan-pii` to `session frame` (or `scan_pii: true` on the MCP tool) and it
   OCRs the frame and records which kinds of sensitive value likely appear and how
   many — **kind and count only, never the value** — as a residual-risk flag on
   the frame (e.g. for an export gate). Add `--redact-pii` (or `redact_pii: true`)
@@ -226,18 +229,18 @@ squill record export "$DIR" --fail-on-pii         # bundle the session into one 
   best-effort — they can only act on what OCR reads and the detectors catch — so
   treat a flagged-but-not-redacted frame as "this probably carries a card
   number", and for a field you already know holds a secret use `--mask`.
-- **Bundle a session to share it.** `squill record export <session>` packs the
+- **Bundle a session to share it.** `squill session export <session>` packs the
   manifest, frames, filmstrip, and OTLP trace into one archive (`--format
   tar.gz|zip`, `-o` to choose the path) under a single `<id>/` folder — for a CI
   artifact or a hand-off. `--fail-on-pii` refuses (exit `6`) when any frame still
   carries a `--scan-pii` flag, so a flagged trace isn't shared off the machine by
-  accident. The MCP `record_export` tool mirrors it and also reports any residual
+  accident. The MCP `session_export` tool mirrors it and also reports any residual
   PII in its result.
 - `--json` on any of these prints a machine-readable object; every step is
   audit-logged with `via: "record"`.
 
-The MCP server exposes the same loop as `record_start` / `record_frame` /
-`record_end` (below). Two recipes layer on top of those tools, by agent shape:
+The MCP server exposes the same loop as `session_start` / `session_frame` /
+`session_end` (below). Two recipes layer on top of those tools, by agent shape:
 [`skills/flight-recorder/SKILL.md`](../skills/flight-recorder/SKILL.md) for an
 agent **driving** a GUI step by step (an action frame per step), and
 [`skills/visual-checkpoints/SKILL.md`](../skills/visual-checkpoints/SKILL.md) for
@@ -266,21 +269,29 @@ or in `claude_desktop_config.json`:
 }
 ```
 
-Eleven tools: **capture** (full screen / window by id or app+title / one
+Twelve tools: **capture** (full screen / window by id or app+title / one
 monitor by `display` index / region; returns the image inline — pass
-`max_width` to downscale and save context; `save_path` optionally persists),
-**list_windows**, **list_displays**, **ocr** (a file, or
-capture-and-recognize fully in memory so reading on-screen text costs no
-image tokens), **doctor**, and the flight-recorder tools **record_start** /
-**record_frame** / **record_end** / **record_export** / **record_list** /
-**record_prune** (the CLI `record` session above, driven by an agent: frames
-go to disk, not into the agent's context).
+`max_width` to downscale and save context; `save_path` optionally persists;
+`session` optionally files an observation frame), **window_list**,
+**display_list**, **ocr** (a file, or capture-and-recognize fully in memory so
+reading on-screen text costs no image tokens), **diff** (compare two images for
+golden-image checks), **doctor**, and the flight-recorder tools **session_start**
+/ **session_frame** / **session_end** / **session_export** / **session_list** /
+**session_prune** (the CLI `session` recorder above, driven by an agent: frames
+go to disk, not into the agent's context). MCP tool names are the CLI `noun verb`
+subcommands joined by `_` (`window list` → `window_list`).
 Built for agent ergonomics: every tool
 declares an `outputSchema` and returns typed `structuredContent` (no
-re-parsing JSON out of text), the read-only tools are annotated
-`readOnlyHint` so hosts can auto-approve them, and every in-band error
-carries a `type` plus a `hint` naming the recovery step (`no_match` →
-"call list_windows", `permission` → "call doctor", …).
+re-parsing JSON out of text), read-only tools are annotated `readOnlyHint`
+(and destructive ones `destructiveHint`) so hosts can gate or auto-approve them,
+and every in-band error carries a `type` plus a `hint` naming the recovery step
+(`no_match` → "call window_list", `permission` → "call doctor", …).
+
+Recorded sessions are also exposed as MCP **resources** (the server declares the
+`resources` capability): `resources/list` enumerates each session's `filmstrip`
+(HTML), `manifest` (the trace), and `otlp` projection under
+`shotquill://session/<id>/<kind>`, and `resources/read` returns the contents —
+so a host can read a trace back without shelling out to the CLI.
 
 Know what you are opting into:
 

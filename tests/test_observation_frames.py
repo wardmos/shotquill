@@ -2,11 +2,11 @@
 # Copyright (C) 2026 wardmos
 """Observation-frame tests (D3): a passive capture mirrored into the trace.
 
-While a session is recording, a `capture` the agent did to *see* the screen
+When a `capture` the agent did to *see* the screen is given a session handle, it
 also lands as an `observation` frame — distinct from a deliberate `action`
 frame, so a glance never masquerades as a step. The store/format layers are
-pure; the MCP section drives the active-session mirroring, the CLI section the
-explicit `capture --session`.
+pure; both the MCP and CLI sections drive the explicit `session`-handle
+mirroring (`capture session=…` / `capture --session`).
 """
 
 from __future__ import annotations
@@ -144,8 +144,9 @@ def _msg(msg_id: int, name: str, args: dict) -> dict:
 def _run(*messages: dict) -> dict[int, dict]:
     """Drive one stdio connection (one serve() call) and index results by id.
 
-    The active recording session is per-connection, so start/capture/end must
-    share a single serve() — exactly how a real MCP client talks to the server.
+    Recording is addressed by the explicit `session` handle returned by
+    session_start, so the messages are run through a single serve() purely to
+    mirror how a real MCP client talks to the server.
     """
     raw = "\n".join(json.dumps(m) for m in messages) + "\n"
     fout = io.StringIO()
@@ -155,8 +156,13 @@ def _run(*messages: dict) -> dict[int, dict]:
     }
 
 
-def test_capture_mirrors_into_active_session(fake_capturer, tmp_path):
-    out = _run(_msg(1, "record_start", {"id": "conv-mcp"}), _msg(2, "capture", {}))
+def test_capture_with_session_files_observation(fake_capturer, tmp_path):
+    # The handle is explicit: pass it as `session` to mirror the capture into the
+    # trace as an observation frame (no ambient "current session").
+    out = _run(
+        _msg(1, "session_start", {"id": "conv-mcp"}),
+        _msg(2, "capture", {"session": "conv-mcp"}),
+    )
     cap = out[2]["structuredContent"]
     assert cap["recorded"]["index"] == 1
     assert cap["recorded"]["conversation_id"] == "conv-mcp"
@@ -165,8 +171,13 @@ def test_capture_mirrors_into_active_session(fake_capturer, tmp_path):
     assert manifest["frames"][0]["kind"] == "observation"
 
 
-def test_capture_record_false_skips_mirror(fake_capturer):
-    out = _run(_msg(1, "record_start", {"id": "conv-skip"}), _msg(2, "capture", {"record": False}))
+def test_capture_without_session_does_not_record(fake_capturer):
+    # A live session exists, but capture omits `session` — it must NOT record:
+    # there is no ambient mirroring, only the explicit handle.
+    out = _run(
+        _msg(1, "session_start", {"id": "conv-skip"}),
+        _msg(2, "capture", {}),
+    )
     assert "recorded" not in out[2]["structuredContent"]
 
 
@@ -175,20 +186,17 @@ def test_capture_without_active_session_is_unchanged(fake_capturer):
     assert "recorded" not in out[1]["structuredContent"]
 
 
-def test_record_end_stops_mirroring(fake_capturer):
-    out = _run(
-        _msg(1, "record_start", {"id": "conv-end"}),
-        _msg(2, "record_end", {"session": "conv-end"}),
-        _msg(3, "capture", {}),
-    )
-    assert "recorded" not in out[3]["structuredContent"]  # no longer recording
+def test_capture_bad_session_is_in_band_error(fake_capturer):
+    # An unresolvable handle is a real error (in-band isError), not a silent drop.
+    out = _run(_msg(1, "capture", {"session": "ghost"}))
+    assert out[1]["isError"] is True
 
 
 # --- CLI: explicit capture --session ----------------------------------------
 
 
 def test_cli_capture_session_files_observation(fake_capturer, capsys, tmp_path):
-    cli.main(["record", "start", "--id", "conv-cli"])
+    cli.main(["session", "start", "--id", "conv-cli"])
     capsys.readouterr()
     rc = cli.main(["capture", "--session", "conv-cli", "-o", str(tmp_path / "shot.png")])
     assert rc == 0

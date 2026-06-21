@@ -7,8 +7,8 @@ description: >-
   human or a reviewing AI should later be able to replay your actions step by
   step — debugging, audits, demos, verifying a build, or "show me what the agent
   did". A frame can also assert on its own text (OCR), so a failed check leaves a
-  replayable trace. Wraps ShotQuill's `record_start` / `record_frame` /
-  `record_end` tools.
+  replayable trace. Wraps ShotQuill's `session_start` / `session_frame` /
+  `session_end` tools.
 ---
 
 # Flight recorder
@@ -24,17 +24,17 @@ the reviewer who comes after you.
 ## The loop
 
 ```
-record_start  →  record_frame (before/after each key action)  →  record_end
+session_start  →  session_frame (before/after each key action)  →  session_end
 ```
 
 1. **Start once, at the beginning of the task.**
-   Call `record_start` with an `agent` name and a `label` describing the whole
+   Call `session_start` with an `agent` name and a `label` describing the whole
    task ("reset the user's password", "fill the signup form"). Keep the returned
    `conversation_id` — every later call needs it as `session`.
 
 2. **Frame each meaningful step.**
    Before (or right after) an action that changes what's on screen, call
-   `record_frame` with:
+   `session_frame` with:
    - `session`: the `conversation_id` from start.
    - `tool`: the *kind* of action, in a few words — `click`, `type`,
      `navigate`, `open_app`, `submit`. This is the action's name, not a
@@ -50,28 +50,29 @@ record_start  →  record_frame (before/after each key action)  →  record_end
    (what you were looking at) and/or just after (the result). You do not need a
    frame for every mouse move — one per decision or outcome is the right grain.
 
-   > While a session is active, any `capture` you do to *see* the screen is also
-   > logged automatically as an **observation** frame (pass `record: false` to
-   > skip one). Those are kept separate from the `record_frame` *action* frames
-   > you file deliberately — so you don't need to re-record what you looked at,
-   > just the actions you take and the checkpoints you assert.
+   > A `capture` you do to *see* the screen can also be logged as an
+   > **observation** frame — pass the session handle as `capture`'s `session`
+   > argument (omit it and the capture records nothing). Observation frames are
+   > kept separate from the `session_frame` *action* frames you file
+   > deliberately — so you can keep a record of what you looked at without it
+   > masquerading as an action.
 
 3. **End once, when the task is done (or has failed).**
-   Call `record_end` with the `session`. It writes a static `index.html`
+   Call `session_end` with the `session`. It writes a static `index.html`
    filmstrip and returns its path; point the user at it. **Always end the
    session**, even on failure — a trail that stops at the broken step is exactly
    what a reviewer needs.
 
 ## Checkpoint with assertions
 
-A frame can also *check* the screen, not just capture it — give `record_frame` a
+A frame can also *check* the screen, not just capture it — give `session_frame` a
 `contains` and/or `matches` (regex) and it OCRs the frame it just took and
 records the verdict on it. Use this to verify a step actually worked: did the
 *Welcome* page render, is the order number on screen, did the error dialog go
 away?
 
 ```
-record_frame  session=<id>  tool="assert"  contains=["Welcome, Ada"]
+session_frame  session=<id>  tool="assert"  contains=["Welcome, Ada"]
 ```
 
 - `contains` is one or more substrings, `matches` one or more regexes; **all
@@ -102,10 +103,10 @@ for a person who wasn't there:
 
 ## After the session: share, list, clear
 
-`record_end` closes a session and leaves it on disk. Three more tools manage what
-happens to it next — each has an MCP tool and a `squill record …` CLI form.
+`session_end` closes a session and leaves it on disk. Three more tools manage what
+happens to it next — each has an MCP tool and a `squill session …` CLI form.
 
-- **Hand off a single trace** with `record_export`: it bundles one session
+- **Hand off a single trace** with `session_export`: it bundles one session
   (manifest + frames + filmstrip) into a single archive a reviewer can open
   elsewhere. `format` is `tar.gz` (default) or `zip`. Pass `fail_on_pii: true`
   (CLI `--fail-on-pii`) to **refuse the export** (exit `6`) if any frame still
@@ -114,21 +115,21 @@ happens to it next — each has an MCP tool and a `squill record …` CLI form.
   Privacy below.
 
   ```bash
-  squill record export --session "$DIR" --format zip --fail-on-pii
+  squill session export "$DIR" --format zip --fail-on-pii
   ```
 
-- **See what's accumulated** with `record_list`: every session newest-first with
+- **See what's accumulated** with `session_list`: every session newest-first with
   its id, status, frame count, and size on disk — so you know what's there before
   you export or prune.
 
-- **Cap disk cost** with `record_prune`: delete old **complete** sessions by
+- **Cap disk cost** with `session_prune`: delete old **complete** sessions by
   `max_age_days` and/or `max_sessions` (it keeps the newest N). It needs at least
   one bound. Pass `dry_run: true` first to see what *would* go — it reports the
   ids and bytes it would free without deleting:
 
   ```bash
-  squill record prune --max-sessions 20 --dry-run   # preview
-  squill record prune --max-sessions 20             # then delete
+  squill session prune --max-sessions 20 --dry-run   # preview
+  squill session prune --max-sessions 20             # then delete
   ```
 
   Pruning only ever touches finished sessions, so an open recording is never
@@ -151,10 +152,10 @@ happens to it next — each has an MCP tool and a `squill record …` CLI form.
 The same loop, without an MCP host:
 
 ```bash
-DIR=$(squill record start --agent builder --label "login flow")
-squill record frame --session "$DIR" --tool click  --label "click submit" --app safari
-squill record frame --session "$DIR" --tool assert --contains "Welcome"  # exit 20 if absent
-squill record end --session "$DIR"     # prints the filmstrip path
+DIR=$(squill session start --agent builder --label "login flow")
+squill session frame "$DIR" --tool click  --label "click submit" --app safari
+squill session frame "$DIR" --tool assert --contains "Welcome"  # exit 20 if absent
+squill session end "$DIR"     # prints the filmstrip path
 ```
 
 ## Don't
@@ -165,4 +166,4 @@ squill record end --session "$DIR"     # prints the filmstrip path
   checkpoint, so it belongs in the trace; a glance to decide your next move does
   not.)
 - Don't start a second session inside an unfinished one; one task, one session.
-- Don't leave a session open. If you stop early, still call `record_end`.
+- Don't leave a session open. If you stop early, still call `session_end`.

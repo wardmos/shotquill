@@ -158,16 +158,17 @@ def test_tools_list_descriptors():
     tools = {tool["name"]: tool for tool in response["result"]["tools"]}
     assert set(tools) == {
         "capture",
-        "list_windows",
-        "list_displays",
+        "window_list",
+        "display_list",
         "ocr",
+        "diff",
         "doctor",
-        "record_start",
-        "record_frame",
-        "record_end",
-        "record_export",
-        "record_list",
-        "record_prune",
+        "session_start",
+        "session_frame",
+        "session_end",
+        "session_export",
+        "session_list",
+        "session_prune",
     }
     capture_schema = tools["capture"]["inputSchema"]
     assert "window_id" in capture_schema["properties"]
@@ -181,7 +182,7 @@ def test_tools_list_annotations_and_output_schemas():
     tools = {tool["name"]: tool for tool in response["result"]["tools"]}
     # Screen-reading tools are flagged read-only so hosts can auto-approve
     # them; capture is not (save_path writes a file).
-    for name in ("list_windows", "list_displays", "ocr", "doctor"):
+    for name in ("window_list", "display_list", "ocr", "diff", "doctor"):
         assert tools[name]["annotations"]["readOnlyHint"] is True
     assert "readOnlyHint" not in tools["capture"]["annotations"]
     for tool in tools.values():
@@ -192,7 +193,7 @@ def test_tools_list_annotations_and_output_schemas():
 
 def test_unknown_method_is_error_but_unknown_notification_is_ignored():
     responses = run(
-        {"jsonrpc": "2.0", "id": 1, "method": "resources/list"},
+        {"jsonrpc": "2.0", "id": 1, "method": "prompts/list"},
         {"jsonrpc": "2.0", "method": "notifications/whatever"},
     )
     (response,) = responses
@@ -368,7 +369,7 @@ def test_capture_no_window_match_is_no_match(fake_capturer):
     result = call("capture", {"app": "xcode"})["result"]
     payload = json.loads(result["content"][0]["text"])
     assert payload["type"] == "no_match"
-    assert "list_windows" in payload["hint"]  # errors name the recovery step
+    assert "window_list" in payload["hint"]  # errors name the recovery step
 
 
 def test_capture_blocked_app_is_in_band_blocked(fake_capturer, tmp_path):
@@ -386,7 +387,7 @@ def test_capture_blocked_app_is_in_band_blocked(fake_capturer, tmp_path):
 
 
 def test_list_windows_payload(fake_capturer):
-    result = call("list_windows")["result"]
+    result = call("window_list")["result"]
     payload = json.loads(result["content"][0]["text"])
     assert payload["windows"][0] == {
         "id": 11,
@@ -399,7 +400,7 @@ def test_list_windows_payload(fake_capturer):
 
 
 def test_list_displays_payload(fake_capturer):
-    result = call("list_displays")["result"]
+    result = call("display_list")["result"]
     payload = json.loads(result["content"][0]["text"])
     assert payload["displays"][0] == {
         "index": 0,
@@ -424,7 +425,7 @@ def test_capture_unknown_display_is_no_match(fake_capturer):
     assert result["isError"] is True
     payload = json.loads(result["content"][0]["text"])
     assert payload["type"] == "no_match"
-    assert "list_displays" in payload["hint"]
+    assert "display_list" in payload["hint"]
 
 
 def test_capture_display_excludes_other_targets(fake_capturer):
@@ -552,11 +553,11 @@ def record_root(monkeypatch, tmp_path):
 
 
 def test_record_round_trip(fake_capturer, record_root):
-    start = call("record_start", {"id": "conv-mcp", "agent": "builder"})["result"]
+    start = call("session_start", {"id": "conv-mcp", "agent": "builder"})["result"]
     sid = start["structuredContent"]["conversation_id"]
     assert sid == "conv-mcp"
 
-    frame = call("record_frame", {"session": sid, "tool": "click", "label": "submit"})["result"]
+    frame = call("session_frame", {"session": sid, "tool": "click", "label": "submit"})["result"]
     fdata = frame["structuredContent"]
     assert fdata["index"] == 1
     assert fdata["redacted"] is False  # empty blocklist
@@ -565,7 +566,7 @@ def test_record_round_trip(fake_capturer, record_root):
     with open(fdata["image"], "rb") as fh:
         assert fh.read(4) == PNG_MAGIC
 
-    end = call("record_end", {"session": sid})["result"]
+    end = call("session_end", {"session": sid})["result"]
     edata = end["structuredContent"]
     assert edata["frames"] == 1
     assert edata["filmstrip"].endswith("index.html")
@@ -579,17 +580,17 @@ def test_record_round_trip(fake_capturer, record_root):
 
 
 def test_record_frame_unknown_session_is_no_session(fake_capturer, record_root):
-    result = call("record_frame", {"session": "ghost", "tool": "click"})["result"]
+    result = call("session_frame", {"session": "ghost", "tool": "click"})["result"]
     assert result["isError"] is True
     payload = json.loads(result["content"][0]["text"])
     assert payload["type"] == "no_session"
-    assert "record_start" in payload["hint"]
+    assert "session_start" in payload["hint"]
     assert fake_capturer.calls == []  # no capture before the session check
 
 
 def test_record_frame_requires_tool(fake_capturer, record_root):
-    call("record_start", {"id": "conv-notool"})
-    result = call("record_frame", {"session": "conv-notool"})["result"]
+    call("session_start", {"id": "conv-notool"})
+    result = call("session_frame", {"session": "conv-notool"})["result"]
     assert result["isError"] is True
     assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
 
@@ -601,15 +602,15 @@ def test_record_frame_redacted_flag_tracks_blocklist(fake_capturer, monkeypatch,
     monkeypatch.setattr(
         headless, "active_blocklist", lambda: bl.Blocklist((bl.BlockRule(name="1Password"),))
     )
-    call("record_start", {"id": "conv-r"})
-    frame = call("record_frame", {"session": "conv-r", "tool": "click"})["result"]
+    call("session_start", {"id": "conv-r"})
+    frame = call("session_frame", {"session": "conv-r", "tool": "click"})["result"]
     assert frame["structuredContent"]["redacted"] is True
 
 
 def test_record_audits_via_record(fake_capturer, record_root, isolated_audit):
-    call("record_start", {"id": "conv-a"})
-    call("record_frame", {"session": "conv-a", "tool": "click"})
-    call("record_end", {"session": "conv-a"})
+    call("session_start", {"id": "conv-a"})
+    call("session_frame", {"session": "conv-a", "tool": "click"})
+    call("session_end", {"session": "conv-a"})
     entries = [json.loads(line) for line in isolated_audit.read_text().splitlines()]
     actions = {e["action"] for e in entries}
     assert {"record_start", "record_frame", "record_end"} <= actions
@@ -617,35 +618,35 @@ def test_record_audits_via_record(fake_capturer, record_root, isolated_audit):
 
 
 def test_record_frame_dedup_references_previous(fake_capturer, record_root):
-    call("record_start", {"id": "conv-dd"})
-    call("record_frame", {"session": "conv-dd", "tool": "a", "dedup": True})
-    second = call("record_frame", {"session": "conv-dd", "tool": "b", "dedup": True})["result"]
+    call("session_start", {"id": "conv-dd"})
+    call("session_frame", {"session": "conv-dd", "tool": "a", "dedup": True})
+    second = call("session_frame", {"session": "conv-dd", "tool": "b", "dedup": True})["result"]
     assert second["structuredContent"]["index"] == 2
     frames_dir = record_root / "conv-dd" / "frames"
     assert (frames_dir / "0001.png").exists()
     assert not (frames_dir / "0002.png").exists()  # second deduped to the first
     manifest = json.loads((record_root / "conv-dd" / "manifest.json").read_text())
     assert manifest["frames"][1]["deduped"] is True
-    call("record_end", {"session": "conv-dd"})
+    call("session_end", {"session": "conv-dd"})
 
 
 def test_record_frame_max_dimension_shrinks_the_stored_image(fake_capturer, record_root):
     from PySide6.QtGui import QImage
 
-    call("record_start", {"id": "conv-sm"})
-    res = call("record_frame", {"session": "conv-sm", "tool": "a", "max_dimension": 1})["result"]
+    call("session_start", {"id": "conv-sm"})
+    res = call("session_frame", {"session": "conv-sm", "tool": "a", "max_dimension": 1})["result"]
     stored = QImage(res["structuredContent"]["image"])
     assert (stored.width(), stored.height()) == (1, 1)  # FakeCapturer is 2x2
-    call("record_end", {"session": "conv-sm"})
+    call("session_end", {"session": "conv-sm"})
 
 
 def test_record_frame_rejects_boolean_max_dimension(fake_capturer, record_root):
-    call("record_start", {"id": "conv-bad"})
-    result = call("record_frame", {"session": "conv-bad", "tool": "a", "max_dimension": True})[
+    call("session_start", {"id": "conv-bad"})
+    result = call("session_frame", {"session": "conv-bad", "tool": "a", "max_dimension": True})[
         "result"
     ]
     assert result["isError"] is True
-    call("record_end", {"session": "conv-bad"})
+    call("session_end", {"session": "conv-bad"})
 
 
 def _tool_msg(msg_id, name, arguments):
@@ -654,12 +655,12 @@ def _tool_msg(msg_id, name, arguments):
 
 
 def test_capture_dedup_mirrors_observation_without_a_duplicate(fake_capturer, record_root):
-    # The active session that drives the observation mirror lives only for one
-    # connection, so record_start and the captures must share a single run().
+    # Recording is addressed by the explicit `session` handle (no ambient
+    # session), so each capture passes it to mirror an observation frame.
     run(
-        _tool_msg(1, "record_start", {"id": "conv-obs"}),
-        _tool_msg(2, "capture", {"dedup": True}),
-        _tool_msg(3, "capture", {"dedup": True}),  # same screen -> deduped observation
+        _tool_msg(1, "session_start", {"id": "conv-obs"}),
+        _tool_msg(2, "capture", {"session": "conv-obs", "dedup": True}),
+        _tool_msg(3, "capture", {"session": "conv-obs", "dedup": True}),  # same screen -> deduped
     )
     frames_dir = record_root / "conv-obs" / "frames"
     assert (frames_dir / "0001.png").exists()
@@ -672,20 +673,140 @@ def test_capture_dedup_mirrors_observation_without_a_duplicate(fake_capturer, re
 
 def test_record_list_and_prune(fake_capturer, record_root):
     for sid in ("conv-1", "conv-2"):
-        call("record_start", {"id": sid})
-        call("record_frame", {"session": sid, "tool": "a"})
-        call("record_end", {"session": sid})
+        call("session_start", {"id": sid})
+        call("session_frame", {"session": sid, "tool": "a"})
+        call("session_end", {"session": sid})
 
-    listed = call("record_list")["result"]["structuredContent"]["sessions"]
+    listed = call("session_list")["result"]["structuredContent"]["sessions"]
     assert {s["conversation_id"] for s in listed} == {"conv-1", "conv-2"}
     assert all(s["size_bytes"] > 0 for s in listed)
 
-    pruned = call("record_prune", {"max_sessions": 1})["result"]["structuredContent"]
+    pruned = call("session_prune", {"max_sessions": 1})["result"]["structuredContent"]
     assert pruned["count"] == 1
-    remaining = call("record_list")["result"]["structuredContent"]["sessions"]
+    remaining = call("session_list")["result"]["structuredContent"]["sessions"]
     assert len(remaining) == 1
 
 
 def test_record_prune_requires_a_limit(record_root):
-    result = call("record_prune", {})["result"]
+    result = call("session_prune", {})["result"]
     assert result["isError"] is True
+
+
+# --- resources: recorded sessions -------------------------------------------
+
+
+def test_initialize_declares_resources_capability():
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}},
+        }
+    )
+    assert "resources" in response["result"]["capabilities"]
+
+
+def test_resources_list_and_read_a_completed_session(fake_capturer, record_root):
+    call("session_start", {"id": "conv-res"})
+    call("session_frame", {"session": "conv-res", "tool": "click"})
+    call("session_end", {"session": "conv-res"})
+
+    (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "resources/list"})
+    resources = {r["uri"]: r for r in response["result"]["resources"]}
+    assert "shotquill://session/conv-res/filmstrip" in resources
+    assert "shotquill://session/conv-res/manifest" in resources
+    assert "shotquill://session/conv-res/otlp" in resources
+    assert resources["shotquill://session/conv-res/filmstrip"]["mimeType"] == "text/html"
+
+    (read,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": {"uri": "shotquill://session/conv-res/manifest"},
+        }
+    )
+    content = read["result"]["contents"][0]
+    assert content["mimeType"] == "application/json"
+    assert json.loads(content["text"])["conversation_id"] == "conv-res"
+
+
+def test_live_session_lists_only_its_manifest(fake_capturer, record_root):
+    call("session_start", {"id": "conv-live"})
+    (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "resources/list"})
+    uris = {r["uri"] for r in response["result"]["resources"]}
+    assert "shotquill://session/conv-live/manifest" in uris
+    # The filmstrip / OTLP are written at session_end, so a live session omits them.
+    assert "shotquill://session/conv-live/filmstrip" not in uris
+
+
+def test_resources_read_unknown_uri_is_not_found(record_root):
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/read",
+            "params": {"uri": "shotquill://session/ghost/manifest"},
+        }
+    )
+    assert response["error"]["code"] == -32002
+
+
+def test_resources_read_rejects_path_traversal_handle():
+    # A crafted handle must not reach resolve_session's path branch and read a
+    # file outside the records root.
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/read",
+            "params": {"uri": "shotquill://session/../../etc/manifest"},
+        }
+    )
+    assert response["error"]["code"] == -32002
+
+
+# --- diff tool ---------------------------------------------------------------
+
+
+def _png(path, rgb):
+    from PySide6.QtGui import QImage, qRgb
+
+    img = QImage(4, 4, QImage.Format.Format_RGB888)
+    img.fill(qRgb(*rgb))
+    assert img.save(str(path), "PNG")
+
+
+def test_diff_tool_compares_files(tmp_path):
+    pytest.importorskip("PySide6")
+    a, same, other = tmp_path / "a.png", tmp_path / "same.png", tmp_path / "other.png"
+    _png(a, (10, 20, 30))
+    _png(same, (10, 20, 30))
+    _png(other, (200, 200, 200))
+
+    identical = call("diff", {"a": str(a), "b": str(same)})["result"]
+    assert identical["isError"] is False
+    assert identical["structuredContent"]["changed"] is False
+
+    changed = call("diff", {"a": str(a), "b": str(other)})["result"]
+    assert changed["isError"] is False
+    sc = changed["structuredContent"]
+    assert sc["changed"] is True
+    assert "box" in sc  # located the change
+
+
+def test_diff_tool_missing_file_is_in_band_error(tmp_path):
+    pytest.importorskip("PySide6")
+    a = tmp_path / "a.png"
+    _png(a, (1, 2, 3))
+    result = call("diff", {"a": str(a), "b": str(tmp_path / "nope.png")})["result"]
+    assert result["isError"] is True
+
+
+def test_destructive_tool_is_annotated():
+    # A delete tool must carry destructiveHint so a host can gate it (read-only
+    # tools carry readOnlyHint, asserted above).
+    (response,) = run({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+    assert tools["session_prune"]["annotations"].get("destructiveHint") is True

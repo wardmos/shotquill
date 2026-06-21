@@ -55,17 +55,17 @@ agent edits code and runs the dev server as usual (none of that is recorded),
 then checkpoints the result:
 
 ```
-record_start  agent="claude-code"  label="add export button to reports"
+session_start  agent="claude-code"  label="add export button to reports"
   → { conversation_id: "conv-2026-…" }
 
 # (agent edits the component, starts the dev server — not recorded)
 
-record_frame  session="conv-2026-…"  tool="verify"
+session_frame  session="conv-2026-…"  tool="verify"
               label="reports page shows the Export button"
               app="Chromium"  contains=["Export"]
   → { assertion_passed: true,  index: 1,  image: ".../frames/0001.png" }
 
-record_end    session="conv-2026-…"
+session_end    session="conv-2026-…"
   → { filmstrip: ".../index.html",  frames: 1 }
 ```
 

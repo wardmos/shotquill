@@ -473,7 +473,7 @@ def test_audit_failure_does_not_break_capture(fake_capturer, capsys, monkeypatch
 
 
 def test_windows_table(fake_capturer, capsys):
-    assert cli.main(["windows"]) == 0
+    assert cli.main(["window", "list"]) == 0
     out = capsys.readouterr().out
     assert "OWNER" in out and "TITLE" in out
     assert "Safari" in out and "GitHub" in out
@@ -492,7 +492,7 @@ def test_windows_table_strips_terminal_escapes_from_titles(fake_capturer, capsys
             bounds=Rect(0, 0, 10, 10),
         ),
     ]
-    assert cli.main(["windows"]) == 0
+    assert cli.main(["window", "list"]) == 0
     out = capsys.readouterr().out
     assert "\x1b" not in out and "\x07" not in out
     # Only the control bytes are dropped; the escapes' now-inert printable
@@ -652,7 +652,7 @@ def test_doctor_reports_enabled_allowlist(fake_capturer, tmp_path, capsys):
 
 
 def test_windows_json(fake_capturer, capsys):
-    assert cli.main(["windows", "--json"]) == 0
+    assert cli.main(["window", "list", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert data[0] == {
         "id": 11,
@@ -668,14 +668,14 @@ def test_windows_unsupported_exits_4(fake_capturer, capsys, monkeypatch):
         raise headless.CapabilityUnsupported("list_windows", "wayland")
 
     monkeypatch.setattr(fake_capturer, "list_windows", _nope)
-    assert cli.main(["windows"]) == headless.EXIT_UNSUPPORTED
+    assert cli.main(["window", "list"]) == headless.EXIT_UNSUPPORTED
 
 
 # --- displays ----------------------------------------------------------------
 
 
 def test_displays_table(fake_capturer, capsys, isolated_audit):
-    assert cli.main(["displays"]) == 0
+    assert cli.main(["display", "list"]) == 0
     out = capsys.readouterr().out
     assert "INDEX" in out
     assert "1440x900 at 0,0" in out
@@ -686,7 +686,7 @@ def test_displays_table(fake_capturer, capsys, isolated_audit):
 
 
 def test_displays_json(fake_capturer, capsys):
-    assert cli.main(["displays", "--json"]) == 0
+    assert cli.main(["display", "list", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert [d["index"] for d in data] == [0, 1]
     assert data[0]["primary"] is True and data[0]["scale"] == 2.0
@@ -698,7 +698,7 @@ def test_displays_unsupported_exits_4(fake_capturer, capsys, monkeypatch):
         raise headless.CapabilityUnsupported("displays", "no screens")
 
     monkeypatch.setattr(fake_capturer, "list_displays", _nope)
-    assert cli.main(["displays"]) == headless.EXIT_UNSUPPORTED
+    assert cli.main(["display", "list"]) == headless.EXIT_UNSUPPORTED
 
 
 # --- ocr --------------------------------------------------------------------
@@ -848,7 +848,7 @@ def test_mcp_rejects_non_positive_timeout(timeout, capsys):
 #
 # The command exists because ``pipx install shotquill`` lays the bundled
 # .desktop and SVG inside its private venv (``<sys.prefix>/share/...``) where
-# the freedesktop app menu never looks. ``squill install-desktop-entry`` is
+# the freedesktop app menu never looks. ``squill desktop install`` is
 # the one-liner that bridges the gap by copying into ~/.local/share.
 
 
@@ -881,7 +881,7 @@ def test_install_desktop_entry_unsupported_off_linux(monkeypatch, capsys):
     # capability code (4) so agents stop retrying instead of treating this
     # as a transient error.
     monkeypatch.setattr(cli.sys, "platform", "darwin")
-    rc = cli.main(["install-desktop-entry"])
+    rc = cli.main(["desktop", "install"])
     assert rc == headless.EXIT_UNSUPPORTED
     assert "Linux-only" in capsys.readouterr().err
 
@@ -896,7 +896,7 @@ def test_install_desktop_entry_unsupported_when_payload_missing(monkeypatch, cap
     monkeypatch.setattr(cli.sys, "prefix", str(tmp_path / "empty-prefix"))
     monkeypatch.setattr(site, "getuserbase", lambda: str(tmp_path / "empty-user"))
     _redirect_xdg_data_home(monkeypatch, tmp_path)
-    rc = cli.main(["install-desktop-entry"])
+    rc = cli.main(["desktop", "install"])
     assert rc == headless.EXIT_UNSUPPORTED
     assert "bundled desktop files not found" in capsys.readouterr().err
 
@@ -912,7 +912,7 @@ def test_install_desktop_entry_copies_files_to_xdg_data_home(monkeypatch, tmp_pa
     # tests must not actually run those (they'd hit the real $PATH).
     monkeypatch.setattr(cli, "_refresh_desktop_caches", lambda *_args: None)
 
-    rc = cli.main(["install-desktop-entry"])
+    rc = cli.main(["desktop", "install"])
 
     assert rc == 0
     dst_desktop = data_home / "applications" / "shotquill.desktop"
@@ -937,8 +937,8 @@ def test_install_desktop_entry_is_idempotent(monkeypatch, tmp_path):
     _stage_packaged_data(monkeypatch, tmp_path)
     _redirect_xdg_data_home(monkeypatch, tmp_path)
     monkeypatch.setattr(cli, "_refresh_desktop_caches", lambda *_args: None)
-    assert cli.main(["install-desktop-entry"]) == 0
-    assert cli.main(["install-desktop-entry"]) == 0  # second run also exits 0
+    assert cli.main(["desktop", "install"]) == 0
+    assert cli.main(["desktop", "install"]) == 0  # second run also exits 0
 
 
 def test_install_desktop_entry_print_paths_does_not_write(monkeypatch, tmp_path, capsys):
@@ -948,7 +948,7 @@ def test_install_desktop_entry_print_paths_does_not_write(monkeypatch, tmp_path,
     _stage_packaged_data(monkeypatch, tmp_path)
     data_home = _redirect_xdg_data_home(monkeypatch, tmp_path)
 
-    rc = cli.main(["install-desktop-entry", "--print-paths"])
+    rc = cli.main(["desktop", "install", "--print-paths"])
 
     assert rc == 0
     out = capsys.readouterr().out

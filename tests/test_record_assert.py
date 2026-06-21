@@ -192,21 +192,17 @@ def fakes(monkeypatch):
 
 
 def test_cli_record_frame_assert_pass(fakes, capsys):
-    cli.main(["record", "start", "--id", "conv-cli"])
+    cli.main(["session", "start", "--id", "conv-cli"])
     capsys.readouterr()
-    rc = cli.main(
-        ["record", "frame", "--session", "conv-cli", "--tool", "assert", "--contains", "Login"]
-    )
+    rc = cli.main(["session", "frame", "conv-cli", "--tool", "assert", "--contains", "Login"])
     assert rc == 0
     assert "ok: text contains 'Login'" in capsys.readouterr().err
 
 
 def test_cli_record_frame_assert_fail_still_records(fakes, capsys, tmp_path):
-    cli.main(["record", "start", "--id", "conv-fail"])
+    cli.main(["session", "start", "--id", "conv-fail"])
     capsys.readouterr()
-    rc = cli.main(
-        ["record", "frame", "--session", "conv-fail", "--tool", "assert", "--contains", "Logout"]
-    )
+    rc = cli.main(["session", "frame", "conv-fail", "--tool", "assert", "--contains", "Logout"])
     assert rc == cli._EXIT_ASSERTION_FAILED  # 20: result, not error
     # The failing frame is recorded anyway — capturing the failure is the point.
     entry = json.loads((tmp_path / "records" / "conv-fail" / "manifest.json").read_text())[
@@ -216,11 +212,9 @@ def test_cli_record_frame_assert_fail_still_records(fakes, capsys, tmp_path):
 
 
 def test_cli_record_frame_invalid_regex_is_usage(fakes, capsys):
-    cli.main(["record", "start", "--id", "conv-re"])
+    cli.main(["session", "start", "--id", "conv-re"])
     capsys.readouterr()
-    assert (
-        cli.main(["record", "frame", "--session", "conv-re", "--tool", "a", "--matches", "("]) == 2
-    )
+    assert cli.main(["session", "frame", "conv-re", "--tool", "a", "--matches", "("]) == 2
 
 
 def test_mcp_record_frame_assertion(fakes):
@@ -230,7 +224,7 @@ def test_mcp_record_frame_assertion(fakes):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "record_frame", "arguments": args},
+                "params": {"name": "session_frame", "arguments": args},
             }
         )
         fout = io.StringIO()
@@ -245,7 +239,7 @@ def test_mcp_record_frame_assertion(fakes):
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "tools/call",
-                    "params": {"name": "record_start", "arguments": {"id": "conv-mcp"}},
+                    "params": {"name": "session_start", "arguments": {"id": "conv-mcp"}},
                 }
             )
             + "\n"
@@ -265,9 +259,9 @@ def test_cli_record_frame_scan_pii(fakes, monkeypatch, capsys, tmp_path):
         "get_recognizer",
         lambda: _Recognizer(["email ada@example.com", "card 4111111111111111"]),
     )
-    cli.main(["record", "start", "--id", "conv-pii"])
+    cli.main(["session", "start", "--id", "conv-pii"])
     capsys.readouterr()
-    rc = cli.main(["record", "frame", "--session", "conv-pii", "--tool", "verify", "--scan-pii"])
+    rc = cli.main(["session", "frame", "conv-pii", "--tool", "verify", "--scan-pii"])
     assert rc == 0
     assert "pii scan: likely" in capsys.readouterr().err
 
@@ -289,7 +283,7 @@ def test_mcp_record_frame_scan_pii(fakes, monkeypatch):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "record_frame", "arguments": args},
+                "params": {"name": "session_frame", "arguments": args},
             }
         )
         fout = io.StringIO()
@@ -303,7 +297,7 @@ def test_mcp_record_frame_scan_pii(fakes, monkeypatch):
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "tools/call",
-                    "params": {"name": "record_start", "arguments": {"id": "conv-mcp-pii"}},
+                    "params": {"name": "session_start", "arguments": {"id": "conv-mcp-pii"}},
                 }
             )
             + "\n"
@@ -335,11 +329,9 @@ def test_cli_record_frame_redact_pii_masks_filed_frame(fakes, monkeypatch, capsy
     from PySide6.QtGui import QImage
 
     monkeypatch.setattr(headless, "get_recognizer", lambda: _BoxRecognizer())
-    cli.main(["record", "start", "--id", "conv-redact"])
+    cli.main(["session", "start", "--id", "conv-redact"])
     capsys.readouterr()
-    rc = cli.main(
-        ["record", "frame", "--session", "conv-redact", "--tool", "verify", "--redact-pii"]
-    )
+    rc = cli.main(["session", "frame", "conv-redact", "--tool", "verify", "--redact-pii"])
     assert rc == 0
     dest = capsys.readouterr().out.strip()
     img = QImage(dest)
@@ -367,8 +359,10 @@ def test_mcp_record_frame_redact_pii_masks_filed_frame(fakes, monkeypatch, tmp_p
         mcp.serve(stdin=io.StringIO(raw + "\n"), stdout=fout)
         return _json.loads(fout.getvalue())["result"]
 
-    serve_call("record_start", {"id": "conv-mcp-redact"})
-    serve_call("record_frame", {"session": "conv-mcp-redact", "tool": "verify", "redact_pii": True})
+    serve_call("session_start", {"id": "conv-mcp-redact"})
+    serve_call(
+        "session_frame", {"session": "conv-mcp-redact", "tool": "verify", "redact_pii": True}
+    )
 
     session_dir = tmp_path / "records" / "conv-mcp-redact"
     manifest = _json.loads((session_dir / "manifest.json").read_text())
@@ -396,12 +390,12 @@ def test_mcp_record_frame_before_after_pairs(fakes):
         mcp.serve(stdin=io.StringIO(raw + "\n"), stdout=fout)
         return _json.loads(fout.getvalue())["result"]["structuredContent"]
 
-    serve_call("record_start", {"id": "conv-mcp-ba"})
+    serve_call("session_start", {"id": "conv-mcp-ba"})
     before = serve_call(
-        "record_frame", {"session": "conv-mcp-ba", "tool": "click", "phase": "before"}
+        "session_frame", {"session": "conv-mcp-ba", "tool": "click", "phase": "before"}
     )
     after = serve_call(
-        "record_frame", {"session": "conv-mcp-ba", "tool": "click", "phase": "after"}
+        "session_frame", {"session": "conv-mcp-ba", "tool": "click", "phase": "after"}
     )
     assert before["phase"] == "before" and after["phase"] == "after"
     assert before["pair_id"] == after["pair_id"]

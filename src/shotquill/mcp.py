@@ -29,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from shotquill import __version__, audit, headless, record
+from shotquill import __version__, audit, command_spec, headless, record
 from shotquill.capture.base import Rect
 
 # Newest first: initialize echoes the client's version when we actually
@@ -41,28 +41,19 @@ _SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 _INSTRUCTIONS = (
     "Screenshot & OCR tools for this machine. `capture` returns the image "
     "inline — pass max_width (e.g. 1024) to downscale and save context. "
-    "`list_windows` finds window ids for exact picks; `list_displays` finds "
+    "`window_list` finds window ids for exact picks; `display_list` finds "
     "monitor indexes for one-monitor shots; `ocr` reads on-screen text "
     "without spending image tokens; `doctor` explains any unavailable "
     "capability or missing permission. To leave a reviewable trail of what "
-    "you did on screen, call `record_start` once, `record_frame` before/after "
-    "each key action (it captures to disk, not into your context), then "
-    "`record_end` to write an HTML filmstrip."
+    "you did on screen, call `session_start` once to get a handle, pass that "
+    "handle as `session` to `session_frame` before/after each key action (it "
+    "captures to disk, not into your context) — and optionally to `capture` to "
+    "also file what you saw — then `session_end` to write an HTML filmstrip."
 )
-
-
-# The flight-recorder session that `capture` passively mirrors into, for the
-# lifetime of this stdio connection. `record_start` sets it, `record_end` clears
-# it; None means "not recording", so `capture` behaves exactly as before. This is
-# server-process state (one agent per stdio pipe), deliberately *not* an ambient
-# session the stateless CLI shares — the CLI keeps explicit `--session` handles.
-_active_session: record.Session | None = None
 
 
 def serve(stdin=None, stdout=None, session_timeout: int | None = None) -> int:
     """Run the stdio server until EOF (or ``session_timeout`` seconds)."""
-    global _active_session
-    _active_session = None  # each stdio connection starts not-recording
     fin = stdin if stdin is not None else sys.stdin
     fout = stdout if stdout is not None else sys.stdout
     if session_timeout:
@@ -128,7 +119,10 @@ def _handle(message) -> dict | None:
             msg_id,
             {
                 "protocolVersion": version,
-                "capabilities": {"tools": {}},
+                # Tools act on the screen; resources expose recorded sessions
+                # (filmstrip / manifest / OTLP trace) for an agent or host to read
+                # back without shelling out.
+                "capabilities": {"tools": {}, "resources": {}},
                 "serverInfo": {"name": "shotquill", "version": __version__},
                 "instructions": _INSTRUCTIONS,
             },
@@ -139,6 +133,10 @@ def _handle(message) -> dict | None:
         return _result(msg_id, {"tools": [tool["descriptor"] for tool in _TOOLS.values()]})
     if method == "tools/call":
         return _tools_call(msg_id, params)
+    if method == "resources/list":
+        return _result(msg_id, {"resources": _list_resources()})
+    if method == "resources/read":
+        return _read_resource(msg_id, params)
     if method.startswith("notifications/"):
         return None
     if msg_id is None:
@@ -179,6 +177,66 @@ def _tools_call(msg_id, params: dict) -> dict:
         )
 
 
+# --- resources: recorded sessions --------------------------------------------
+#
+# Each session is exposed under `shotquill://session/<id>/<kind>`: the static
+# HTML `filmstrip` (for a human), the `manifest` (structured trace), and the
+# `otlp` projection. A live session offers only its manifest; the filmstrip and
+# OTLP are written at session_end. Read-only — reads never touch the screen.
+
+_RESOURCE_PREFIX = "shotquill://session/"
+_RESOURCE_KINDS = {
+    "filmstrip": ("text/html", "filmstrip_path", "static HTML filmstrip"),
+    "manifest": ("application/json", "manifest_path", "session manifest (frames + spans)"),
+    "otlp": ("application/json", "otlp_path", "OTLP/JSON trace projection"),
+}
+
+
+def _list_resources() -> list[dict]:
+    resources: list[dict] = []
+    for summary in record.list_sessions():
+        kinds = ("filmstrip", "manifest", "otlp") if summary.status == "complete" else ("manifest",)
+        for kind in kinds:
+            mime, _, blurb = _RESOURCE_KINDS[kind]
+            resources.append(
+                {
+                    "uri": f"{_RESOURCE_PREFIX}{summary.id}/{kind}",
+                    "name": f"{summary.id} {kind}",
+                    "title": f"{kind.capitalize()} — session {summary.id}",
+                    "description": blurb,
+                    "mimeType": mime,
+                }
+            )
+    return resources
+
+
+def _read_resource(msg_id, params: dict) -> dict:
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri.startswith(_RESOURCE_PREFIX):
+        return _error(msg_id, -32002, f"resource not found: {uri!r}")
+    handle, _, kind = uri[len(_RESOURCE_PREFIX) :].rpartition("/")
+    spec = _RESOURCE_KINDS.get(kind)
+    if not handle or spec is None:
+        return _error(msg_id, -32002, f"resource not found: {uri!r}")
+    mime, attr, _ = spec
+    # The handle must be a bare session id, never a path: a resource URI only ever
+    # references ids we generated. Validating it here keeps a crafted
+    # `shotquill://session/../../x/manifest` from reaching resolve_session's
+    # path-handle branch and reading a file outside the records root.
+    try:
+        record.validate_session_id(handle)
+        path = getattr(record.resolve_session(handle), attr)
+        text = path.read_text(encoding="utf-8")
+    except record.RecordError:
+        return _error(msg_id, -32002, f"resource not found: {uri!r}")
+    except OSError:
+        # The session exists but this artifact isn't on disk — most often the
+        # filmstrip/OTLP of a session that hasn't been ended yet. Don't echo the
+        # OSError (it carries the local filesystem path).
+        return _error(msg_id, -32002, f"resource not available: {uri!r} (is the session ended?)")
+    return _result(msg_id, {"contents": [{"uri": uri, "mimeType": mime, "text": text}]})
+
+
 def _error_type(exc: Exception) -> str:
     if isinstance(exc, headless.CapabilityUnsupported):
         return "unsupported"
@@ -199,13 +257,13 @@ def _error_type(exc: Exception) -> str:
 # reliably than on a bare failure message.
 _ERROR_HINTS = {
     "unsupported": "call the doctor tool to see what this host supports",
-    "no_match": "call list_windows (or list_displays) to see what is actually available",
+    "no_match": "call window_list (or display_list) to see what is actually available",
     "permission": "call the doctor tool for the missing grant and how to fix it",
     "blocked": "the user's policy forbids this (the target is blocklisted, or an "
     "allowlist is active and the target is not on it, or a whole-screen capture was requested "
     "while the allowlist restricts to specific apps, or an export was gated on residual PII); "
     "do not retry",
-    "no_session": "call record_start first, then pass the conversation_id it returns as `session`",
+    "no_session": "call session_start first, then pass the conversation_id it returns as `session`",
 }
 
 
@@ -219,7 +277,7 @@ def _validate_target(args: dict) -> Rect | None:
     if sum(value is not None for value in (window_id, app, region, display)) > 1:
         raise ValueError("window_id, app, region and display are mutually exclusive")
     if display is not None and (not isinstance(display, int) or isinstance(display, bool)):
-        raise ValueError("display must be an integer index (see list_displays)")
+        raise ValueError("display must be an integer index (see display_list)")
     if app is not None and not str(app).strip():
         # An empty app would silently fall through to a full-screen grab;
         # capturing what the caller did not ask for is worse than failing.
@@ -359,14 +417,16 @@ def _tool_capture(args: dict):
         path.write_bytes(data)
         meta["saved_path"] = dest = str(path.resolve())
 
-    # While a session is active, a capture the agent did to *see* the screen also
-    # mirrors into the trace as an observation frame. Default-on; pass
-    # record=false to skip a one-off. The model still gets the (possibly
-    # downscaled) image above; the archived copy goes through the record path.
-    if args.get("record") is not False:
-        recorded = _mirror_observation(image, target, dedup=bool(args.get("dedup")))
-        if recorded is not None:
-            meta["recorded"] = recorded
+    # Pass `session` (a handle from session_start) to also file this capture as
+    # an observation frame in that recording — the same explicit-handle contract
+    # as the CLI's `capture --session`, deliberately not an ambient "current
+    # session". The model still gets the (possibly downscaled) image above; the
+    # archived copy goes through the record path.
+    session_handle = args.get("session")
+    if session_handle:
+        meta["recorded"] = _mirror_observation(
+            session_handle, image, target, dedup=bool(args.get("dedup"))
+        )
 
     audit.record("capture", via="mcp", target=target, dest=dest)
     mime = "image/jpeg" if fmt in ("jpg", "jpeg") else "image/png"
@@ -376,29 +436,32 @@ def _tool_capture(args: dict):
     ], meta
 
 
-def _mirror_observation(image, target: str, *, dedup: bool = False) -> dict | None:
-    """File a passive ``observation`` frame into the active session, if any.
+def _mirror_observation(session_handle: str, image, target: str, *, dedup: bool = False) -> dict:
+    """File an ``observation`` frame into the named session; returns its meta.
 
-    Best-effort: a recording problem must not fail the agent's capture (its
-    primary job), so a record error is reported in the result, not raised.
+    Two failure modes, deliberately split: an **unresolvable handle** is the
+    caller's mistake and raises (becoming an in-band ``isError``, like the CLI's
+    `capture --session ghost`). A handle that resolves but whose frame can't be
+    archived (disk full, a write race) is a best-effort miss — reported in the
+    returned ``error`` field, *not* raised, so the agent's successfully-captured
+    image is still returned instead of being thrown away over an archival hiccup.
     """
-    session = _active_session
-    if session is None:
-        return None
+    session = record.resolve_session(session_handle)  # bad handle -> isError (intended)
+    blocklist = headless.active_blocklist()
+    # Deterministic so a repeated glance archives byte-identically and `dedup`
+    # can reference the previous frame instead of duplicating it.
+    image_bytes = headless.encode_qimage(image, "png", deterministic=True)
     try:
-        blocklist = headless.active_blocklist()
         frame = record.record_frame(
             session,
-            # Deterministic so a repeated glance archives byte-identically and
-            # `dedup` can reference the previous frame instead of duplicating it.
-            image_bytes=headless.encode_qimage(image, "png", deterministic=True),
+            image_bytes=image_bytes,
             tool="observe",
             target=target,
             redacted=bool(blocklist),
             kind=record.KIND_OBSERVATION,
             dedup=dedup,
         )
-    except record.RecordError as exc:
+    except (record.RecordError, OSError) as exc:
         return {"error": str(exc)}
     dest = str((session.dir / frame.image).resolve())
     audit.record("record_observation", via="record", target=target, dest=dest)
@@ -437,14 +500,10 @@ def _tool_ocr(args: dict):
             "path and capture targets (window_id/app/title/region/display) are exclusive"
         )
     if path is not None:
-        from PySide6.QtGui import QImage
-
         file_path = Path(str(path)).expanduser()
         with file_path.open("rb") as fh:
             data = headless.read_image_bytes(fh, label=str(file_path))
-        image = QImage.fromData(data)
-        if image.isNull():
-            raise ValueError(f"{file_path} is not a decodable image")
+        image = headless.decode_qimage(data, label=str(file_path))
         source = str(file_path.resolve())
     else:
         # Capture-and-recognize in memory: only text reaches the agent, so a
@@ -504,8 +563,35 @@ def _tool_doctor(args: dict):
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
-def _tool_record_start(args: dict):
-    global _active_session
+def _tool_diff(args: dict):
+    from shotquill import imaging
+
+    threshold = _positive_int_or_zero(args.get("threshold"), "threshold")
+
+    def _load(key: str):
+        raw = args.get(key)
+        if not raw or not str(raw).strip():
+            raise ValueError(f"{key} is required (an image file path)")
+        path = Path(str(raw)).expanduser()
+        with path.open("rb") as fh:
+            data = headless.read_image_bytes(fh, label=str(path))
+        return headless.decode_qimage(data, label=str(path))
+
+    a_img, b_img = _load("a"), _load("b")
+    changed, box = imaging.image_diff_box(a_img, b_img, threshold=threshold)
+    payload: dict = {
+        "changed": changed,
+        "a_size": {"width": a_img.width(), "height": a_img.height()},
+        "b_size": {"width": b_img.width(), "height": b_img.height()},
+    }
+    if box is not None:
+        payload["box"] = {"x": box[0], "y": box[1], "width": box[2], "height": box[3]}
+    elif changed:
+        payload["reason"] = "size differs"
+    return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
+
+
+def _tool_session_start(args: dict):
     directory = args.get("dir")
     session = record.start_session(
         session_id=args.get("id"),
@@ -514,8 +600,6 @@ def _tool_record_start(args: dict):
         agent_id=args.get("agent_id"),
         label=args.get("label"),
     )
-    # Subsequent captures mirror into this session until record_end.
-    _active_session = session
     audit.record("record_start", via="record", target=session.id, dest=str(session.dir))
     payload = {
         "conversation_id": session.id,
@@ -529,11 +613,11 @@ def _require_session(args: dict) -> record.Session:
     """Resolve the required ``session`` handle (id or directory)."""
     handle = args.get("session")
     if not handle or not str(handle).strip():
-        raise ValueError("session is required (the conversation_id from record_start)")
+        raise ValueError("session is required (the conversation_id from session_start)")
     return record.resolve_session(str(handle))
 
 
-def _tool_record_frame(args: dict):
+def _tool_session_frame(args: dict):
     session = _require_session(args)
     tool = args.get("tool")
     if not tool or not str(tool).strip():
@@ -550,39 +634,23 @@ def _tool_record_frame(args: dict):
     recognizer = headless.get_recognizer() if (asserting or scanning or redacting) else None
     masks = _parse_rects(args, "mask")
     reveal = _parse_rects(args, "reveal")
-
-    # Mirror the CLI record path: load the blocklist once, keep redaction on, and
-    # record `redacted` as whether protection was in force (see record.py).
     region = _validate_target(args)
-    blocklist = headless.active_blocklist()
-    capturer = headless.get_capturer()
-    result, target, matched = headless.perform_capture(
-        capturer,
+
+    # Shared with the CLI record path (single-sourced in headless): blocklist
+    # capture + masks/redaction/reveal/downscale/encode in one fixed order, so
+    # the security-sensitive ordering can't drift between the two surfaces.
+    # `blocklist` non-empty means protection was in force (see record.py).
+    image, image_bytes, target, matched, blocklist = headless.render_recorded_frame(
         window_id=args.get("window_id"),
         app=args.get("app"),
         title=args.get("title"),
         region=region,
         display=args.get("display"),
-        blocklist=blocklist,
-        via="record",
+        masks=masks,
+        reveal=reveal,
+        redact_recognizer=recognizer if redacting else None,
+        max_dimension=_positive_int_or_zero(args.get("max_dimension"), "max_dimension"),
     )
-    # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
-    # from the assertion, not just the archived frame.
-    result = headless.apply_masks(result, masks)
-    # Mask likely PII before the frame is filed (and before the assert/scan OCR),
-    # so the redacted pixels are what gets archived, asserted, and scanned.
-    if redacting:
-        result = headless.redact_pii(result, recognizer)
-    from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
-
-    image = pixelate_except(result_to_qimage(result), reveal, result.scale)
-    # Cap the long edge before OCR/encoding so the assertion and the archived
-    # frame read the same (possibly shrunk) pixels.
-    max_dim = _positive_int_or_zero(args.get("max_dimension"), "max_dimension")
-    image = downscale_to_max(image, max_dim)
-    # Deterministic so an unchanged screen encodes byte-identically and `dedup`
-    # can reference the previous frame instead of writing a duplicate.
-    image_bytes = headless.encode_qimage(image, "png", deterministic=True)
 
     # OCR once and share the lines between the assertion and the PII scan.
     recognized = recognizer.recognize(image) if recognizer is not None else []
@@ -642,11 +710,8 @@ def _tool_record_frame(args: dict):
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
-def _tool_record_end(args: dict):
-    global _active_session
+def _tool_session_end(args: dict):
     session = _require_session(args)
-    if _active_session is not None and _active_session.dir == session.dir:
-        _active_session = None  # stop mirroring captures into it
     # Compute before/after change boxes before the filmstrip renders. Best effort:
     # a diff hiccup must not block closing a session.
     try:
@@ -668,7 +733,7 @@ def _tool_record_end(args: dict):
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
-def _tool_record_export(args: dict):
+def _tool_session_export(args: dict):
     session = _require_session(args)
     manifest = record.load_manifest(session)
     fmt = args.get("format") or "tar.gz"
@@ -699,7 +764,7 @@ def _tool_record_export(args: dict):
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
-def _tool_record_list(args: dict):
+def _tool_session_list(args: dict):
     sessions = [
         {
             "conversation_id": s.id,
@@ -716,11 +781,11 @@ def _tool_record_list(args: dict):
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], payload
 
 
-def _tool_record_prune(args: dict):
+def _tool_session_prune(args: dict):
     max_age_days = args.get("max_age_days")
     max_sessions = args.get("max_sessions")
     if max_age_days is None and max_sessions is None:
-        raise ValueError("record_prune needs max_age_days and/or max_sessions")
+        raise ValueError("session_prune needs max_age_days and/or max_sessions")
     if max_sessions is not None and (
         isinstance(max_sessions, bool) or not isinstance(max_sessions, int) or max_sessions < 0
     ):
@@ -748,774 +813,348 @@ def _tool_record_prune(args: dict):
 
 
 # --- tool descriptors --------------------------------------------------------
+#
+# The input schemas, names, descriptions, and annotations are generated from the
+# single-source registry in :mod:`shotquill.command_spec`. Only the MCP-only
+# ``outputSchema`` fragments live here (they have no CLI counterpart, so they
+# cannot drift against one), keyed by the registry's ``mcp_name``.
 
-_MASK_PROPERTY = {
-    "mask": {
-        "type": "array",
-        "description": (
-            "Rectangles to black out before the frame is used anywhere, in the "
-            "captured frame's own logical coordinates (0,0 = its top-left). A "
-            "caller-controlled redaction layered on the blocklist — mask a field "
-            "you know holds a secret so it never reaches the model, a file, or a "
-            "recorded frame."
-        ),
-        "items": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-                "width": {"type": "integer"},
-                "height": {"type": "integer"},
-            },
-            "required": ["x", "y", "width", "height"],
-        },
-    },
-}
-
-_REVEAL_PROPERTY = {
-    "reveal": {
-        "type": "array",
-        "description": (
-            "Mosaic the whole frame, keeping only these rectangle(s) sharp — "
-            "minimize exposure to just the action. Same coordinate space as "
-            "mask. Composes with mask (mask blanks; reveal blurs the rest)."
-        ),
-        "items": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-                "width": {"type": "integer"},
-                "height": {"type": "integer"},
-            },
-            "required": ["x", "y", "width", "height"],
-        },
-    },
-}
-
-_REDACT_PII_PROPERTY = {
-    "redact_pii": {
-        "type": "boolean",
-        "default": False,
-        "description": (
-            "OCR the frame and mask the pixels of any likely PII (email, credit "
-            "card, SSN, IBAN, IPv4, phone) before the frame is used anywhere. "
-            "Best-effort, not a guarantee — it can only mask what OCR reads and "
-            "the detectors catch. Layered on the blocklist and mask; applied "
-            "before reveal."
-        ),
-    },
-}
-
-_TARGET_PROPERTIES = {
-    "window_id": {
-        "type": "integer",
-        "description": "Exact window id from list_windows. Mutually exclusive with app/region.",
-    },
-    "app": {
-        "type": "string",
-        "description": (
-            "Case-insensitive substring of the owning app's name; the front-most "
-            "matching window is captured (ambiguity is reported in the result)."
-        ),
-    },
-    "title": {
-        "type": "string",
-        "description": "Narrow app matches by window-title substring (requires app).",
-    },
-    "region": {
+OUTPUT_SCHEMAS = {
+    "capture": {
         "type": "object",
-        "description": (
-            "Rectangle in logical screen coordinates. Mutually exclusive with window_id/app."
-        ),
         "properties": {
-            "x": {"type": "integer"},
-            "y": {"type": "integer"},
+            "target": {"type": "string", "description": "What was actually captured."},
             "width": {"type": "integer"},
             "height": {"type": "integer"},
-        },
-        "required": ["x", "y", "width", "height"],
-    },
-    "display": {
-        "type": "integer",
-        "description": (
-            "Capture one monitor by index from list_displays (0 = primary). "
-            "Mutually exclusive with window_id/app/region."
-        ),
-    },
-}
-
-_WINDOW_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "id": {"type": "integer"},
-        "owner": {"type": "string"},
-        "title": {"type": "string"},
-        "bundle_id": {"type": ["string", "null"]},
-        "bounds": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-                "width": {"type": "integer"},
-                "height": {"type": "integer"},
+            "matched_windows": {
+                "type": "integer",
+                "description": "Present when an app/title match was ambiguous.",
             },
-        },
-    },
-}
-
-
-_DISPLAY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "index": {"type": "integer"},
-        "name": {"type": "string"},
-        "primary": {"type": "boolean"},
-        "scale": {"type": "number"},
-        "bounds": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-                "width": {"type": "integer"},
-                "height": {"type": "integer"},
-            },
-        },
-    },
-}
-
-
-def _read_only(title: str) -> dict:
-    """Annotations for the tools that never write anything an agent host
-    would want to gate on — lets hosts auto-approve them."""
-    return {"title": title, "readOnlyHint": True, "openWorldHint": False}
-
-
-_TOOLS = {
-    "capture": {
-        "handler": _tool_capture,
-        "descriptor": {
-            "name": "capture",
-            "description": (
-                "Take a screenshot of the full screen (default), one window "
-                "(by window_id, or by app/title match), one monitor (by "
-                "display index), or a region. Returns the image plus a JSON "
-                "metadata text block. Use max_width (e.g. 1024) to downscale "
-                "large screens and save context."
-            ),
-            # Not readOnlyHint: save_path can write (and overwrite) a file.
-            "annotations": {"title": "Take a screenshot", "openWorldHint": False},
-            "inputSchema": {
+            "note": {"type": "string"},
+            "saved_path": {"type": "string"},
+            "recorded": {
                 "type": "object",
+                "description": "Present when a `session` handle was passed, to also file this "
+                "capture as an observation frame. Carries the frame's conversation_id/index/image "
+                "on success, or an `error` string if archiving the frame failed (the image above "
+                "is still returned).",
                 "properties": {
-                    **_TARGET_PROPERTIES,
-                    "format": {"type": "string", "enum": ["png", "jpg"], "default": "png"},
-                    "max_width": {
-                        "type": "integer",
-                        "description": "Downscale to at most this many pixels wide.",
-                    },
-                    "save_path": {
-                        "type": "string",
-                        "description": "Also write the image to this file path.",
-                    },
-                    "deterministic": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "Byte-stable output for golden-image/diff tests: pin "
-                            "the embedded DPI and strip PNG timestamp/text chunks "
-                            "so identical pixels always encode to identical bytes."
-                        ),
-                    },
-                    "record": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": (
-                            "When a session is recording, also file this capture as "
-                            "an observation frame in the trace. Pass false to skip a "
-                            "one-off (no effect when not recording)."
-                        ),
-                    },
-                    "dedup": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "When mirroring into a session, reference the previous "
-                            "frame instead of writing a duplicate if the screen is "
-                            "unchanged (cost control for repeated glances)."
-                        ),
-                    },
-                    **_MASK_PROPERTY,
-                    **_REVEAL_PROPERTY,
-                    **_REDACT_PII_PROPERTY,
+                    "conversation_id": {"type": "string"},
+                    "index": {"type": "integer"},
+                    "image": {"type": "string"},
+                    "error": {"type": "string"},
                 },
-                "additionalProperties": False,
-            },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "target": {"type": "string", "description": "What was actually captured."},
-                    "width": {"type": "integer"},
-                    "height": {"type": "integer"},
-                    "matched_windows": {
-                        "type": "integer",
-                        "description": "Present when an app/title match was ambiguous.",
-                    },
-                    "note": {"type": "string"},
-                    "saved_path": {"type": "string"},
-                    "recorded": {
-                        "type": "object",
-                        "description": "Present when mirrored into an active session.",
-                        "properties": {
-                            "conversation_id": {"type": "string"},
-                            "index": {"type": "integer"},
-                            "image": {"type": "string"},
-                        },
-                    },
-                },
-                "required": ["target", "width", "height"],
             },
         },
+        "required": ["target", "width", "height"],
     },
-    "list_windows": {
-        "handler": _tool_list_windows,
-        "descriptor": {
-            "name": "list_windows",
-            "description": (
-                "List on-screen windows, front-most first: id, owning app, "
-                "title, and bounds. Ids feed capture/ocr window_id. May be "
-                "unavailable on some platforms (e.g. Wayland) — see doctor."
-            ),
-            "annotations": _read_only("List on-screen windows"),
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-            "outputSchema": {
-                "type": "object",
-                "properties": {"windows": {"type": "array", "items": _WINDOW_SCHEMA}},
-                "required": ["windows"],
-            },
-        },
-    },
-    "list_displays": {
-        "handler": _tool_list_displays,
-        "descriptor": {
-            "name": "list_displays",
-            "description": (
-                "List the monitors of this machine: index (primary first), "
-                "name, logical bounds on the virtual desktop, pixel scale. "
-                "Indexes feed capture/ocr `display` for a one-monitor shot."
-            ),
-            "annotations": _read_only("List monitors"),
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-            "outputSchema": {
-                "type": "object",
-                "properties": {"displays": {"type": "array", "items": _DISPLAY_SCHEMA}},
-                "required": ["displays"],
-            },
-        },
-    },
-    "ocr": {
-        "handler": _tool_ocr,
-        "descriptor": {
-            "name": "ocr",
-            "description": (
-                "Extract text with on-device OCR, and optionally assert on it. "
-                "Pass path for an existing image file, or the capture target "
-                "arguments (none = full screen) to capture-and-recognize in "
-                "memory — only text is returned, costing no image tokens. Add "
-                "contains/matches to check the screen (e.g. did 'Login' render) "
-                "and read `passed` in the result."
-            ),
-            "annotations": _read_only("Read or assert on text on the screen"),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": (
-                            "Image file to recognize. Exclusive with the capture targets."
-                        ),
-                    },
-                    "contains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Assert the text contains each string (all must hold).",
-                    },
-                    "matches": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Assert the text matches each regex (all must hold).",
-                    },
-                    "ignore_case": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Make contains/matches case-insensitive.",
-                    },
-                    "boxes": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "Also return each line's pixel bounding box in the image, and "
-                            "locate where any contains/matches landed (for highlighting or "
-                            "masking). Coordinates are image pixels, top-left origin."
-                        ),
-                    },
-                    **_TARGET_PROPERTIES,
-                },
-                "additionalProperties": False,
-            },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "lines": {"type": "array", "items": {"type": "string"}},
-                    "boxes": {
-                        "type": "array",
-                        "description": "Present when `boxes` was set: one pixel box per line.",
-                        "items": {
+    "window_list": {
+        "type": "object",
+        "properties": {
+            "windows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "owner": {"type": "string"},
+                        "title": {"type": "string"},
+                        "bundle_id": {"type": ["string", "null"]},
+                        "bounds": {
                             "type": "object",
                             "properties": {
-                                "text": {"type": "string"},
                                 "x": {"type": "integer"},
                                 "y": {"type": "integer"},
                                 "width": {"type": "integer"},
                                 "height": {"type": "integer"},
                             },
-                            "required": ["text", "x", "y", "width", "height"],
                         },
                     },
-                    "source": {
-                        "type": "string",
-                        "description": "The file or capture target the text came from.",
-                    },
-                    "passed": {
-                        "type": "boolean",
-                        "description": "Present when contains/matches were given: did all hold.",
-                    },
-                    "assertions": {
-                        "type": "array",
-                        "items": {
+                },
+            }
+        },
+        "required": ["windows"],
+    },
+    "display_list": {
+        "type": "object",
+        "properties": {
+            "displays": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "name": {"type": "string"},
+                        "primary": {"type": "boolean"},
+                        "scale": {"type": "number"},
+                        "bounds": {
                             "type": "object",
                             "properties": {
-                                "kind": {"type": "string", "enum": ["contains", "matches"]},
-                                "pattern": {"type": "string"},
-                                "passed": {"type": "boolean"},
-                                "box": {
-                                    "type": "object",
-                                    "description": (
-                                        "Where the match landed (pixels); present only with "
-                                        "`boxes` set and the check passed."
-                                    ),
-                                    "properties": {
-                                        "x": {"type": "integer"},
-                                        "y": {"type": "integer"},
-                                        "width": {"type": "integer"},
-                                        "height": {"type": "integer"},
-                                    },
-                                    "required": ["x", "y", "width", "height"],
-                                },
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "width": {"type": "integer"},
+                                "height": {"type": "integer"},
                             },
-                            "required": ["kind", "pattern", "passed"],
                         },
                     },
                 },
-                "required": ["lines", "source"],
-            },
+            }
         },
+        "required": ["displays"],
     },
-    "record_start": {
-        "handler": _tool_record_start,
-        "descriptor": {
-            "name": "record_start",
-            "description": (
-                "Open a flight-recorder session: a trace of frames you leave "
-                "behind as you operate the screen, for a human or a reviewing "
-                "AI to replay later. Returns conversation_id — pass it as "
-                "`session` to record_frame and record_end. Frames go to disk, "
-                "not into your context."
-            ),
-            "annotations": {"title": "Start a recording session", "openWorldHint": False},
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string", "description": "Note for the whole session."},
-                    "agent": {
-                        "type": "string",
-                        "description": "Name of the agent (gen_ai.agent.name).",
+    "ocr": {
+        "type": "object",
+        "properties": {
+            "lines": {"type": "array", "items": {"type": "string"}},
+            "boxes": {
+                "type": "array",
+                "description": "Present when `boxes` was set: one pixel box per line.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"},
+                        "width": {"type": "integer"},
+                        "height": {"type": "integer"},
                     },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Stable agent id (gen_ai.agent.id).",
-                    },
-                    "id": {
-                        "type": "string",
-                        "description": "Set the conversation id (default: generated).",
-                    },
-                    "dir": {
-                        "type": "string",
-                        "description": "Pin the session directory (default: data folder).",
-                    },
+                    "required": ["text", "x", "y", "width", "height"],
                 },
-                "additionalProperties": False,
             },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string"},
-                    "dir": {"type": "string"},
-                    "manifest": {"type": "string"},
-                },
-                "required": ["conversation_id", "dir", "manifest"],
+            "source": {
+                "type": "string",
+                "description": "The file or capture target the text came from.",
             },
-        },
-    },
-    "record_frame": {
-        "handler": _tool_record_frame,
-        "descriptor": {
-            "name": "record_frame",
-            "description": (
-                "Capture one frame into a session (full screen by default, or a "
-                "window/region/monitor via the target args). Blocklist redaction "
-                "stays on. The image is written to the session on disk and is NOT "
-                "returned to you — use `capture` when you want to see the pixels. "
-                "Add contains/matches to OCR the frame and record the assertion "
-                "in the trace (a failed check marks the step in the filmstrip and "
-                "sets the OTLP span to error); read `assertion_passed` to branch."
-            ),
-            "annotations": {"title": "Record one frame", "openWorldHint": False},
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": {
-                        "type": "string",
-                        "description": "conversation_id (or directory) from record_start.",
-                    },
-                    "tool": {
-                        "type": "string",
-                        "description": "The action this frame documents (gen_ai.tool.name).",
-                    },
-                    "label": {
-                        "type": "string",
-                        "description": "Human-readable note for this frame.",
-                    },
-                    "contains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "OCR the frame and assert it contains each string.",
-                    },
-                    "matches": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "OCR the frame and assert it matches each regex.",
-                    },
-                    "ignore_case": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Make contains/matches case-insensitive.",
-                    },
-                    "scan_pii": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "OCR the frame and flag likely PII kinds + counts on it "
-                            "(best-effort, not a guarantee; records kind/count only, "
-                            "never the value)."
-                        ),
-                    },
-                    "phase": {
-                        "type": "string",
-                        "enum": ["before", "after"],
-                        "description": (
-                            "File this frame as one half of a before/after pair around an "
-                            "action: 'before' opens a pair, 'after' joins the most recent "
-                            "open one (a lone 'after' is an error). Lets a reviewer diff "
-                            "what changed when the agent acted."
-                        ),
-                    },
-                    "dedup": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "If this frame is identical to the previous one, reference "
-                            "it instead of writing a duplicate image (cost control)."
-                        ),
-                    },
-                    "max_dimension": {
-                        "type": "integer",
-                        "description": (
-                            "Cap the frame's longer edge to this many pixels before "
-                            "filing (0/absent = keep native size)."
-                        ),
-                    },
-                    **_MASK_PROPERTY,
-                    **_REVEAL_PROPERTY,
-                    **_REDACT_PII_PROPERTY,
-                    **_TARGET_PROPERTIES,
-                },
-                "required": ["session", "tool"],
-                "additionalProperties": False,
+            "passed": {
+                "type": "boolean",
+                "description": "Present when contains/matches were given: did all hold.",
             },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string"},
-                    "index": {"type": "integer"},
-                    "image": {"type": "string", "description": "Path the frame was written to."},
-                    "tool": {"type": "string"},
-                    "target": {"type": "string"},
-                    "redacted": {
-                        "type": "boolean",
-                        "description": (
-                            "Blocklist protection was in force (not a no-user-content guarantee)."
-                        ),
-                    },
-                    "assertion_passed": {
-                        "type": "boolean",
-                        "description": "Present when contains/matches were given: did all hold.",
-                    },
-                    "assertions": {
-                        "type": "array",
-                        "items": {
+            "assertions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["contains", "matches"]},
+                        "pattern": {"type": "string"},
+                        "passed": {"type": "boolean"},
+                        "box": {
                             "type": "object",
+                            "description": "Where "
+                            "the "
+                            "match "
+                            "landed "
+                            "(pixels); "
+                            "present "
+                            "only "
+                            "with "
+                            "`boxes` "
+                            "set and "
+                            "the "
+                            "check "
+                            "passed.",
                             "properties": {
-                                "kind": {"type": "string", "enum": ["contains", "matches"]},
-                                "pattern": {"type": "string"},
-                                "passed": {"type": "boolean"},
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                                "width": {"type": "integer"},
+                                "height": {"type": "integer"},
                             },
-                            "required": ["kind", "pattern", "passed"],
+                            "required": ["x", "y", "width", "height"],
                         },
                     },
-                    "pii": {
-                        "type": "array",
-                        "description": (
-                            "Present when scan_pii was set: best-effort PII flags, "
-                            "kind + count only (not a guarantee, never the value)."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "kind": {"type": "string"},
-                                "count": {"type": "integer"},
-                            },
-                            "required": ["kind", "count"],
-                        },
-                    },
-                    "phase": {
-                        "type": "string",
-                        "enum": ["before", "after"],
-                        "description": "Present when this frame is half of a before/after pair.",
-                    },
-                    "pair_id": {
-                        "type": "string",
-                        "description": "Links the two halves of a before/after pair.",
-                    },
-                    "matched_windows": {"type": "integer"},
-                    "note": {"type": "string"},
+                    "required": ["kind", "pattern", "passed"],
                 },
-                "required": ["conversation_id", "index", "image", "tool", "target", "redacted"],
             },
         },
+        "required": ["lines", "source"],
     },
-    "record_end": {
-        "handler": _tool_record_end,
-        "descriptor": {
-            "name": "record_end",
-            "description": (
-                "Close a session and render its static HTML filmstrip. Returns "
-                "the manifest and filmstrip paths plus the frame count."
-            ),
-            "annotations": {"title": "End a recording session", "openWorldHint": False},
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": {
-                        "type": "string",
-                        "description": "conversation_id (or directory) from record_start.",
-                    },
-                },
-                "required": ["session"],
-                "additionalProperties": False,
-            },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string"},
-                    "dir": {"type": "string"},
-                    "manifest": {"type": "string"},
-                    "filmstrip": {"type": "string"},
-                    "otlp": {
-                        "type": "string",
-                        "description": "OTLP/JSON trace projection (written to disk, not sent).",
-                    },
-                    "frames": {"type": "integer"},
-                },
-                "required": ["conversation_id", "dir", "manifest", "filmstrip", "otlp", "frames"],
-            },
+    "session_start": {
+        "type": "object",
+        "properties": {
+            "conversation_id": {"type": "string"},
+            "dir": {"type": "string"},
+            "manifest": {"type": "string"},
         },
+        "required": ["conversation_id", "dir", "manifest"],
     },
-    "record_export": {
-        "handler": _tool_record_export,
-        "descriptor": {
-            "name": "record_export",
-            "description": (
-                "Bundle a session into one shareable archive (manifest + frames + "
-                "filmstrip + OTLP). Set fail_on_pii to refuse when any frame carries "
-                "a best-effort PII flag. Returns the archive path; the result also "
-                "reports any residual PII so you can decide before sharing."
-            ),
-            "annotations": {"title": "Export a recording session", "openWorldHint": False},
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": {
-                        "type": "string",
-                        "description": "conversation_id (or directory) from record_start.",
-                    },
-                    "output": {
-                        "type": "string",
-                        "description": "Archive path to write (default: beside the session).",
-                    },
-                    "format": {
-                        "type": "string",
-                        "enum": ["tar.gz", "zip"],
-                        "default": "tar.gz",
-                        "description": "Archive format.",
-                    },
-                    "fail_on_pii": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Refuse to export if any frame carries a PII flag.",
-                    },
-                },
-                "required": ["session"],
-                "additionalProperties": False,
+    "session_frame": {
+        "type": "object",
+        "properties": {
+            "conversation_id": {"type": "string"},
+            "index": {"type": "integer"},
+            "image": {"type": "string", "description": "Path the frame was written to."},
+            "tool": {"type": "string"},
+            "target": {"type": "string"},
+            "redacted": {
+                "type": "boolean",
+                "description": "Blocklist protection was in force "
+                "(not a no-user-content "
+                "guarantee).",
             },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string"},
-                    "archive": {
-                        "type": "string",
-                        "description": "Path the archive was written to.",
-                    },
-                    "format": {"type": "string"},
-                    "frames": {"type": "integer"},
-                    "pii": {
-                        "type": "object",
-                        "description": (
-                            "Residual best-effort PII flags by kind (present only when any)."
-                        ),
-                        "additionalProperties": {"type": "integer"},
-                    },
-                },
-                "required": ["conversation_id", "archive", "format", "frames"],
+            "assertion_passed": {
+                "type": "boolean",
+                "description": "Present when contains/matches were given: did all hold.",
             },
+            "assertions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["contains", "matches"]},
+                        "pattern": {"type": "string"},
+                        "passed": {"type": "boolean"},
+                    },
+                    "required": ["kind", "pattern", "passed"],
+                },
+            },
+            "pii": {
+                "type": "array",
+                "description": "Present when scan_pii was set: "
+                "best-effort PII flags, kind + count "
+                "only (not a guarantee, never the "
+                "value).",
+                "items": {
+                    "type": "object",
+                    "properties": {"kind": {"type": "string"}, "count": {"type": "integer"}},
+                    "required": ["kind", "count"],
+                },
+            },
+            "phase": {
+                "type": "string",
+                "enum": ["before", "after"],
+                "description": "Present when this frame is half of a before/after pair.",
+            },
+            "pair_id": {
+                "type": "string",
+                "description": "Links the two halves of a before/after pair.",
+            },
+            "matched_windows": {"type": "integer"},
+            "note": {"type": "string"},
         },
+        "required": ["conversation_id", "index", "image", "tool", "target", "redacted"],
     },
-    "record_list": {
-        "handler": _tool_record_list,
-        "descriptor": {
-            "name": "record_list",
-            "description": (
-                "List recorded sessions, newest first: conversation_id, directory, "
-                "start time, status, frame count, and on-disk size in bytes. Use it "
-                "to find sessions to prune."
-            ),
-            "annotations": _read_only("List recorded sessions"),
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "sessions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "conversation_id": {"type": "string"},
-                                "dir": {"type": "string"},
-                                "started_at": {"type": ["string", "null"]},
-                                "status": {"type": ["string", "null"]},
-                                "frames": {"type": "integer"},
-                                "size_bytes": {"type": "integer"},
-                            },
-                            "required": ["conversation_id", "dir", "frames", "size_bytes"],
-                        },
-                    }
-                },
-                "required": ["sessions"],
+    "session_end": {
+        "type": "object",
+        "properties": {
+            "conversation_id": {"type": "string"},
+            "dir": {"type": "string"},
+            "manifest": {"type": "string"},
+            "filmstrip": {"type": "string"},
+            "otlp": {
+                "type": "string",
+                "description": "OTLP/JSON trace projection (written to disk, not sent).",
             },
+            "frames": {"type": "integer"},
         },
+        "required": ["conversation_id", "dir", "manifest", "filmstrip", "otlp", "frames"],
     },
-    "record_prune": {
-        "handler": _tool_record_prune,
-        "descriptor": {
-            "name": "record_prune",
-            "description": (
-                "Delete old recorded sessions to cap disk cost. Give max_age_days "
-                "and/or max_sessions (at least one); only completed sessions are "
-                "eligible, so a live recording is never removed. Pass dry_run to see "
-                "what would go without deleting."
-            ),
-            # Deletes files: not readOnlyHint, so a host can gate it.
-            "annotations": {"title": "Prune old recordings", "openWorldHint": False},
-            "inputSchema": {
+    "session_export": {
+        "type": "object",
+        "properties": {
+            "conversation_id": {"type": "string"},
+            "archive": {"type": "string", "description": "Path the archive was written to."},
+            "format": {"type": "string"},
+            "frames": {"type": "integer"},
+            "pii": {
                 "type": "object",
-                "properties": {
-                    "max_age_days": {
-                        "type": "number",
-                        "description": "Remove sessions started more than this many days ago.",
-                    },
-                    "max_sessions": {
-                        "type": "integer",
-                        "description": "Keep only the newest this-many sessions.",
-                    },
-                    "dry_run": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Report what would be removed without deleting anything.",
-                    },
-                },
-                "additionalProperties": False,
-            },
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "removed": {"type": "array", "items": {"type": "string"}},
-                    "count": {"type": "integer"},
-                    "freed_bytes": {"type": "integer"},
-                    "dry_run": {"type": "boolean"},
-                },
-                "required": ["removed", "count", "freed_bytes", "dry_run"],
+                "description": "Residual best-effort PII flags by kind (present only when any).",
+                "additionalProperties": {"type": "integer"},
             },
         },
+        "required": ["conversation_id", "archive", "format", "frames"],
+    },
+    "session_list": {
+        "type": "object",
+        "properties": {
+            "sessions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "conversation_id": {"type": "string"},
+                        "dir": {"type": "string"},
+                        "started_at": {"type": ["string", "null"]},
+                        "status": {"type": ["string", "null"]},
+                        "frames": {"type": "integer"},
+                        "size_bytes": {"type": "integer"},
+                    },
+                    "required": ["conversation_id", "dir", "frames", "size_bytes"],
+                },
+            }
+        },
+        "required": ["sessions"],
+    },
+    "session_prune": {
+        "type": "object",
+        "properties": {
+            "removed": {"type": "array", "items": {"type": "string"}},
+            "count": {"type": "integer"},
+            "freed_bytes": {"type": "integer"},
+            "dry_run": {"type": "boolean"},
+        },
+        "required": ["removed", "count", "freed_bytes", "dry_run"],
     },
     "doctor": {
-        "handler": _tool_doctor,
-        "descriptor": {
-            "name": "doctor",
-            "description": (
-                "Report this host's capability/permission matrix (capture, "
-                "list_windows, ocr, screen-recording permission) with reasons "
-                "for anything unavailable."
-            ),
-            "annotations": _read_only("Capability & permission report"),
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-            "outputSchema": {
-                "type": "object",
-                "properties": {
-                    "checks": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "capability": {"type": "string"},
-                                "available": {"type": "boolean"},
-                                "detail": {"type": ["string", "null"]},
-                            },
-                            "required": ["capability", "available"],
-                        },
-                    }
+        "type": "object",
+        "properties": {
+            "checks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "capability": {"type": "string"},
+                        "available": {"type": "boolean"},
+                        "detail": {"type": ["string", "null"]},
+                    },
+                    "required": ["capability", "available"],
                 },
-                "required": ["checks"],
-            },
+            }
         },
+        "required": ["checks"],
+    },
+    "diff": {
+        "type": "object",
+        "properties": {
+            "changed": {"type": "boolean"},
+            "a_size": {
+                "type": "object",
+                "properties": {"width": {"type": "integer"}, "height": {"type": "integer"}},
+            },
+            "b_size": {
+                "type": "object",
+                "properties": {"width": {"type": "integer"}, "height": {"type": "integer"}},
+            },
+            "box": {
+                "type": "object",
+                "description": "Bounding box of the change (when located).",
+                "properties": {
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                },
+            },
+            "reason": {"type": "string"},
+        },
+        "required": ["changed", "a_size", "b_size"],
     },
 }
+
+
+_HANDLERS = {
+    "capture": _tool_capture,
+    "window_list": _tool_list_windows,
+    "display_list": _tool_list_displays,
+    "ocr": _tool_ocr,
+    "diff": _tool_diff,
+    "doctor": _tool_doctor,
+    "session_start": _tool_session_start,
+    "session_frame": _tool_session_frame,
+    "session_end": _tool_session_end,
+    "session_list": _tool_session_list,
+    "session_prune": _tool_session_prune,
+    "session_export": _tool_session_export,
+}
+
+# name -> {"handler": ..., "descriptor": {...}}, generated so CLI and MCP can
+# never disagree on a tool's name or inputs.
+_TOOLS = command_spec.build_mcp_tools(_HANDLERS, OUTPUT_SCHEMAS)

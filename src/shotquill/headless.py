@@ -123,6 +123,72 @@ def read_image_bytes(stream: BinaryIO, *, label: str) -> bytes:
     return data
 
 
+def decode_qimage(data: bytes, *, label: str):
+    """Decode image bytes into a QImage, raising ``ValueError`` if undecodable.
+
+    The one place the ``QImage.fromData`` + ``isNull`` check lives, so the CLI
+    (`ocr`/`diff`) and MCP (`ocr`/`diff`) image readers can't drift on what counts
+    as a decodable image or how the failure reads."""
+    from PySide6.QtGui import QImage
+
+    image = QImage.fromData(data)
+    if image.isNull():
+        raise ValueError(f"{label} is not a decodable image")
+    return image
+
+
+def render_recorded_frame(
+    *,
+    window_id=None,
+    app=None,
+    title=None,
+    region=None,
+    display=None,
+    masks=(),
+    reveal=(),
+    redact_recognizer=None,
+    max_dimension: int = 0,
+):
+    """The shared `session frame` pixel pipeline for both the CLI and MCP.
+
+    Single-sources the *security-sensitive ordering* so the two front-ends can't
+    drift on it: blocklist-enforced capture (``via="record"``) → caller masks →
+    PII redaction → reveal mosaic → long-edge downscale → deterministic PNG
+    encode. Returns ``(image, image_bytes, target, matched, blocklist)``; the
+    caller still does its own recognize / assert / scan / record_frame and the
+    surface-specific ambiguous-match report.
+    """
+    from shotquill.imaging import downscale_to_max, pixelate_except, result_to_qimage
+
+    blocklist = active_blocklist()
+    capturer = get_capturer()
+    result, target, matched = perform_capture(
+        capturer,
+        window_id=window_id,
+        app=app,
+        title=title,
+        region=region,
+        display=display,
+        blocklist=blocklist,
+        via="record",
+    )
+    # Caller masks/reveal apply before OCR too, so a hidden field is also hidden
+    # from the assertion, not just the archived frame.
+    result = apply_masks(result, masks)
+    # Mask likely PII before the frame is filed (and before the assert/scan OCR),
+    # so the redacted pixels are what gets archived, asserted, and scanned.
+    if redact_recognizer is not None:
+        result = redact_pii(result, redact_recognizer)
+    image = pixelate_except(result_to_qimage(result), reveal, result.scale)
+    # Cap the long edge before OCR/encoding so the archived frame and the
+    # assertion read the very same (possibly shrunk) pixels (cost control).
+    image = downscale_to_max(image, max_dimension)
+    # Deterministic encoding (pinned DPI, no volatile PNG chunks) so an unchanged
+    # screen encodes byte-for-byte the same and `dedup` can spot it.
+    image_bytes = encode_qimage(image, "png", deterministic=True)
+    return image, image_bytes, target, matched, blocklist
+
+
 def get_capturer(include_cursor: bool = False) -> ScreenCapturer:
     """Pick the platform capture backend (the CLI/MCP factory seam)."""
     if sys.platform == "darwin":
@@ -222,7 +288,7 @@ def select_display(displays: list[DisplayInfo], index: int) -> DisplayInfo:
             return display
     raise DisplayNotFound(
         f"no display {index}: this machine has {len(displays)} "
-        f"(0..{len(displays) - 1}; see `squill displays`)"
+        f"(0..{len(displays) - 1}; see `squill display list`)"
     )
 
 
