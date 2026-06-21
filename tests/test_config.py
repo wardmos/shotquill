@@ -76,10 +76,11 @@ def test_cursor_excluded_by_default():
     assert DEFAULT_INCLUDE_CURSOR is False
 
 
-def test_auto_output_defaults_on():
-    # Hands-free by default: a capture is saved AND copied without the editor.
-    assert DEFAULT_AUTO_SAVE is True
-    assert DEFAULT_AUTO_COPY is True
+def test_auto_output_defaults_off():
+    # Manual by default: a capture opens the editor; neither auto-save nor
+    # auto-copy fires until the user opts in.
+    assert DEFAULT_AUTO_SAVE is False
+    assert DEFAULT_AUTO_COPY is False
 
 
 def test_hover_switch_defaults():
