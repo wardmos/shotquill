@@ -47,10 +47,10 @@ DEFAULT_SOUND = False
 # Launch at login is off by default; enabling it installs a LaunchAgent.
 DEFAULT_AUTOSTART = False
 # Auto-output: when on, a capture is saved and/or copied immediately and the
-# annotation editor is skipped (hands-free). Both default on; turn both off to
-# get the manual annotate-then-save/copy flow back.
-DEFAULT_AUTO_SAVE = True
-DEFAULT_AUTO_COPY = True
+# annotation editor is skipped (hands-free). Both default off, so a capture
+# opens the annotation editor; turn either on for the hands-free flow.
+DEFAULT_AUTO_SAVE = False
+DEFAULT_AUTO_COPY = False
 
 # How long the pointer must rest on a new target before the capture overlay
 # switches its highlighted window, in milliseconds. 0 switches the moment the
