@@ -31,8 +31,9 @@ def test_audit_log_path_uses_localappdata(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     log = paths.audit_log_path()
     assert log == tmp_path / "Local" / "shotquill" / "Logs" / "audit.log"
-    # The parent is created so callers can append without ceremony.
-    assert log.parent.is_dir()
+    # Resolving the path is pure: reporting it (e.g. ``squill doctor``) must not
+    # create directories. The writer (audit.record) makes the parent on append.
+    assert not log.parent.exists()
 
 
 def test_audit_log_path_ignores_xdg_on_windows(tmp_path, monkeypatch):
