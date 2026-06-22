@@ -77,7 +77,7 @@ def test_width_control_is_a_captioned_two_row_widget(qtbot):
     # Two rows like the icon-over-label buttons: the value on top, the caption
     # below (and pinned to the bottom so it lands on the buttons' label line).
     # The label lives in that caption, not the spin box's wide inline prefix.
-    _canvas_, toolbar = _toolbar(qtbot)
+    _canvas_, toolbar = _toolbar(qtbot, style="both")
     spin = toolbar.width_spin
     assert spin.prefix() == ""
     container = spin.parentWidget()
@@ -134,6 +134,38 @@ def test_copy_and_save_callbacks_are_wired(qtbot):
     assert set(calls) == {"copy", "save", "ocr", "pin"}
 
 
+def test_outputs_stay_on_the_main_bar_by_default(qtbot):
+    # The single-bar layout (used by the floating spotlight toolbar, which is
+    # sized to its contents and never folds) keeps copy/save inline.
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert toolbar.outputs_toolbar is None
+    assert toolbar.copy_action in toolbar.actions()
+    assert toolbar.save_action in toolbar.actions()
+
+
+def test_split_outputs_moves_copy_save_to_a_no_collapse_sibling_bar(qtbot):
+    # The framed editor constrains the bar's width, so copy/save are peeled onto
+    # a sibling that never folds them behind the overflow chevron.
+    from shotquill.ui.toolbar import _NoCollapseToolBar
+
+    canvas = _canvas(qtbot)
+    toolbar = create_toolbar(
+        canvas, lambda: None, lambda: None, lambda: None, lambda: None, split_outputs=True
+    )
+    qtbot.addWidget(toolbar)
+    outputs = toolbar.outputs_toolbar
+    assert isinstance(outputs, _NoCollapseToolBar)
+    qtbot.addWidget(outputs)
+    # The tool row no longer carries copy/save; the outputs bar does.
+    assert toolbar.copy_action not in toolbar.actions()
+    assert toolbar.save_action not in toolbar.actions()
+    assert toolbar.copy_action in outputs.actions()
+    assert toolbar.save_action in outputs.actions()
+    # A no-collapse bar reserves room for every button (min == preferred), so it
+    # never hides one behind a chevron.
+    assert outputs.minimumSizeHint() == outputs.sizeHint()
+
+
 def test_ocr_action_present_when_callback_given(qtbot):
     _canvas_, toolbar = _toolbar(qtbot, on_ocr=lambda: None)
     assert "Copy Text" in {a.text() for a in toolbar.actions()}
@@ -156,19 +188,21 @@ def test_every_button_has_an_icon(qtbot):
         assert not action.icon().isNull(), action.text()
 
 
-def test_toolbar_shows_text_under_icon_by_default(qtbot):
-    # Icon on top, label underneath: icons share one row, labels another.
+def test_toolbar_shows_icon_only_by_default(qtbot):
+    # Compact by default: just the glyph, its label carried by the tooltip.
     _canvas_, toolbar = _toolbar(qtbot)
-    assert toolbar.toolButtonStyle() == Qt.ToolButtonTextUnderIcon
+    assert toolbar.toolButtonStyle() == Qt.ToolButtonIconOnly
 
 
 def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
     from PySide6.QtCore import QSize
 
-    from shotquill.ui.icons import ICON_SIZE
+    from shotquill.ui.icons import ICON_SIZE_STANDALONE
 
+    # The default is icon-only, whose glyph is emitted at the larger standalone
+    # size (no caption to balance), and the toolbar's icon size must match it.
     _canvas_, toolbar = _toolbar(qtbot)
-    assert toolbar.iconSize() == QSize(ICON_SIZE, ICON_SIZE)
+    assert toolbar.iconSize() == QSize(ICON_SIZE_STANDALONE, ICON_SIZE_STANDALONE)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +211,8 @@ def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
         ("both", "ICON_SIZE"),  # captioned stacked layout: small glyph over label
         ("icon", "ICON_SIZE_STANDALONE"),  # no caption: larger standalone glyph
         ("text", "ICON_SIZE"),  # no icon drawn; size is the harmless default
-        ("sideways", "ICON_SIZE"),  # unknown value falls back to the default size
+        # unknown value falls back to the default style's size (icon-only)
+        ("sideways", "ICON_SIZE_STANDALONE"),
     ],
 )
 def test_icon_size_follows_the_toolbar_style(qtbot, style, expected_size):
@@ -223,7 +258,7 @@ def test_buttons_are_packed_tighter_than_the_platform_default(qtbot):
         ("both", Qt.ToolButtonTextUnderIcon),
         ("icon", Qt.ToolButtonIconOnly),
         ("text", Qt.ToolButtonTextOnly),
-        ("sideways", Qt.ToolButtonTextUnderIcon),  # unknown value: default look
+        ("sideways", Qt.ToolButtonIconOnly),  # unknown value: default (icon-only) look
     ],
 )
 def test_toolbar_button_style_follows_setting(qtbot, style, expected):

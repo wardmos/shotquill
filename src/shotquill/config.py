@@ -71,11 +71,11 @@ DEFAULT_REGION_ADJUST = True
 # like during capture. Turning this off restores a regular titled window.
 DEFAULT_EDITOR_BACKDROP = True
 
-# How the editor toolbar labels its buttons: an icon next to the text (the
-# default), just the icon (compact; the text moves into the tooltip), or just
-# the text (the classic pre-icon look).
+# How the editor toolbar labels its buttons: just the icon (the default;
+# compact, with the text in the tooltip), an icon above its text, or just the
+# text (the classic pre-icon look).
 TOOLBAR_STYLES = ("both", "icon", "text")
-DEFAULT_TOOLBAR_STYLE = "both"
+DEFAULT_TOOLBAR_STYLE = "icon"
 
 
 def _to_bool(value: object, default: bool) -> bool:

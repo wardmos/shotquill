@@ -241,10 +241,10 @@ def test_editor_backdrop_round_trip(config):
     assert config.editor_backdrop() is True
 
 
-def test_toolbar_style_defaults_to_icon_and_text(config):
+def test_toolbar_style_defaults_to_icon_only(config):
     from shotquill.config import DEFAULT_TOOLBAR_STYLE, TOOLBAR_STYLES
 
-    assert DEFAULT_TOOLBAR_STYLE == "both"
+    assert DEFAULT_TOOLBAR_STYLE == "icon"
     assert DEFAULT_TOOLBAR_STYLE in TOOLBAR_STYLES
     assert config.toolbar_style() == DEFAULT_TOOLBAR_STYLE
 
