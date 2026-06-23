@@ -33,6 +33,19 @@ def test_credit_card_invalid_luhn_not_flagged():
     assert _kinds("ref 4111111111111112") == set()
 
 
+def test_credit_card_with_high_digits_passes_luhn():
+    # 4012888888881881 is Luhn-valid; its 8s double past 9, exercising the
+    # subtract-9 branch of the checksum (the all-1s test number never does).
+    assert _kinds("card 4012 8888 8888 1881") == {"credit_card"}
+
+
+def test_luhn_only_applies_to_card_length_runs():
+    # The checksum guards on length first: a run shorter than 13 or longer than
+    # 19 digits is rejected outright, never reaching the card detector.
+    assert pii._luhn_ok("4111") is False
+    assert pii._luhn_ok("4" * 20) is False
+
+
 def test_ssn_detected():
     assert _kinds("ssn 078-05-1120 redacted?") == {"ssn"}
 
