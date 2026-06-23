@@ -65,6 +65,13 @@ class PortalScreenCapturer(ScreenCapturer):
         image, origin, scale = self._grab()
         return _qimage_to_result(image, scale, origin=origin)
 
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+        # The overlay path: the portal already handed back a whole-desktop
+        # QImage, so display it directly rather than flattening it to bytes and
+        # rebuilding it. exclude ids are ignored (the portal can't omit windows).
+        image, _origin, _scale = self._grab()
+        return image
+
     def capture_region(self, region: Rect) -> CaptureResult:
         from PySide6.QtCore import QRect
 

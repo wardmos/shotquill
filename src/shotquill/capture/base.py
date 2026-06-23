@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QImage
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,24 @@ class ScreenCapturer(ABC):
         ``list_displays`` below is deliberately *not* abstract: the Qt default
         works for every current backend, and existing test fakes satisfy the
         interface without knowing about displays."""
+
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()) -> QImage:
+        """Full-screen grab as a ``QImage``, for the interactive overlay.
+
+        The overlay only needs pixels to display — never the ``bytes`` of
+        :class:`CaptureResult` (those exist for the headless redact/save path).
+        Routing it through ``CaptureResult`` costs two extra full-virtual-desktop
+        copies (the ``QImage``→``bytes`` flatten and the ``bytes``→``QImage``
+        detach), and those allocations are what thrash swap — turning a capture
+        into a multi-second stall — when memory is tight.
+
+        This default still pays that round-trip so every backend works; backends
+        that already hold a ``QImage`` (Qt grab, Wayland portal) override it to
+        hand that buffer over directly. ``exclude_window_ids`` is forwarded to
+        :meth:`capture_fullscreen` for backends that can omit windows."""
+        from shotquill.imaging import result_to_qimage
+
+        return result_to_qimage(self.capture_fullscreen(exclude_window_ids))
 
     def capture_interactive(self) -> CaptureResult:
         """Let the platform's own picker frame the shot (window / region /
