@@ -112,6 +112,13 @@ def test_to_bool_parses_qsettings_strings():
     assert _to_bool(True, False) is True
 
 
+def test_to_bool_coerces_other_types_via_bool():
+    # A value that is neither bool, str, nor None (e.g. an int a QSettings
+    # backend hands back) falls through to bool() — not the default.
+    assert _to_bool(0, True) is False
+    assert _to_bool(2, False) is True
+
+
 def test_human_readable_hotkey_ignores_blank_segments():
     # Pin mac_style so the assertion doesn't drift with the host platform
     # (default = sys.platform-dependent, ``Alt+A`` off-mac).

@@ -39,6 +39,12 @@ def test_name_matches_owner_substring():
     assert not rule.matches(_window(owner="Safari"))
 
 
+def test_empty_rule_matches_nothing():
+    # A rule with neither key set (constructed in code, never via load) is inert
+    # rather than a wildcard — it must not block an arbitrary window.
+    assert not bl.BlockRule().matches(_window(owner="1Password", bundle_id="com.x"))
+
+
 def test_blocklist_match_returns_first_rule_and_blocked_filters():
     blocklist = bl.Blocklist(
         (bl.BlockRule(name="notes"), bl.BlockRule(bundle_id="com.apple.keychain"))
@@ -111,6 +117,30 @@ def test_non_object_top_level_raises(tmp_path):
         bl.load(path)
 
 
+def test_rules_must_be_a_list(tmp_path):
+    path = tmp_path / "blocklist.json"
+    path.write_text(json.dumps({"rules": "com.x"}), encoding="utf-8")
+    with pytest.raises(bl.BlocklistError):
+        bl.load(path)
+
+
+def test_each_rule_must_be_an_object(tmp_path):
+    path = tmp_path / "blocklist.json"
+    path.write_text(json.dumps({"rules": ["com.x"]}), encoding="utf-8")
+    with pytest.raises(bl.BlocklistError):
+        bl.load(path)
+
+
+def test_unreadable_file_raises_not_treated_as_empty(tmp_path):
+    # A path that exists but can't be read as a file (here, a directory) is an
+    # error, not the missing-file "no rules" state — the user isn't told they're
+    # silently unprotected.
+    path = tmp_path / "blocklist.json"
+    path.mkdir()
+    with pytest.raises(bl.BlocklistError):
+        bl.load(path)
+
+
 def test_rule_needs_exactly_one_key(tmp_path):
     path = tmp_path / "blocklist.json"
     for bad in ([{}], [{"bundle_id": "a", "name": "b"}]):
@@ -121,9 +151,10 @@ def test_rule_needs_exactly_one_key(tmp_path):
 
 def test_rule_field_must_be_string(tmp_path):
     path = tmp_path / "blocklist.json"
-    path.write_text(json.dumps({"rules": [{"bundle_id": 42}]}), encoding="utf-8")
-    with pytest.raises(bl.BlocklistError):
-        bl.load(path)
+    for bad in ([{"bundle_id": 42}], [{"name": 42}]):
+        path.write_text(json.dumps({"rules": bad}), encoding="utf-8")
+        with pytest.raises(bl.BlocklistError):
+            bl.load(path)
 
 
 def test_empty_rule_value_raises(tmp_path):
