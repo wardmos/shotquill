@@ -139,9 +139,7 @@ class ScreenCapturer(ABC):
         works for every current backend, and existing test fakes satisfy the
         interface without knowing about displays."""
 
-    def capture_fullscreen_image(
-        self, exclude_window_ids: frozenset[int] = frozenset()
-    ) -> QImage:
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()) -> QImage:
         """Full-screen grab as a ``QImage``, for the interactive overlay.
 
         The overlay only needs pixels to display — never the ``bytes`` of
