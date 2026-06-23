@@ -35,7 +35,30 @@ DEFAULT_EDITOR_HOTKEYS: dict[str, str] = {
 }
 
 DEFAULT_IMAGE_FORMAT = "png"
-DEFAULT_SAVE_DIR = "~/Pictures/ShotQuill"
+
+# Shots live in their own subfolder of the platform's pictures directory.
+SAVE_DIR_NAME = "ShotQuill"
+
+
+def default_save_dir() -> str:
+    """The default save directory, resolved per platform via Qt.
+
+    ``QStandardPaths.PicturesLocation`` gives the real pictures folder on each
+    OS — the redirect-aware "Pictures" known folder on Windows, the localized
+    ``XDG_PICTURES_DIR`` on Linux (e.g. ``~/图片``, ``~/Bilder``), and
+    ``~/Pictures`` on macOS — so one code path is correct everywhere instead of
+    three hard-coded branches. Qt is imported lazily to keep this module's pure
+    helpers usable without a running QApplication. If Qt reports no location
+    (rare, e.g. a headless session), fall back to ``~/Pictures``.
+    """
+    from pathlib import Path
+
+    from PySide6.QtCore import QStandardPaths
+
+    pictures = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
+    base = Path(pictures) if pictures else Path.home() / "Pictures"
+    return str(base / SAVE_DIR_NAME)
+
 
 # Screenshots leave the mouse pointer out by default; including it is opt-in.
 DEFAULT_INCLUDE_CURSOR = False
@@ -168,7 +191,7 @@ class Config:
         self._settings.setValue("output/format", image_format)
 
     def save_dir(self) -> str:
-        return str(self._settings.value("output/save_dir", DEFAULT_SAVE_DIR))
+        return str(self._settings.value("output/save_dir", default_save_dir()))
 
     def set_save_dir(self, directory: str) -> None:
         self._settings.setValue("output/save_dir", directory)
