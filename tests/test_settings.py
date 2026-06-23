@@ -199,6 +199,40 @@ def test_dialog_rejects_same_key_for_copy_and_save(qtbot, config, monkeypatch):
     assert dialog.result() != SettingsDialog.Accepted
 
 
+def test_normalize_finish_sequence_folds_keypad_enter(qtbot):
+    from PySide6.QtCore import QKeyCombination, Qt
+    from PySide6.QtGui import QKeySequence
+
+    from shotquill.ui.settings import _normalize_finish_sequence
+
+    plain_return = QKeySequence(Qt.Key_Return)
+    keypad_enter = QKeySequence(QKeyCombination(Qt.KeypadModifier, Qt.Key_Enter))
+    # Keypad Enter and the keypad modifier both fold to a plain Return, the way
+    # the editor actually matches the press at runtime.
+    assert _normalize_finish_sequence(keypad_enter) == plain_return
+    assert _normalize_finish_sequence(plain_return) == plain_return
+    assert _normalize_finish_sequence(QKeySequence()).isEmpty()
+
+
+def test_dialog_rejects_return_versus_keypad_enter_clash(qtbot, config, monkeypatch):
+    # Copy on Return and save on keypad Enter are distinct QKeySequences but
+    # both fire as Return at runtime — the dialog must catch the clash that the
+    # raw (un-normalized) comparison would miss.
+    from PySide6.QtCore import QKeyCombination, Qt
+    from PySide6.QtGui import QKeySequence
+
+    warnings = _silence_warnings(monkeypatch)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._editor_copy._edit.setKeySequence(QKeySequence(Qt.Key_Return))
+    dialog._editor_save._edit.setKeySequence(
+        QKeySequence(QKeyCombination(Qt.KeypadModifier, Qt.Key_Enter))
+    )
+    dialog._save_and_accept()
+    assert len(warnings) == 1
+    assert dialog.result() != SettingsDialog.Accepted
+
+
 def test_dialog_rejects_same_combo_for_both_capture_hotkeys(qtbot, config, monkeypatch):
     # The hotkey manager keys bindings by combo string, so identical combos
     # would let the later registration silently replace the earlier one.

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -99,6 +100,22 @@ def _error(msg_id, code: int, message: str) -> dict:
 
 
 def _handle(message) -> dict | None:
+    # Single fail-safe boundary: any handler that raises an unexpected error
+    # (e.g. a corrupt artifact whose ``read_text`` throws UnicodeDecodeError,
+    # which is a ValueError and so escapes the per-tool ``OSError`` guards)
+    # becomes an in-band JSON-RPC error rather than killing the serve loop and
+    # ending the session for every later call. Tool failures are already
+    # reported in-band by ``_tools_call``; this catches the rest.
+    msg_id = message.get("id") if isinstance(message, dict) else None
+    try:
+        return _dispatch(message)
+    except Exception:  # noqa: BLE001 - one bad message must not end the session
+        if msg_id is None:
+            return None  # notification (or unparseable id): no response is owed
+        return _error(msg_id, -32603, "internal error")
+
+
+def _dispatch(message) -> dict | None:
     if not isinstance(message, dict):
         return _error(None, -32600, "invalid request")
     msg_id = message.get("id")
@@ -345,6 +362,33 @@ def _positive_int_or_zero(value, name: str) -> int:
     return value
 
 
+def _confined_save_path(save_path: str) -> Path:
+    """Resolve an agent-supplied capture ``save_path``, confined to the save folder.
+
+    ``save_path`` comes straight from the model. Unlike the CLI's ``-o`` — which
+    the user types and runs themselves — an agent-chosen path that can write image
+    bytes anywhere on disk (overwriting dotfiles, dropping into ``~/.ssh``…) is a
+    stronger primitive than screen capture and exactly the over-eager/injected
+    agent the blocklist/allowlist defend against. So resolve it against, and
+    confine it to, the user's configured ShotQuill save folder; a path that
+    escapes that tree (``..``, an absolute path elsewhere, a symlink out) is
+    refused. Relative paths are taken under the save folder.
+    """
+    from shotquill.config import Config
+
+    base = Path(os.path.realpath(Path(Config().save_dir()).expanduser()))
+    candidate = Path(str(save_path)).expanduser()
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    target = Path(os.path.realpath(candidate))
+    if base not in target.parents:
+        raise ValueError(
+            "save_path must be inside the configured ShotQuill save folder; "
+            "an agent-driven capture cannot write elsewhere"
+        )
+    return target
+
+
 def _capture_image(
     args: dict,
     masks: list[Rect] | None = None,
@@ -412,10 +456,10 @@ def _tool_capture(args: dict):
     dest = "inline"
     save_path = args.get("save_path")
     if save_path:
-        path = Path(str(save_path)).expanduser()
+        path = _confined_save_path(str(save_path))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-        meta["saved_path"] = dest = str(path.resolve())
+        meta["saved_path"] = dest = str(path)
 
     # Pass `session` (a handle from session_start) to also file this capture as
     # an observation frame in that recording — the same explicit-handle contract

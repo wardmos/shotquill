@@ -124,6 +124,25 @@ def test_prune_by_max_sessions_keeps_newest(tmp_path):
     assert {s.id for s in record.list_sessions(tmp_path)} == {"conv-3", "conv-4"}
 
 
+def test_prune_keys_on_directory_not_shared_id(tmp_path):
+    # Two distinct session directories can carry the same conversation_id (a
+    # copied dir, a reused --dir id, a hand-edited manifest). Pruning the older
+    # one must reap only its directory, not every dir that shares the id.
+    _session(tmp_path, "dir-old", when=_at(1))
+    _session(tmp_path, "dir-new", when=_at(3))
+    for name in ("dir-old", "dir-new"):
+        manifest_path = tmp_path / name / record.MANIFEST_NAME
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data["conversation_id"] = "shared"
+        manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    removed = record.prune_sessions(tmp_path, max_sessions=1)
+
+    assert [s.dir.name for s in removed] == ["dir-old"]
+    assert (tmp_path / "dir-new").is_dir()
+    assert not (tmp_path / "dir-old").exists()
+
+
 def test_prune_by_max_age(tmp_path):
     _session(tmp_path, "conv-stale", when=_at(1))
     _session(tmp_path, "conv-fresh", when=_at(9))

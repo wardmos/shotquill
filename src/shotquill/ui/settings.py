@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QKeyCombination, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -90,6 +90,26 @@ def _is_usable_save_dir(text: str) -> bool:
             return False
         probe = parent
     return probe.is_dir() and os.access(probe, os.W_OK)
+
+
+def _normalize_finish_sequence(sequence: QKeySequence) -> QKeySequence:
+    """Fold a recorded finish key the way the editor matches it at runtime.
+
+    ``editor_core._pressed_sequence`` maps keypad Enter to Return and strips the
+    KeypadModifier before comparing, so the same folding must happen before the
+    duplicate / reserved / capture-conflict checks. Otherwise a key recorded as
+    keypad Enter (or with the keypad modifier set) reads as distinct here yet
+    collides at runtime — e.g. copy on Return and save on keypad Enter would pass
+    the duplicate check but both fire as Return, with save shadowing copy.
+    """
+    if sequence.isEmpty():
+        return sequence
+    combo = sequence[0]
+    key = combo.key()
+    if key == Qt.Key_Enter:
+        key = Qt.Key_Return
+    modifiers = combo.keyboardModifiers() & ~Qt.KeypadModifier
+    return QKeySequence(QKeyCombination(modifiers, Qt.Key(key)))
 
 
 def _reserved_editor_sequences() -> list[QKeySequence]:
@@ -445,8 +465,8 @@ class SettingsDialog(QDialog):
             if row.enabled() and row.active_sequence().isEmpty():
                 QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_empty"))
                 return False
-        copy_seq = self._editor_copy.active_sequence()
-        save_seq = self._editor_save.active_sequence()
+        copy_seq = _normalize_finish_sequence(self._editor_copy.active_sequence())
+        save_seq = _normalize_finish_sequence(self._editor_save.active_sequence())
         reserved = _reserved_editor_sequences()
         captures = [
             _capture_combo_sequence(row.combo())

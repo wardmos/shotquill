@@ -68,6 +68,69 @@ def test_right_release_mid_drag_does_not_commit_the_item(qtbot):
     assert rects[0].rect().width() > 40  # the drag kept going past the right-release point
 
 
+def _draw_rect(qtbot, canvas):
+    canvas.set_tool(Tool.RECT)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+    return next(i for i in canvas.scene().items() if i.zValue() > -1000)
+
+
+def test_move_items_command_round_trips_position(qtbot):
+    from PySide6.QtCore import QPointF
+
+    from shotquill.ui.canvas import _MoveItemsCommand
+
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    old = item.pos()
+    new = old + QPointF(10, 12)
+    stack = canvas.undo_stack()
+
+    stack.push(_MoveItemsCommand([(item, old, new)]))
+    assert item.pos() == new
+    assert stack.count() == 2  # the add, then the move
+    stack.undo()
+    assert item.pos() == old
+    stack.redo()
+    assert item.pos() == new
+
+
+def test_dragging_a_selected_item_is_undoable(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    assert canvas.undo_stack().count() == 1
+    start = item.pos()
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseMove(viewport, pos=QPoint(58, 52))
+    qtbot.mouseMove(viewport, pos=QPoint(70, 64))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(70, 64))
+
+    assert item.pos() != start  # the drag actually moved it
+    assert canvas.undo_stack().count() == 2  # the move is recorded
+    canvas.undo_stack().undo()
+    assert item.pos() == start  # undo restores the original position
+
+
+def test_select_click_without_moving_records_no_undo(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    assert canvas.undo_stack().count() == 1
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    viewport = canvas.viewport()
+    # A plain click (press + release at the same spot) selects but moves nothing.
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    assert canvas.undo_stack().count() == 1  # no spurious move command
+
+
 def test_tiny_click_is_discarded(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.RECT)

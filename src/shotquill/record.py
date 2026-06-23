@@ -568,19 +568,23 @@ def prune_sessions(
     # Only finished sessions are eligible; recordings in flight are off-limits.
     complete = [s for s in summaries if s.status == STATUS_COMPLETE]
 
-    doomed: dict[str, SessionSummary] = {}
+    # Keyed by directory, which is unique per session — the conversation id can
+    # repeat across directories (a copied session dir, a reused ``--dir`` id, a
+    # hand-edited manifest), and keying deletion on it would reap every directory
+    # sharing a doomed id, including ones that should have been kept.
+    doomed: dict[Path, SessionSummary] = {}
     if max_sessions is not None and max_sessions >= 0:
         # complete is already newest-first (inherited from list_sessions order).
         for summary in complete[max_sessions:]:
-            doomed[summary.id] = summary
+            doomed[summary.dir] = summary
     if max_age_days is not None:
         cutoff = (now or dt.datetime.now().astimezone()) - dt.timedelta(days=max_age_days)
         for summary in complete:
             started = _parse_started(summary.started_at)
             if started is not None and started < cutoff:
-                doomed[summary.id] = summary
+                doomed[summary.dir] = summary
 
-    removed = [s for s in summaries if s.id in doomed]
+    removed = [s for s in summaries if s.dir in doomed]
     if not dry_run:
         for summary in removed:
             shutil.rmtree(summary.dir, ignore_errors=True)
