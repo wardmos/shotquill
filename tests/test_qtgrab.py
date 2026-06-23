@@ -77,19 +77,19 @@ def test_base_default_fullscreen_image_goes_through_captureresult(qapp):
     # default — built from its CaptureResult via the bytes round-trip.
     from PySide6.QtGui import QImage
 
-    from shotquill.capture.base import CaptureResult, Rect, ScreenCapturer, WindowInfo
+    from shotquill.capture.base import CaptureResult, ScreenCapturer
 
     class _BytesOnlyCapturer(ScreenCapturer):
         def capture_fullscreen(self, exclude_window_ids=frozenset()):
             return CaptureResult(width=4, height=3, scale=1.0, pixels=bytes([255] * 4 * 4 * 3))
 
-        def capture_region(self, region: Rect):  # pragma: no cover - unused
+        def capture_region(self, region):  # pragma: no cover - unused
             return self.capture_fullscreen()
 
-        def list_windows(self) -> list[WindowInfo]:  # pragma: no cover - unused
+        def list_windows(self):  # pragma: no cover - unused
             return []
 
-        def capture_window(self, window_id: int):  # pragma: no cover - unused
+        def capture_window(self, window_id):  # pragma: no cover - unused
             return self.capture_fullscreen()
 
     image = _BytesOnlyCapturer().capture_fullscreen_image()
