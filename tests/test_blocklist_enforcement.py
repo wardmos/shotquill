@@ -119,12 +119,16 @@ def test_empty_blocklist_skips_enumeration_entirely():
     assert target == "window 22"
 
 
-def test_window_id_capture_when_enumeration_unavailable_proceeds():
-    # If windows cannot be listed we cannot match the id — fail open and let
-    # the capture itself succeed or fail.
+def test_window_id_capture_when_enumeration_unavailable_proceeds(tmp_path):
+    # If windows cannot be listed we cannot match the id against the blocklist
+    # (which denies by identity) — the capture proceeds, but the skipped
+    # protection is logged as redact_unavailable rather than passed through
+    # silently, mirroring the full-screen honesty signal.
     cap = FakeCapturer(list_raises=headless.CapabilityUnsupported("list_windows", "wayland"))
-    result, _, _ = headless.perform_capture(cap, window_id=22, blocklist=ONEPW_LIST)
+    result, _, _ = headless.perform_capture(cap, window_id=22, blocklist=ONEPW_LIST, via="mcp")
     assert cap.captured == [("window", 22)]
+    line = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert '"redact_unavailable"' in line and '"window 22"' in line
 
 
 def test_window_capture_redacts_blocked_overlap_on_framebuffer_backend():

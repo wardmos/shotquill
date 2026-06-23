@@ -101,6 +101,29 @@ class _AddItemCommand(QUndoCommand):
             self._on_scene = True
 
 
+class _MoveItemsCommand(QUndoCommand):
+    """Undoable move of annotation items (already dragged to their new spots).
+
+    ``ItemIsMovable`` lets the select tool drag items, but Qt mutates ``pos()``
+    directly with no undo entry — so without this an undo after a move restores
+    nothing, and an undo of a *later* edit leaves the move silently applied. We
+    snapshot positions on press and record this command on release for whatever
+    actually moved.
+    """
+
+    def __init__(self, moves: list[tuple[QGraphicsItem, QPointF, QPointF]]) -> None:
+        super().__init__("move annotation")
+        self._moves = moves
+
+    def undo(self) -> None:
+        for item, old, _new in self._moves:
+            item.setPos(old)
+
+    def redo(self) -> None:
+        for item, _old, new in self._moves:
+            item.setPos(new)
+
+
 class AnnotationCanvas(QGraphicsView):
     def __init__(self, background: QPixmap) -> None:
         super().__init__()
@@ -120,6 +143,9 @@ class AnnotationCanvas(QGraphicsView):
         self._width = 4
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
+        # Positions of movable items captured at the start of a select-drag, so
+        # the release can record an undoable move for whatever actually shifted.
+        self._move_snapshot: dict[QGraphicsItem, QPointF] | None = None
         self._path: QPainterPath | None = None
         self._start = QPointF()
         self._mosaic_rect = None  # latest drag rect; release renders it exactly
@@ -283,6 +309,14 @@ class AnnotationCanvas(QGraphicsView):
                 return
 
         if event.button() != Qt.LeftButton or self._tool == Tool.SELECT:
+            if event.button() == Qt.LeftButton and self._tool == Tool.SELECT:
+                # Snapshot movable items before Qt drags them, so the matching
+                # release can push an undoable move for any that shift.
+                self._move_snapshot = {
+                    it: it.pos()
+                    for it in self._scene.items()
+                    if it.flags() & QGraphicsItem.ItemIsMovable
+                }
             super().mousePressEvent(event)
             return
 
@@ -352,6 +386,21 @@ class AnnotationCanvas(QGraphicsView):
                 self._temp_item.update_rect(self._mosaic_rect)
 
     def mouseReleaseEvent(self, event) -> None:
+        # A select-drag finishing: let Qt commit the new positions, then record
+        # an undoable move for whatever actually shifted (a plain click or a
+        # rubber-band select moves nothing and pushes no command).
+        if self._move_snapshot is not None and event.button() == Qt.LeftButton:
+            super().mouseReleaseEvent(event)
+            moved = [
+                (it, old, it.pos())
+                for it, old in self._move_snapshot.items()
+                if it.scene() is self._scene and it.pos() != old
+            ]
+            self._move_snapshot = None
+            if moved:
+                self._undo.push(_MoveItemsCommand(moved))
+            return
+
         # Only the left button finishes a drag: a stray right/middle release
         # mid-drag must not commit the half-drawn item (the press handler only
         # ever starts items on the left button).

@@ -301,13 +301,32 @@ def test_capture_app_reports_ambiguity(fake_capturer):
     assert fake_capturer.calls == [("window", 11)]
 
 
-def test_capture_save_path_also_writes_file(fake_capturer, tmp_path):
+def test_capture_save_path_also_writes_file(fake_capturer, config, tmp_path):
+    config.set_save_dir(str(tmp_path))
     dest = tmp_path / "out" / "shot.png"
     result = call("capture", {"save_path": str(dest)})["result"]
     meta = json.loads(result["content"][1]["text"])
     assert meta["saved_path"] == str(dest.resolve())
     with open(dest, "rb") as fh:
         assert fh.read(4) == PNG_MAGIC
+
+
+def test_capture_save_path_relative_lands_in_save_folder(fake_capturer, config, tmp_path):
+    # A relative save_path is taken under the configured save folder, not the cwd.
+    config.set_save_dir(str(tmp_path))
+    result = call("capture", {"save_path": "sub/shot.png"})["result"]
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["saved_path"] == str((tmp_path / "sub" / "shot.png").resolve())
+
+
+def test_capture_save_path_rejects_outside_save_folder(fake_capturer, config, tmp_path):
+    # An agent-chosen path escaping the save folder is refused, not written: the
+    # capture must never become an arbitrary-file-write primitive.
+    config.set_save_dir(str(tmp_path / "shots"))
+    escape = tmp_path / "elsewhere" / "loot.png"
+    result = call("capture", {"save_path": str(escape)})["result"]
+    assert result["isError"] is True
+    assert not escape.exists()
 
 
 def test_capture_max_width_downscales(fake_capturer):
@@ -550,6 +569,26 @@ def record_root(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "records_dir", lambda: root)
     monkeypatch.setattr(headless, "active_blocklist", lambda: bl.Blocklist(()))
     return root
+
+
+def test_resources_read_corrupt_artifact_is_internal_error_not_crash(record_root):
+    # A session artifact that exists but isn't valid UTF-8 (a truncated/corrupt
+    # write, or a tampered file) makes read_text raise UnicodeDecodeError — a
+    # ValueError that escapes the per-resource OSError guard. It must surface as
+    # an in-band JSON-RPC error rather than propagating out of serve and ending
+    # the session for every later call.
+    call("session_start", {"id": "conv-corrupt", "agent": "a"})
+    (record_root / "conv-corrupt" / "manifest.json").write_bytes(b"\xff\xfe not utf-8 \xff")
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/read",
+            "params": {"uri": "shotquill://session/conv-corrupt/manifest"},
+        }
+    )
+    assert response["id"] == 7
+    assert response["error"]["code"] == -32603
 
 
 def test_record_round_trip(fake_capturer, record_root):

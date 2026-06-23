@@ -463,6 +463,17 @@ def perform_capture(
         )
         if target is not None:
             _refuse_if_blocked(target, blocklist, via=via)
+        elif blocklist:
+            # The blocklist denies by identity, so an id we cannot resolve to a
+            # window (enumeration unavailable on this backend, or the id is not
+            # among the enumerable windows) cannot be checked against it. Unlike
+            # the allowlist — which permits by identity and so must fail closed —
+            # the blocklist proceeds, but the gap is logged rather than passed
+            # through silently, mirroring the full-screen ``redact_unavailable``
+            # honesty signal so a skipped protection is always auditable.
+            from shotquill import audit
+
+            audit.record("redact_unavailable", via=via, target=f"window {window_id}")
         if allowlist:
             _enforce_allowlist_window(allowlist, target, window_id, via=via)
         result = capturer.capture_window(window_id)
