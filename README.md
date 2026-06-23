@@ -20,7 +20,12 @@ image in one motion: press a hotkey, then let the pointer pick a window / region
 the whole screen, and it's saved and on your clipboard — or drop into a built-in
 editor to annotate, redact, and extract text first.
 
-- **macOS** — full GUI, CLI, MCP, and on-device OCR (Apple Vision).
+- **macOS** — the primary, most complete platform, and the one every other is
+  measured against: full menu-bar GUI, two global hotkeys, smart window / region
+  / full-screen capture (real pixels even under overlap, via ScreenCaptureKit),
+  the annotation editor, hands-free save + clipboard, launch-at-login, window
+  enumeration, blocklist redaction, and on-device OCR (Apple Vision) — plus the
+  full CLI and MCP server.
 - **Linux / X11** — full menu-bar GUI plus CLI / MCP, including window
   enumeration (smart-capture window highlight, `squill window list`, and blocklist
   redaction of full-screen grabs) and on-device OCR via Tesseract when it's
@@ -47,9 +52,11 @@ editor to annotate, redact, and extract text first.
 [Configuration](#configuration) ·
 [Troubleshooting](#troubleshooting) ·
 [Privacy](#privacy) ·
+[Tech stack](#tech-stack) ·
 [Development](#development) ·
 [Uninstall](#uninstall) ·
-[Roadmap](#roadmap)
+[Roadmap](#roadmap) ·
+[Contributing](#contributing)
 
 ---
 
@@ -76,9 +83,9 @@ editor to annotate, redact, and extract text first.
   Tesseract on Linux (when installed), and the WinRT engine on Windows (via the
   optional `windows-ocr` extra).
 - **Scriptable & agent-ready** — a headless CLI
-  (`squill capture` / `windows` / `displays` / `ocr` / `diff` / `record` /
-  `doctor` / `mcp`, plus `blocklist` / `allowlist` — one path on stdout, exit
-  codes as the contract) and a built-in MCP server that gives AI
+  (`squill capture` / `window list` / `display list` / `ocr` / `diff` /
+  `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist` — one path on
+  stdout, exit codes as the contract) and a built-in MCP server that gives AI
   agents eyes on your screen. Every programmatic capture is audit-logged.
   See [Scripting & agents](docs/scripting.md).
 - **Pin to screen** — float an annotated shot on top of the desktop for reference;
@@ -247,8 +254,8 @@ squill mcp                                 # serve the Model Context Protocol ov
 Run bare it launches the GUI; with a subcommand it stays headless and prints one
 path on stdout (warnings on stderr), with exit codes as the contract. It captures
 one image (`capture`), reads or asserts on-screen text (`ocr`), or records an
-ordered trail of frames an agent leaves behind (`record`) — and the same loop is
-exposed to MCP clients as eleven tools.
+ordered trail of frames an agent leaves behind (`session`) — and the same loop is
+exposed to MCP clients as twelve tools.
 
 **→ Full reference: [docs/scripting.md](docs/scripting.md)** — the stdout/exit-code
 contract, capture flags (`--json` / `--max-width` / `--deterministic` / `--mask` /
@@ -663,8 +670,8 @@ pipx uninstall shotquill               # pipx install
 - [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
 - [x] On-device OCR (macOS Vision; Linux Tesseract)
 - [x] Hands-free auto save + clipboard
-- [x] CLI for scripts & AI agents (`squill capture` / `windows` / `displays` /
-      `ocr` / `diff` / `record` / `doctor` / `mcp`, plus `blocklist` / `allowlist`)
+- [x] CLI for scripts & AI agents (`squill capture` / `window list` / `display list` /
+      `ocr` / `diff` / `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist`)
 - [x] MCP server, so agents can capture and read the screen over Model Context Protocol
 - [x] **Linux / X11 backends — GUI, CLI, and MCP**: menu-bar app via PySide6 +
       XDG autostart, full-screen / region capture via `QScreen.grabWindow`,
