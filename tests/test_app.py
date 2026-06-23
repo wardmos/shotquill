@@ -357,6 +357,54 @@ def test_grab_returns_none_on_capture_failure(qapp, config, fakes):
     app.shutdown()
 
 
+def test_grab_takes_qimage_fast_path_when_nothing_blocked(qapp, config, fakes, monkeypatch):
+    # No blocklist hit on screen: _grab must take the QImage straight from the
+    # backend (capture_fullscreen_image) and never touch the CaptureResult bytes
+    # round-trip — the copies that thrash swap under memory pressure.
+    from PySide6.QtGui import QImage
+
+    capturer, _hotkeys, _autostart = fakes
+    sentinel = QImage(7, 5, QImage.Format.Format_RGBA8888)
+    seen = []
+    capturer.capture_fullscreen_image = lambda exclude=frozenset(): seen.append(exclude) or sentinel
+    monkeypatch.setattr(
+        capturer,
+        "capture_fullscreen",
+        lambda exclude_window_ids=frozenset(): pytest.fail("bytes round-trip used, not fast path"),
+    )
+    app = _build_app(qapp, fakes)
+    assert app._grab(bl.Blocklist()) is sentinel
+    assert seen == [frozenset()]
+    app.shutdown()
+
+
+def test_grab_falls_back_when_backend_has_no_fast_path(qapp, config, fakes):
+    # A duck-typed capturer without capture_fullscreen_image (the shared fake)
+    # must still work — _grab falls through to the CaptureResult route.
+    capturer, _hotkeys, _autostart = fakes
+    assert not hasattr(capturer, "capture_fullscreen_image")
+    app = _build_app(qapp, fakes)
+    image = app._grab(bl.Blocklist())
+    assert image is not None
+    assert (image.width(), image.height()) == (4, 3)  # the fake's bytes grab
+    app.shutdown()
+
+
+def test_grab_with_supplied_blocked_skips_window_enumeration(qapp, config, fakes):
+    # When the caller hands _grab the on-screen blocklisted windows it already
+    # resolved (the smart overlay), _grab must not enumerate the window list a
+    # second time, even with a non-empty blocklist.
+    capturer, _hotkeys, _autostart = fakes
+    enumerations = []
+    capturer.list_windows = lambda: enumerations.append(1) or []
+    rules = bl.Blocklist((bl.BlockRule(bundle_id="com.example.blocked"),))
+    app = _build_app(qapp, fakes)
+    image = app._grab(rules, blocked=[])
+    assert image is not None
+    assert enumerations == []  # blocked supplied → no second enumeration
+    app.shutdown()
+
+
 def test_sync_autostart_follows_config(qapp, config, fakes):
     config.set_autostart(True)
     _capturer, _hotkeys, autostart = fakes
