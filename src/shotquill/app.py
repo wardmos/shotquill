@@ -311,7 +311,9 @@ class ShotquillApp(QObject):
         self._not_allowed_windows = (
             {w.window_id: w for w in windows if not allowlist.is_allowed(w)} if allowlist else {}
         )
-        screenshot = self._grab(blocklist)
+        # Reuse the blocklisted windows we just resolved from this snapshot, so
+        # _grab doesn't enumerate the whole window list a second time.
+        screenshot = self._grab(blocklist, blocked=list(self._blocked_windows.values()))
         if screenshot is None:
             self._unshelve_settings_dialog()
             return
@@ -416,15 +418,30 @@ class ShotquillApp(QObject):
         result, _ = redact.redact_bounds(result, (target_rect.x, target_rect.y), overlaps)
         return result
 
-    def _grab(self, blocklist: bl.Blocklist) -> QImage | None:
+    def _grab(self, blocklist: bl.Blocklist, blocked: list | None = None) -> QImage | None:
         # Resolve which on-screen windows are blocklisted *before* capturing, so
         # the backend can omit them from the grab itself (macOS ScreenCaptureKit):
         # the window is then simply absent — what was behind it shows through and
         # windows on top stay intact — instead of a solid block. Whatever the
         # backend can't omit (the legacy path) is painted out afterwards.
-        blocked = self._blocked_on_screen(blocklist)
+        #
+        # ``blocked`` lets the smart overlay pass the on-screen blocklisted
+        # windows it already enumerated, so we don't walk the whole window list
+        # (a string of X11 round-trips) a second time.
+        if blocked is None:
+            blocked = self._blocked_on_screen(blocklist)
         exclude_ids = frozenset(w.window_id for w in blocked)
         try:
+            fast_grab = getattr(self._capturer, "capture_fullscreen_image", None)
+            if not blocked and fast_grab is not None:
+                # Nothing to redact (the common case — no blocklist hit on
+                # screen): take the QImage straight from the backend, skipping
+                # the QImage→bytes→QImage round-trip of CaptureResult. Those are
+                # full-virtual-desktop copies, and allocating them is what
+                # thrashes swap — and costs seconds — when memory is tight.
+                # (getattr keeps duck-typed capturers without the fast path
+                # working — they just fall through to the CaptureResult route.)
+                return fast_grab(exclude_ids)
             result = self._capturer.capture_fullscreen(exclude_window_ids=exclude_ids)
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
