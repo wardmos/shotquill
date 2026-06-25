@@ -260,24 +260,29 @@ class AnnotationCanvas(QGraphicsView):
             return Qt.SizeVerCursor
         return None
 
+    def _set_viewport_cursor(self, shape) -> None:
+        viewport = self.viewport()
+        if shape is None:
+            if viewport.testAttribute(Qt.WA_SetCursor):
+                viewport.unsetCursor()
+            return
+        if not viewport.testAttribute(Qt.WA_SetCursor) or viewport.cursor().shape() != shape:
+            viewport.setCursor(shape)
+
     def _update_crop_cursor(self, pos) -> None:
-        cursor = self._crop_cursor(self._crop_edges_at(pos))
-        if cursor is None:
-            self.viewport().unsetCursor()
-        else:
-            self.viewport().setCursor(cursor)
+        self._set_viewport_cursor(self._crop_cursor(self._crop_edges_at(pos)))
 
     def _update_idle_cursor(self, pos=None) -> None:
         if self._tool == Tool.SELECT:
             if pos is None:
-                self.viewport().unsetCursor()
+                self._set_viewport_cursor(None)
             else:
                 self._update_crop_cursor(pos)
             return
         if self._tool == Tool.TEXT:
-            self.viewport().setCursor(Qt.IBeamCursor)
+            self._set_viewport_cursor(Qt.IBeamCursor)
         else:
-            self.viewport().setCursor(Qt.CrossCursor)
+            self._set_viewport_cursor(Qt.CrossCursor)
 
     def _next_z(self) -> float:
         self._z += 1.0

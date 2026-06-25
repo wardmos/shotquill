@@ -223,6 +223,17 @@ def test_text_tool_uses_text_cursor(qtbot):
     assert canvas.viewport().cursor().shape() == Qt.IBeamCursor
 
 
+def test_idle_cursor_keeps_existing_tool_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    viewport = canvas.viewport()
+
+    canvas.set_tool(Tool.RECT)
+    canvas._update_idle_cursor()
+
+    assert viewport.testAttribute(Qt.WA_SetCursor)
+    assert viewport.cursor().shape() == Qt.CrossCursor
+
+
 def test_select_tool_does_not_create_items(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.SELECT)
