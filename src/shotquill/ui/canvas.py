@@ -204,9 +204,7 @@ class AnnotationCanvas(QGraphicsView):
     def set_tool(self, tool: Tool) -> None:
         self._tool = tool
         self._apply_drag_mode()
-        # Drop any crop-resize cursor left over from hovering an edge; the next
-        # hover re-applies it if the (still-SELECT, still-pristine) crop allows.
-        self.viewport().unsetCursor()
+        self._update_idle_cursor()
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
@@ -268,6 +266,18 @@ class AnnotationCanvas(QGraphicsView):
             self.viewport().unsetCursor()
         else:
             self.viewport().setCursor(cursor)
+
+    def _update_idle_cursor(self, pos=None) -> None:
+        if self._tool == Tool.SELECT:
+            if pos is None:
+                self.viewport().unsetCursor()
+            else:
+                self._update_crop_cursor(pos)
+            return
+        if self._tool == Tool.TEXT:
+            self.viewport().setCursor(Qt.IBeamCursor)
+        else:
+            self.viewport().setCursor(Qt.CrossCursor)
 
     def _next_z(self) -> float:
         self._z += 1.0
@@ -365,7 +375,7 @@ class AnnotationCanvas(QGraphicsView):
             # gesture is discoverable. True hover only — a held button is a
             # rubber-band select and must not flip the cursor.
             if not event.buttons():
-                self._update_crop_cursor(event.position())
+                self._update_idle_cursor(event.position())
             super().mouseMoveEvent(event)
             return
 

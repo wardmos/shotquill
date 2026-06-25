@@ -204,6 +204,25 @@ def test_width_is_clamped_to_minimum_one(qtbot):
     assert canvas.width() == 1
 
 
+def test_select_tool_uses_the_default_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.RECT)
+    canvas.set_tool(Tool.SELECT)
+    assert canvas.viewport().cursor().shape() == Qt.ArrowCursor
+
+
+def test_drawing_tools_use_a_distinct_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.RECT)
+    assert canvas.viewport().cursor().shape() == Qt.CrossCursor
+
+
+def test_text_tool_uses_text_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.TEXT)
+    assert canvas.viewport().cursor().shape() == Qt.IBeamCursor
+
+
 def test_select_tool_does_not_create_items(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.SELECT)
