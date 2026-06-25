@@ -188,6 +188,47 @@ def test_sck_includes_cursor_when_opted_in(quartz, monkeypatch):
     assert quartz["shows_cursor"] is True
 
 
+def test_fast_image_path_draws_straight_into_a_qimage(quartz, monkeypatch, qapp):
+    # The overlay path must build the QImage directly from the captures, never
+    # routing through CaptureResult's bytes round-trip (the copies that thrash
+    # swap). _cgimage_to_result (the bytes packer) must not be touched.
+    from PySide6.QtGui import QImage
+
+    _install_sck(
+        monkeypatch,
+        quartz,
+        [_FakeDisplay(0, 0, 100, 50, scale=2.0), _FakeDisplay(100, 10, 80, 40, scale=1.0)],
+    )
+    monkeypatch.setattr(
+        macos.MacScreenCapturer,
+        "capture_fullscreen",
+        lambda *a, **k: pytest.fail("bytes round-trip used, not the fast image path"),
+    )
+    image = macos.MacScreenCapturer().capture_fullscreen_image()
+    assert isinstance(image, QImage)
+    # Same virtual-desktop geometry as the CaptureResult composite: union of the
+    # frames (180x50 points) at the sharpest 2x scale.
+    assert (image.width(), image.height()) == (360, 100)
+    assert image.format() == QImage.Format.Format_RGBA8888_Premultiplied
+    # Each display was drawn once, at its virtual-desktop position (y flipped for
+    # CG's bottom-left-origin context) — no intermediate buffer.
+    assert [rect for rect, _ in quartz["draws"]] == [
+        ("rect", 0, 0, 200, 100),
+        ("rect", 200, 0, 160, 80),
+    ]
+
+
+def test_fast_image_path_falls_back_to_round_trip_when_sck_unavailable(quartz, monkeypatch, qapp):
+    # No ScreenCaptureKit (older macOS): the fast path returns None internally
+    # and the base CaptureResult→QImage route still yields a usable QImage.
+    from PySide6.QtGui import QImage
+
+    image = macos.MacScreenCapturer().capture_fullscreen_image()
+    assert isinstance(image, QImage)
+    assert (image.width(), image.height()) == (4, 2)  # the stubbed CaptureResult size
+    assert quartz["bounds"] == "INFINITE"  # the legacy grab ran
+
+
 def test_sck_requests_native_pixel_size(quartz, monkeypatch):
     _install_sck(monkeypatch, quartz, [_FakeDisplay(0, 0, 100, 50, scale=2.0)])
     result = macos.MacScreenCapturer().capture_fullscreen()

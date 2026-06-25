@@ -58,6 +58,32 @@ class MacScreenCapturer(ScreenCapturer):
         scale = result.width / logical_w if logical_w else 1.0
         return replace(result, scale=scale, origin_x=ox, origin_y=oy)
 
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+        """Full-screen grab straight into a ``QImage`` for the interactive overlay.
+
+        The overlay only displays the pixels; it never reads ``CaptureResult``'s
+        ``bytes``. The default :meth:`ScreenCapturer.capture_fullscreen_image`
+        routes through ``CaptureResult`` and pays for it: ``_rgba_context`` packs
+        the CoreGraphics image into a ``bytearray``, ``bytes(buffer)`` copies that
+        whole virtual-desktop buffer again, and ``result_to_qimage`` does a final
+        ``QImage.copy()`` to detach. That is *three* full-virtual-desktop
+        allocations on a path the overlay hits on every smart capture — exactly
+        the swap-thrash that turns a multi-monitor 4K grab into a multi-second
+        stall when memory is tight.
+
+        Here CoreGraphics draws each display **once, directly into the QImage's
+        own buffer** (a CGBitmapContext wrapping the QImage scanlines), so there
+        is no intermediate ``bytearray`` and no detach copy. Blocklisted windows
+        are still omitted from the capture itself. Falls back to the default
+        (``CaptureResult``) path on any failure, so a backend hiccup never breaks
+        the overlay — it just costs the copies it used to.
+        """
+        image = self._sck_capture_fullscreen_image(exclude_window_ids)
+        if image is not None:
+            return image
+        # Legacy fallback or SCK failure: pay the round-trip via the base impl.
+        return super().capture_fullscreen_image(exclude_window_ids)
+
     def capture_region(self, region: Rect) -> CaptureResult:
         # Unused at runtime (the app crops regions out of the full-screen grab),
         # so this keeps the simple legacy path.
@@ -329,6 +355,32 @@ class MacScreenCapturer(ScreenCapturer):
         except Exception:
             return None  # fall back to the legacy capture path
 
+    def _sck_capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+        """All displays via ScreenCaptureKit composited straight into a QImage.
+
+        The QImage equivalent of :meth:`_sck_capture_fullscreen`, but the pixels
+        are drawn directly into the QImage's own scanlines (no ``bytearray``, no
+        detach copy). Returns ``None`` to fall back to the round-trip path."""
+        sck = self._sck()
+        if sck is None:
+            return None
+        try:
+            content = self._sck_shareable_content(sck)
+            displays = list(content.displays())
+            if not displays:
+                return None
+            exclude = [w for w in content.windows() if int(w.windowID()) in exclude_window_ids]
+            shots = []
+            for display in displays:
+                content_filter = sck.SCContentFilter.alloc().initWithDisplay_excludingWindows_(
+                    display, exclude
+                )
+                scale = float(content_filter.pointPixelScale())
+                shots.append((display.frame(), scale, self._sck_screenshot(sck, content_filter)))
+            return self._compose_image(shots)
+        except Exception:
+            return None  # fall back to the round-trip path
+
     def _sck_capture_window(self, window_id: int) -> CaptureResult | None:
         """One window via ScreenCaptureKit, or None to use the legacy path."""
         sck = self._sck()
@@ -388,6 +440,57 @@ class MacScreenCapturer(ScreenCapturer):
         )
 
     # --- pixel plumbing -----------------------------------------------------
+
+    @staticmethod
+    def _compose_image(shots):
+        """Stitch per-display CGImages straight into one virtual-desktop QImage.
+
+        The QImage twin of :meth:`_composite_displays`: same geometry maths, but
+        the CGImages are drawn directly into the QImage's own scanlines through a
+        CGBitmapContext that wraps them. The QImage owns that memory, so there is
+        no intermediate ``bytearray`` to copy out of and nothing to detach from —
+        the pixels are laid down exactly once. Handles the single-display case
+        too (it's just one shot). Returns a premultiplied-RGBA QImage.
+        """
+        import Quartz
+        from PySide6.QtGui import QImage
+
+        left = min(f.origin.x for f, _, _ in shots)
+        top = min(f.origin.y for f, _, _ in shots)
+        right = max(f.origin.x + f.size.width for f, _, _ in shots)
+        bottom = max(f.origin.y + f.size.height for f, _, _ in shots)
+        scale = max(s for _, s, _ in shots)
+        width = max(1, round((right - left) * scale))
+        height = max(1, round((bottom - top) * scale))
+
+        # Qt allocates and owns the pixel buffer; draw the captures into it.
+        # Premultiplied to match the CGBitmapContext's only supported alpha mode
+        # (the same flag _rgba_context uses), so corners composite correctly.
+        image = QImage(width, height, QImage.Format.Format_RGBA8888_Premultiplied)
+        bytes_per_row = image.bytesPerLine()
+        color_space = Quartz.CGColorSpaceCreateDeviceRGB()
+        context = Quartz.CGBitmapContextCreate(
+            image.bits(),  # write straight into the QImage scanlines
+            width,
+            height,
+            8,
+            bytes_per_row,
+            color_space,
+            Quartz.kCGImageAlphaPremultipliedLast | Quartz.kCGBitmapByteOrder32Big,
+        )
+        for frame, _, cg_image in shots:
+            # CGBitmapContext has a bottom-left origin; flip each frame's y.
+            dest = Quartz.CGRectMake(
+                (frame.origin.x - left) * scale,
+                (bottom - frame.origin.y - frame.size.height) * scale,
+                frame.size.width * scale,
+                frame.size.height * scale,
+            )
+            Quartz.CGContextDrawImage(context, dest, cg_image)
+        # Drop the context now so it stops referencing the QImage's bits before
+        # the QImage travels back to the GUI thread.
+        del context
+        return image
 
     @staticmethod
     def _rgba_context(width: int, height: int):
