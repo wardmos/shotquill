@@ -22,7 +22,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -50,7 +50,7 @@ jobs:
     steps:
       - name: Create draft GitHub Release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           draft: true
           generate_release_notes: true
@@ -62,7 +62,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -96,7 +96,7 @@ jobs:
           echo "intel_sha=$(awk '{print $1}' ShotQuill-*-x86_64.dmg.sha256)" >> "$GITHUB_OUTPUT"
       - name: Add DMGs to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
@@ -123,7 +123,7 @@ jobs:
       # shotquill, this repo + workflow `release.yml`, environment `pypi`).
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -152,7 +152,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -190,7 +190,7 @@ jobs:
           done
       - name: Add AppImage to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
@@ -207,7 +207,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -263,7 +263,7 @@ jobs:
           "$h  $(Split-Path $zip -Leaf)" | Out-File -Encoding ascii -NoNewline "$zip.sha256"
       - name: Add the Windows bundle to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
@@ -283,6 +283,6 @@ jobs:
     steps:
       - name: Publish the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           draft: false
