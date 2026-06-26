@@ -15,11 +15,13 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
 from shotquill import blocklist as bl  # noqa: E402
 from shotquill.capture.base import CaptureResult, Rect, WindowInfo  # noqa: E402
+from shotquill.permissions import PermissionStatus  # noqa: E402
 
 
 def _build_app(qapp, fakes):
@@ -275,6 +277,9 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
     # must both notify the user AND open the right System Settings pane (so the
     # user has a one-tap path to fix it without hunting through preferences).
     monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        app_module.permissions, "screen_capture_status", lambda: PermissionStatus.GRANTED
+    )
     _capturer, hotkeys, _autostart = fakes
     hotkeys.raise_permission_error = True
     opened = []
@@ -290,6 +295,60 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
 
     assert opened == [True]
     assert messages
+    app.shutdown()
+
+
+def test_startup_prompts_screen_recording_before_input_monitoring(qapp, config, fakes, monkeypatch):
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_permission_error = True
+    opened = []
+    messages = []
+    monkeypatch.setattr(
+        app_module.permissions, "screen_capture_status", lambda: PermissionStatus.DENIED
+    )
+    monkeypatch.setattr(
+        app_module.permissions, "open_screen_capture_pane", lambda: opened.append("screen")
+    )
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append("input")
+    )
+    monkeypatch.setattr(
+        app_module.QSystemTrayIcon, "showMessage", lambda *args: messages.append(args)
+    )
+
+    app = _build_app(qapp, fakes)
+
+    assert opened == ["screen"]
+    assert hotkeys.bindings == {}
+    body = " ".join(str(part) for message in messages for part in message)
+    assert "Screen Recording" in body
+    app.shutdown()
+
+
+def test_startup_prompts_input_monitoring_after_screen_recording_is_granted(
+    qapp, config, fakes, monkeypatch
+):
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_permission_error = True
+    status = PermissionStatus.DENIED
+    opened = []
+    monkeypatch.setattr(app_module.permissions, "screen_capture_status", lambda: status)
+    monkeypatch.setattr(
+        app_module.permissions, "open_screen_capture_pane", lambda: opened.append("screen")
+    )
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append("input")
+    )
+    monkeypatch.setattr(app_module.QSystemTrayIcon, "showMessage", lambda *args: None)
+
+    app = _build_app(qapp, fakes)
+    status = PermissionStatus.GRANTED
+    app._retry_pending_permissions(Qt.ApplicationState.ApplicationActive)
+
+    assert opened == ["screen", "input"]
+    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+s"}
     app.shutdown()
 
 
