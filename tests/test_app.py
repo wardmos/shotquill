@@ -298,9 +298,7 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
     app.shutdown()
 
 
-def test_startup_prompts_screen_recording_before_input_monitoring(
-    qapp, config, fakes, monkeypatch
-):
+def test_startup_prompts_screen_recording_before_input_monitoring(qapp, config, fakes, monkeypatch):
     monkeypatch.setattr(app_module.sys, "platform", "darwin")
     _capturer, hotkeys, _autostart = fakes
     hotkeys.raise_permission_error = True
