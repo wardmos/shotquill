@@ -16,11 +16,13 @@ from shotquill.hotkeys import windows
 class _FakeListener:
     instances: list = []
 
-    def __init__(self, on_press=None, on_release=None):
+    def __init__(self, on_press=None, on_release=None, **kwargs):
         self.on_press = on_press
         self.on_release = on_release
+        self.kwargs = kwargs
         self.started = False
         self.stopped = False
+        self.suppressed = 0
         _FakeListener.instances.append(self)
 
     def start(self):
@@ -28,6 +30,9 @@ class _FakeListener:
 
     def stop(self):
         self.stopped = True
+
+    def suppress_event(self):
+        self.suppressed += 1
 
 
 class _FakeKey:
@@ -53,6 +58,7 @@ def test_vk_table_uses_windows_virtual_key_codes():
     assert windows._WIN_VK["9"] == 0x39
     assert windows._WIN_VK["f1"] == 0x70
     assert windows._WIN_VK["f12"] == 0x7B
+    assert windows._WIN_VK["-"] == 0xBD
 
 
 def test_register_and_unregister(fake_listener):
@@ -112,16 +118,68 @@ def test_function_key_combo_matches_by_vk(fake_listener):
     assert fired == [True]
 
 
-def test_char_fallback_for_keys_outside_vk_table(fake_listener):
-    # A key with no vk entry (e.g. a punctuation key) falls back to char.
+def test_known_punctuation_combo_matches_by_vk(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
     manager.register("<ctrl>+-", lambda: fired.append(True))
     manager.start()
     manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=None, char="-"))
+    manager._on_press(_FakeKey(vk=0xBD, char="-"))
     assert fired == [True]
 
+
+def test_unknown_char_only_combo_does_not_fire_after_hook_passes_it(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    manager.register("<ctrl>+§", lambda: fired.append(True))
+    manager.start()
+    manager._on_press(Key.ctrl)
+    manager._on_press(_FakeKey(vk=None, char="§"))
+    assert fired == []
+
+
+def test_matching_win32_hook_event_is_suppressed(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    manager.register("<ctrl>+a", lambda: fired.append(True))
+    manager.start()
+    listener = fake_listener.instances[-1]
+
+    manager._on_press(Key.ctrl)
+    data = type("Data", (), {"vkCode": 0x41})()
+
+    assert manager._event_filter(0x0100, data) is False  # WM_KEYDOWN
+    assert fired == [True]
+    assert listener.suppressed == 1
+
+
+
+def test_matching_win32_punctuation_hook_event_is_suppressed(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    manager.register("<ctrl>+-", lambda: fired.append(True))
+    manager.start()
+    listener = fake_listener.instances[-1]
+
+    manager._on_press(Key.ctrl)
+    data = type("Data", (), {"vkCode": 0xBD})()
+
+    assert manager._event_filter(0x0100, data) is False  # WM_KEYDOWN
+    assert fired == [True]
+    assert listener.suppressed == 1
+
+def test_suppressed_win32_key_release_is_suppressed(fake_listener):
+    manager = windows.WindowsHotkeyManager()
+    manager.register("<ctrl>+a", lambda: None)
+    manager.start()
+    listener = fake_listener.instances[-1]
+
+    manager._on_press(Key.ctrl)
+    data = type("Data", (), {"vkCode": 0x41})()
+    manager._event_filter(0x0100, data)
+
+    assert manager._event_filter(0x0101, data) is False  # WM_KEYUP
+    assert listener.suppressed == 2
 
 def test_super_modifier_maps_to_cmd(fake_listener):
     fired = []

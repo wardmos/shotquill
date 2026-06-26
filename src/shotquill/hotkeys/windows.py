@@ -41,6 +41,21 @@ from shotquill.hotkeys.combo import parse_combo
 _WIN_VK: dict[str, int] = {chr(c).lower(): c for c in range(ord("A"), ord("Z") + 1)}
 _WIN_VK.update({chr(c): c for c in range(ord("0"), ord("9") + 1)})
 _WIN_VK.update({f"f{n}": 0x70 + (n - 1) for n in range(1, 13)})
+_WIN_VK.update(
+    {
+        ";": 0xBA,
+        "=": 0xBB,
+        ",": 0xBC,
+        "-": 0xBD,
+        ".": 0xBE,
+        "/": 0xBF,
+        "`": 0xC0,
+        "[": 0xDB,
+        "\\": 0xDC,
+        "]": 0xDD,
+        "'": 0xDE,
+    }
+)
 
 # Every pynput modifier key (generic + left/right variants) -> canonical name.
 # Key.cmd is the Windows ("Super"/Win) key.
@@ -86,6 +101,7 @@ class WindowsHotkeyManager(HotkeyManager):
         self._compiled: list[_Binding] = []
         self._active_mods: set[str] = set()
         self._pressed: set[object] = set()  # non-modifier keys currently held
+        self._suppressed: set[object] = set()  # keys whose matching key-up must also be swallowed
         # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
         # and cleared from the main thread in ``stop()``; this serialises both.
         self._state_lock = threading.Lock()
@@ -117,7 +133,11 @@ class WindowsHotkeyManager(HotkeyManager):
             return  # already listening: the new bindings are live immediately
         if not self._bindings:
             return  # nothing to listen for yet
-        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self._listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+            win32_event_filter=self._event_filter,
+        )
         self._listener.start()
 
     def stop(self) -> None:
@@ -128,6 +148,7 @@ class WindowsHotkeyManager(HotkeyManager):
         with self._state_lock:
             self._active_mods.clear()
             self._pressed.clear()
+            self._suppressed.clear()
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
@@ -149,7 +170,12 @@ class WindowsHotkeyManager(HotkeyManager):
             if ident in self._pressed:  # ignore auto-repeat while the key is held
                 return
             self._pressed.add(ident)
-        self._dispatch(vk, char)
+        # Live Win32 suppression happens before pynput translates the event to a
+        # character, so only VK-backed bindings can be consumed reliably. Unknown
+        # char-only bindings must not fire here after the event has already passed
+        # through to the foreground app.
+        if vk is not None:
+            self._dispatch(vk, char)
 
     def _on_release(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
@@ -162,7 +188,7 @@ class WindowsHotkeyManager(HotkeyManager):
         with self._state_lock:
             self._pressed.discard(vk if vk is not None else char)
 
-    def _dispatch(self, vk: int | None, char: object) -> None:
+    def _dispatch(self, vk: int | None, char: object) -> bool:
         char_l = char.lower() if isinstance(char, str) else None
         with self._state_lock:
             active = frozenset(self._active_mods)
@@ -172,5 +198,49 @@ class WindowsHotkeyManager(HotkeyManager):
             if binding.vk is not None:
                 if vk == binding.vk:
                     binding.callback()
+                    return True
             elif char_l is not None and char_l == binding.char:
                 binding.callback()
+                return True
+        return False
+
+    def _event_filter(self, msg, data) -> bool:
+        press_messages = {0x0100, 0x0104}  # WM_KEYDOWN, WM_SYSKEYDOWN
+        release_messages = {0x0101, 0x0105}  # WM_KEYUP, WM_SYSKEYUP
+        vk = getattr(data, "vkCode", None)
+        if vk is None:
+            return True
+        if msg in press_messages:
+            with self._state_lock:
+                if vk in self._suppressed:
+                    suppress_repeat = True
+                elif vk in self._pressed:
+                    return True
+                else:
+                    suppress_repeat = False
+                    self._pressed.add(vk)
+            if suppress_repeat:
+                self._suppress_current_event()
+                return False
+            if self._dispatch(vk, None):
+                with self._state_lock:
+                    self._suppressed.add(vk)
+                self._suppress_current_event()
+                return False
+            with self._state_lock:
+                self._pressed.discard(vk)
+        elif msg in release_messages:
+            with self._state_lock:
+                was_suppressed = vk in self._suppressed
+                if was_suppressed:
+                    self._pressed.discard(vk)
+                    self._suppressed.discard(vk)
+            if was_suppressed:
+                self._suppress_current_event()
+                return False
+        return True
+
+    def _suppress_current_event(self) -> None:
+        listener = self._listener
+        if listener is not None and hasattr(listener, "suppress_event"):
+            listener.suppress_event()

@@ -159,6 +159,8 @@ class MacHotkeyManager(HotkeyManager):
         self._compiled: list[_Binding] = []
         self._active_mods: set[str] = set()
         self._pressed: set[object] = set()  # non-modifier keys currently held
+        self._suppressed: set[object] = set()
+        self._suppress_next_event = False
         # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
         # and cleared from the main thread in ``stop()``; this serialises both.
         self._state_lock = threading.Lock()
@@ -194,7 +196,11 @@ class MacHotkeyManager(HotkeyManager):
             return  # nothing to listen for; don't prompt for permission yet
         if not request_input_monitoring_access():
             raise PermissionError(_INPUT_MONITORING_ERROR)
-        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self._listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+            darwin_intercept=self._intercept,
+        )
         self._listener.start()
 
     def stop(self) -> None:
@@ -205,6 +211,8 @@ class MacHotkeyManager(HotkeyManager):
         with self._state_lock:
             self._active_mods.clear()
             self._pressed.clear()
+            self._suppressed.clear()
+            self._suppress_next_event = False
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
@@ -223,10 +231,16 @@ class MacHotkeyManager(HotkeyManager):
         char = getattr(key, "char", None)
         ident = vk if vk is not None else char
         with self._state_lock:
+            if ident in self._suppressed:
+                self._suppress_next_event = True
+                return
             if ident in self._pressed:  # ignore auto-repeat while the key is held
                 return
             self._pressed.add(ident)
-        self._dispatch(vk, char)
+        if self._dispatch(vk, char):
+            with self._state_lock:
+                self._suppressed.add(ident)
+                self._suppress_next_event = True
 
     def _on_release(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
@@ -236,10 +250,14 @@ class MacHotkeyManager(HotkeyManager):
             return
         vk = _vk_of(key)
         char = getattr(key, "char", None)
+        ident = vk if vk is not None else char
         with self._state_lock:
-            self._pressed.discard(vk if vk is not None else char)
+            self._pressed.discard(ident)
+            if ident in self._suppressed:
+                self._suppressed.discard(ident)
+                self._suppress_next_event = True
 
-    def _dispatch(self, vk: int | None, char: object) -> None:
+    def _dispatch(self, vk: int | None, char: object) -> bool:
         char_l = char.lower() if isinstance(char, str) else None
         with self._state_lock:
             active = frozenset(self._active_mods)
@@ -249,5 +267,21 @@ class MacHotkeyManager(HotkeyManager):
             if binding.vk is not None:
                 if vk == binding.vk:
                     binding.callback()
+                    return True
             elif char_l is not None and char_l == binding.char:
                 binding.callback()
+                return True
+        return False
+
+    def _intercept(self, event_type, event):
+        """Suppress the key event that just fired a ShotQuill hotkey.
+
+        pynput calls ``darwin_intercept`` after dispatching ``on_press`` for the
+        same Quartz event. Returning ``None`` consumes that event system-wide.
+        """
+        with self._state_lock:
+            suppress = self._suppress_next_event
+            self._suppress_next_event = False
+        if suppress:
+            return None
+        return event
