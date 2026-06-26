@@ -76,6 +76,20 @@ _MOD_NAMES: dict[object, str] = {
 if hasattr(Key, "alt_gr"):  # AltGr on some layouts; treat as Alt
     _MOD_NAMES[Key.alt_gr] = "alt"
 
+_WIN_MOD_VK: dict[int, str] = {
+    0x10: "shift",
+    0xA0: "shift",
+    0xA1: "shift",
+    0x11: "ctrl",
+    0xA2: "ctrl",
+    0xA3: "ctrl",
+    0x12: "alt",
+    0xA4: "alt",
+    0xA5: "alt",
+    0x5B: "cmd",
+    0x5C: "cmd",
+}
+
 
 def _vk_of(key: object) -> int | None:
     """Hardware virtual-key code for a pynput key (``KeyCode`` or ``Key`` member)."""
@@ -210,7 +224,12 @@ class WindowsHotkeyManager(HotkeyManager):
         vk = getattr(data, "vkCode", None)
         if vk is None:
             return True
+        mod = _WIN_MOD_VK.get(vk)
         if msg in press_messages:
+            if mod is not None:
+                with self._state_lock:
+                    self._active_mods.add(mod)
+                return True
             with self._state_lock:
                 if vk in self._suppressed:
                     suppress_repeat = True
@@ -230,6 +249,10 @@ class WindowsHotkeyManager(HotkeyManager):
             with self._state_lock:
                 self._pressed.discard(vk)
         elif msg in release_messages:
+            if mod is not None:
+                with self._state_lock:
+                    self._active_mods.discard(mod)
+                return True
             with self._state_lock:
                 was_suppressed = vk in self._suppressed
                 if was_suppressed:

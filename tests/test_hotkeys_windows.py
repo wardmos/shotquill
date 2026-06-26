@@ -145,9 +145,10 @@ def test_matching_win32_hook_event_is_suppressed(fake_listener):
     manager.start()
     listener = fake_listener.instances[-1]
 
-    manager._on_press(Key.ctrl)
+    ctrl = type("Data", (), {"vkCode": 0x11})()
     data = type("Data", (), {"vkCode": 0x41})()
 
+    assert manager._event_filter(0x0100, ctrl) is True  # WM_KEYDOWN
     assert manager._event_filter(0x0100, data) is False  # WM_KEYDOWN
     assert fired == [True]
     assert listener.suppressed == 1
@@ -160,9 +161,10 @@ def test_matching_win32_punctuation_hook_event_is_suppressed(fake_listener):
     manager.start()
     listener = fake_listener.instances[-1]
 
-    manager._on_press(Key.ctrl)
+    ctrl = type("Data", (), {"vkCode": 0x11})()
     data = type("Data", (), {"vkCode": 0xBD})()
 
+    assert manager._event_filter(0x0100, ctrl) is True  # WM_KEYDOWN
     assert manager._event_filter(0x0100, data) is False  # WM_KEYDOWN
     assert fired == [True]
     assert listener.suppressed == 1

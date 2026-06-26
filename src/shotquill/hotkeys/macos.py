@@ -144,6 +144,18 @@ def request_input_monitoring_access() -> bool:
         return has_input_monitoring_access()
 
 
+def has_event_suppression_access() -> bool:
+    """Whether macOS lets this process install a modifying event tap."""
+    try:
+        import HIServices  # type: ignore[import-not-found]
+    except Exception:
+        return False
+    try:
+        return bool(HIServices.AXIsProcessTrusted())
+    except Exception:
+        return False
+
+
 @dataclass
 class _Binding:
     mods: frozenset[str]
@@ -196,10 +208,11 @@ class MacHotkeyManager(HotkeyManager):
             return  # nothing to listen for; don't prompt for permission yet
         if not request_input_monitoring_access():
             raise PermissionError(_INPUT_MONITORING_ERROR)
+        kwargs = {"darwin_intercept": self._intercept} if has_event_suppression_access() else {}
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
-            darwin_intercept=self._intercept,
+            **kwargs,
         )
         self._listener.start()
 
