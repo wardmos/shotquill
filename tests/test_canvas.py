@@ -156,6 +156,22 @@ def test_delete_keys_remove_selected_annotation_and_are_undoable(qtbot, key):
     assert _annotation_items(canvas) == []
 
 
+def test_backspace_deletes_annotation_selected_from_viewport(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    canvas.set_tool(Tool.SELECT)
+    viewport = canvas.viewport()
+
+    qtbot.mouseClick(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    assert item.isSelected()
+    qtbot.keyClick(viewport, Qt.Key_Backspace)
+
+    assert item.scene() is None
+    assert _annotation_items(canvas) == []
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+
+
 def test_tiny_click_is_discarded(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.RECT)

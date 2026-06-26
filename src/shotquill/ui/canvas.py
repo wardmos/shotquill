@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -61,6 +61,10 @@ _CROP_EDGE_MARGIN = 10.0
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
 _MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
+
+
+def _event_key(event) -> Qt.Key:
+    return Qt.Key(event.key())
 
 
 class _TextItem(QGraphicsTextItem):
@@ -158,6 +162,10 @@ class AnnotationCanvas(QGraphicsView):
 
         self.setRenderHint(QPainter.Antialiasing)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.viewport().setFocusPolicy(Qt.StrongFocus)
+        self.viewport().installEventFilter(self)
+        self._scene.installEventFilter(self)
 
         self._undo = QUndoStack(self)
         self._tool = Tool.SELECT
@@ -326,14 +334,24 @@ class AnnotationCanvas(QGraphicsView):
         # annotation has focus (a focused text item still gets them for cursor
         # movement via the scene). Without this, QAbstractScrollArea would
         # accept them for scrolling and the window would never see them.
-        if event.key() in _CROP_ADJUST_KEYS and self._scene.focusItem() is None:
+        if _event_key(event) in _CROP_ADJUST_KEYS and self._scene.focusItem() is None:
             event.ignore()
             return
         if self.handle_delete_key(event):
             return
         super().keyPressEvent(event)
 
+    def eventFilter(self, obj, event) -> bool:
+        if (
+            obj in (self.viewport(), self._scene)
+            and event.type() == QEvent.KeyPress
+            and self.handle_delete_key(event)
+        ):
+            return True
+        return super().eventFilter(obj, event)
+
     def mousePressEvent(self, event) -> None:
+        self.setFocus(Qt.MouseFocusReason)
         # A press on a crop edge (region capture, still pristine) opens the
         # full-screen adjust surface instead of starting a rubber-band select.
         if event.button() == Qt.LeftButton:
@@ -500,7 +518,7 @@ class AnnotationCanvas(QGraphicsView):
 
     def handle_delete_key(self, event) -> bool:
         if (
-            event.key() not in _DELETE_KEYS
+            _event_key(event) not in _DELETE_KEYS
             or self._scene.focusItem() is not None
             or self._has_uncommitted_selected_text()
         ):
