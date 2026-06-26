@@ -184,6 +184,12 @@ class MacHotkeyManager(HotkeyManager):
 
     def clear(self) -> None:
         self._bindings.clear()
+        self._compiled = []
+        with self._state_lock:
+            self._active_mods.clear()
+            self._pressed.clear()
+            self._suppressed.clear()
+            self._suppress_next_event = False
 
     def start(self) -> None:
         """Compile the current bindings and make sure a listener is running.
@@ -221,12 +227,13 @@ class MacHotkeyManager(HotkeyManager):
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
-        # Drop any held-key state so a missed release can't wedge later matches.
+        # Drop held-key state so a missed release can't wedge later matches. Keep
+        # the one-event suppression flag intact: pynput calls darwin_intercept
+        # after on_press for the same event, and stop() can race between them.
         with self._state_lock:
             self._active_mods.clear()
             self._pressed.clear()
             self._suppressed.clear()
-            self._suppress_next_event = False
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
