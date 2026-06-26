@@ -47,7 +47,6 @@ def fake_listener(monkeypatch):
     # an unattended macOS CI runner (no Input Monitoring grant), which would make
     # start() raise. Tests that exercise the permission path override this.
     monkeypatch.setattr(macos, "request_input_monitoring_access", lambda: True)
-    monkeypatch.setattr(macos, "has_event_suppression_access", lambda: False)
     return _FakeListener
 
 
@@ -188,15 +187,16 @@ def test_release_allows_refire(fake_listener):
     assert fired == [True, True]
 
 
-def test_start_uses_listen_only_tap_without_event_suppression_access(fake_listener):
+def test_start_always_installs_the_swallowing_intercept(fake_listener):
+    # Suppression rides on the same Input Monitoring grant the listener already
+    # needs — no second permission gate, so darwin_intercept is always wired up.
     manager = macos.MacHotkeyManager()
     manager.register("<alt>+a", lambda: None)
     manager.start()
-    assert "darwin_intercept" not in fake_listener.instances[-1].kwargs
+    assert "darwin_intercept" in fake_listener.instances[-1].kwargs
 
 
-def test_matching_macos_event_press_repeat_and_release_are_suppressed(fake_listener, monkeypatch):
-    monkeypatch.setattr(macos, "has_event_suppression_access", lambda: True)
+def test_matching_macos_event_press_repeat_and_release_are_suppressed(fake_listener):
     fired = []
     manager = macos.MacHotkeyManager()
     manager.register("<alt>+a", lambda: fired.append(True))

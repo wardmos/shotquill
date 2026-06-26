@@ -12,6 +12,13 @@ character" key: ⌥A emits "å", ⌥S "ß", ⌥W "∑", so character matching ma
 Option-based combos fire only intermittently. Instead we run a raw listener and
 match the final key by its hardware *key code* (``vk``), which is independent of
 the modifiers held — exactly how reliable Option-friendly hotkey apps behave.
+
+The matched key is also **swallowed** so it does not leak to the foreground app:
+``darwin_intercept`` returns ``None`` for the Quartz event that just fired a
+binding, consuming it system-wide. The modifying event tap this needs is covered
+by the same Input Monitoring grant the listener already requires — no separate
+Accessibility permission, unlike ``CGEventTap``-style suppression is sometimes
+mistaken to need.
 """
 
 from __future__ import annotations
@@ -144,18 +151,6 @@ def request_input_monitoring_access() -> bool:
         return has_input_monitoring_access()
 
 
-def has_event_suppression_access() -> bool:
-    """Whether macOS lets this process install a modifying event tap."""
-    try:
-        import HIServices  # type: ignore[import-not-found]
-    except Exception:
-        return False
-    try:
-        return bool(HIServices.AXIsProcessTrusted())
-    except Exception:
-        return False
-
-
 @dataclass
 class _Binding:
     mods: frozenset[str]
@@ -208,11 +203,17 @@ class MacHotkeyManager(HotkeyManager):
             return  # nothing to listen for; don't prompt for permission yet
         if not request_input_monitoring_access():
             raise PermissionError(_INPUT_MONITORING_ERROR)
-        kwargs = {"darwin_intercept": self._intercept} if has_event_suppression_access() else {}
+        # The same event tap that Input Monitoring lets us listen through can
+        # also *swallow* the matched key: ``darwin_intercept`` runs after
+        # ``on_press`` for each Quartz event and, by returning ``None`,
+        # consumes it system-wide so it never reaches the foreground app. No
+        # Accessibility grant is needed — Input Monitoring covers the
+        # modifying tap — so suppression is always on, not gated behind a
+        # second permission the user would have to discover.
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
-            **kwargs,
+            darwin_intercept=self._intercept,
         )
         self._listener.start()
 
