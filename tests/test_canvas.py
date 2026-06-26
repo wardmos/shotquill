@@ -77,6 +77,10 @@ def _draw_rect(qtbot, canvas):
     return next(i for i in canvas.scene().items() if i.zValue() > -1000)
 
 
+def _annotation_items(canvas):
+    return [item for item in canvas.scene().items() if item.zValue() > -1000]
+
+
 def test_move_items_command_round_trips_position(qtbot):
     from PySide6.QtCore import QPointF
 
@@ -129,6 +133,51 @@ def test_select_click_without_moving_records_no_undo(qtbot):
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
     assert canvas.undo_stack().count() == 1  # no spurious move command
+
+
+def test_delete_key_removes_selected_item_and_is_undoable(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    stack = canvas.undo_stack()
+    assert stack.count() == 1
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Delete)
+
+    assert item.scene() is None
+    assert stack.count() == 2
+    stack.undo()
+    assert item.scene() is canvas.scene()
+    assert item.isSelected()
+    stack.redo()
+    assert item.scene() is None
+
+
+def test_backspace_deletes_multiple_selected_items_as_one_undo_command(qtbot):
+    canvas = _canvas(qtbot)
+    first = _draw_rect(qtbot, canvas)
+    second = _draw_rect(qtbot, canvas)
+    assert len(_annotation_items(canvas)) == 2
+    stack = canvas.undo_stack()
+    assert stack.count() == 2
+
+    canvas.set_tool(Tool.SELECT)
+    first.setSelected(True)
+    second.setSelected(True)
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert first.scene() is None
+    assert second.scene() is None
+    assert stack.count() == 3
+    stack.undo()
+    assert sorted(_annotation_items(canvas), key=id) == sorted([first, second], key=id)
+    assert first.isSelected()
+    assert second.isSelected()
+    stack.redo()
+    assert _annotation_items(canvas) == []
 
 
 def test_tiny_click_is_discarded(qtbot):

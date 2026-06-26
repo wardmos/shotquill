@@ -124,6 +124,26 @@ class _MoveItemsCommand(QUndoCommand):
             item.setPos(new)
 
 
+class _DeleteItemsCommand(QUndoCommand):
+    """Undoable removal of selected annotation items."""
+
+    def __init__(self, scene: QGraphicsScene, items: list[QGraphicsItem]) -> None:
+        super().__init__("delete annotation")
+        self._scene = scene
+        self._items = [(item, item.isSelected()) for item in items]
+
+    def undo(self) -> None:
+        for item, was_selected in self._items:
+            if item.scene() is None:
+                self._scene.addItem(item)
+            item.setSelected(was_selected)
+
+    def redo(self) -> None:
+        for item, _was_selected in self._items:
+            if item.scene() is self._scene:
+                self._scene.removeItem(item)
+
+
 class AnnotationCanvas(QGraphicsView):
     def __init__(self, background: QPixmap) -> None:
         super().__init__()
@@ -284,6 +304,17 @@ class AnnotationCanvas(QGraphicsView):
         else:
             self._set_viewport_cursor(Qt.CrossCursor)
 
+    def _delete_selected_items(self) -> bool:
+        selected = [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._background and item.scene() is self._scene
+        ]
+        if not selected:
+            return False
+        self._undo.push(_DeleteItemsCommand(self._scene, selected))
+        return True
+
     def _next_z(self) -> float:
         self._z += 1.0
         return self._z
@@ -300,6 +331,13 @@ class AnnotationCanvas(QGraphicsView):
         return pen
 
     def keyPressEvent(self, event) -> None:
+        if (
+            event.key() in (Qt.Key_Backspace, Qt.Key_Delete)
+            and self._scene.focusItem() is None
+            and self._delete_selected_items()
+        ):
+            event.accept()
+            return
         # Arrow keys belong to the window's crop adjustment while no text
         # annotation has focus (a focused text item still gets them for cursor
         # movement via the scene). Without this, QAbstractScrollArea would
