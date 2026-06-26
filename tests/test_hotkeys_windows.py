@@ -153,7 +153,6 @@ def test_matching_win32_hook_event_is_suppressed(fake_listener):
     assert listener.suppressed == 1
 
 
-
 def test_matching_win32_punctuation_hook_event_is_suppressed(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
@@ -168,6 +167,7 @@ def test_matching_win32_punctuation_hook_event_is_suppressed(fake_listener):
     assert fired == [True]
     assert listener.suppressed == 1
 
+
 def test_suppressed_win32_key_release_is_suppressed(fake_listener):
     manager = windows.WindowsHotkeyManager()
     manager.register("<ctrl>+a", lambda: None)
@@ -180,6 +180,7 @@ def test_suppressed_win32_key_release_is_suppressed(fake_listener):
 
     assert manager._event_filter(0x0101, data) is False  # WM_KEYUP
     assert listener.suppressed == 2
+
 
 def test_super_modifier_maps_to_cmd(fake_listener):
     fired = []

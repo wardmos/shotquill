@@ -187,7 +187,6 @@ def test_release_allows_refire(fake_listener):
     assert fired == [True, True]
 
 
-
 def test_matching_macos_event_press_repeat_and_release_are_suppressed(fake_listener):
     fired = []
     manager = macos.MacHotkeyManager()
