@@ -57,6 +57,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Couldn't open the save folder: {error}",
         "zh": "无法打开保存文件夹：{error}",
     },
+    "notify.capture_need_screen_recording": {
+        "en": "Screenshots need Screen Recording permission. "
+        "Enable it in System Settings, then restart ShotQuill.",
+        "zh": "截图需要屏幕录制权限。请在系统设置中启用后重启 ShotQuill。",
+    },
     "notify.hotkeys_need_input_monitoring": {
         "en": "Global hotkeys need Input Monitoring permission. "
         "Enable it in System Settings, then restart ShotQuill.",

@@ -136,6 +136,7 @@ class ShotquillApp(QObject):
         self._windows: list[object] = []  # keep overlays/editors alive
         self._settings_dialog: SettingsDialog | None = None
         self._settings_shelved = False  # Settings hidden while a capture runs
+        self._pending_permission_prompt: str | None = None
         # Blocklisted windows on screen for the current smart-capture session
         # (id → window); refused on click, skipped in the hover preview.
         self._blocked_windows: dict[int, object] = {}
@@ -165,7 +166,8 @@ class ShotquillApp(QObject):
         self._tray.setToolTip("ShotQuill")
         self._rebuild_menu()
         self._tray.show()
-        self._apply_hotkeys()
+        self._app.applicationStateChanged.connect(self._retry_pending_permissions)
+        self._apply_permission_gated_hotkeys()
 
     def _hotkey_label(self, action: str) -> str:
         """Display string for a hotkey, or empty if the user disabled it."""
@@ -204,7 +206,35 @@ class ShotquillApp(QObject):
         self._tray.setContextMenu(menu)
         self._menu = menu  # keep a reference
 
-    def _apply_hotkeys(self) -> None:
+    def _apply_permission_gated_hotkeys(self) -> None:
+        if self._needs_screen_recording_permission():
+            self._hotkeys.clear()
+            self._show_permission_prompt("screen_recording")
+            return
+        if self._apply_hotkeys():
+            self._pending_permission_prompt = None
+
+    def _needs_screen_recording_permission(self) -> bool:
+        if sys.platform != "darwin":
+            return False
+        return permissions.screen_capture_status() is permissions.PermissionStatus.DENIED
+
+    def _show_permission_prompt(self, permission: str) -> None:
+        if self._pending_permission_prompt == permission:
+            return
+        self._pending_permission_prompt = permission
+        if permission == "screen_recording":
+            self._notify(t("notify.capture_need_screen_recording"))
+            permissions.open_screen_capture_pane()
+        elif permission == "input_monitoring":
+            self._notify(t("notify.hotkeys_need_input_monitoring"))
+            permissions.open_input_monitoring_pane()
+
+    def _retry_pending_permissions(self, state: Qt.ApplicationState) -> None:
+        if state == Qt.ApplicationState.ApplicationActive and self._pending_permission_prompt:
+            self._apply_permission_gated_hotkeys()
+
+    def _apply_hotkeys(self) -> bool:
         # Note: no stop() here. Restarting the pynput listener while Qt runs
         # crashes the process (SIGTRAP on the listener thread), so the manager
         # keeps one listener alive and start() just swaps in the new bindings.
@@ -227,11 +257,14 @@ class ShotquillApp(QObject):
             # — surface the reason once and keep the tray menu working.
             self._notify(t("notify.hotkeys_unavailable").format(reason=exc.reason))
         except PermissionError:
-            self._notify(t("notify.hotkeys_need_input_monitoring"))
             # The deep-link is macOS-specific (an x-apple-systempreferences URL
             # opened via `open`); skip it elsewhere where it would be a no-op.
             if sys.platform == "darwin":
-                permissions.open_input_monitoring_pane()
+                self._show_permission_prompt("input_monitoring")
+            else:
+                self._notify(t("notify.hotkeys_need_input_monitoring"))
+            return False
+        return True
 
     def _shelve_settings_dialog(self) -> None:
         """Hide an open (modeless) Settings window while a capture runs.
@@ -652,7 +685,7 @@ class ShotquillApp(QObject):
     def _apply_settings(self) -> None:
         set_language(self._config.language())
         self._capturer.include_cursor = self._config.include_cursor()
-        self._apply_hotkeys()
+        self._apply_permission_gated_hotkeys()
         self._sync_autostart()
         self._rebuild_menu()
         # Editors resolve their finish keys at creation; push the new
