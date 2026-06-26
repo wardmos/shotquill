@@ -16,11 +16,13 @@ is unreliable for the common ``Ctrl+<letter>`` combos; the VK code is positional
 and constant regardless of the modifiers held. Windows VK codes are themselves
 trivial — letters and digits *are* their uppercase ASCII code points
 (``VK_A == 0x41``), and ``VK_F1..VK_F12`` run ``0x70..0x7B`` — so the table is
-computed rather than hand-listed. Keys outside the table fall back to ``char``.
+computed rather than hand-listed. Bindings outside the table are ignored on
+Windows because they cannot be matched and swallowed safely in the low-level hook
+before the event reaches the foreground app.
 
 The live listener can only be exercised against a real Windows session; the
-binding bookkeeping and match logic here are covered by driving
-``on_press``/``on_release`` with synthetic keys, mirroring the macOS/Linux tests.
+binding bookkeeping and match logic here are covered by driving the Win32 event
+filter directly.
 """
 
 from __future__ import annotations
@@ -28,9 +30,9 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from queue import Queue
 
 from pynput import keyboard
-from pynput.keyboard import Key
 
 from shotquill.hotkeys.base import HotkeyManager
 from shotquill.hotkeys.combo import parse_combo
@@ -41,41 +43,41 @@ from shotquill.hotkeys.combo import parse_combo
 _WIN_VK: dict[str, int] = {chr(c).lower(): c for c in range(ord("A"), ord("Z") + 1)}
 _WIN_VK.update({chr(c): c for c in range(ord("0"), ord("9") + 1)})
 _WIN_VK.update({f"f{n}": 0x70 + (n - 1) for n in range(1, 13)})
+_WIN_VK.update(
+    {
+        ";": 0xBA,
+        "=": 0xBB,
+        ",": 0xBC,
+        "-": 0xBD,
+        ".": 0xBE,
+        "/": 0xBF,
+        "`": 0xC0,
+        "[": 0xDB,
+        "\\": 0xDC,
+        "]": 0xDD,
+        "'": 0xDE,
+    }
+)
 
-# Every pynput modifier key (generic + left/right variants) -> canonical name.
-# Key.cmd is the Windows ("Super"/Win) key.
-_MOD_NAMES: dict[object, str] = {
-    Key.alt: "alt",
-    Key.alt_l: "alt",
-    Key.alt_r: "alt",
-    Key.cmd: "cmd",
-    Key.cmd_l: "cmd",
-    Key.cmd_r: "cmd",
-    Key.ctrl: "ctrl",
-    Key.ctrl_l: "ctrl",
-    Key.ctrl_r: "ctrl",
-    Key.shift: "shift",
-    Key.shift_l: "shift",
-    Key.shift_r: "shift",
+_WIN_MOD_VK: dict[int, str] = {
+    0x10: "shift",
+    0xA0: "shift",
+    0xA1: "shift",
+    0x11: "ctrl",
+    0xA2: "ctrl",
+    0xA3: "ctrl",
+    0x12: "alt",
+    0xA4: "alt",
+    0xA5: "alt",
+    0x5B: "cmd",
+    0x5C: "cmd",
 }
-if hasattr(Key, "alt_gr"):  # AltGr on some layouts; treat as Alt
-    _MOD_NAMES[Key.alt_gr] = "alt"
-
-
-def _vk_of(key: object) -> int | None:
-    """Hardware virtual-key code for a pynput key (``KeyCode`` or ``Key`` member)."""
-    vk = getattr(key, "vk", None)
-    if vk is None:
-        value = getattr(key, "value", None)  # Key enum members wrap a KeyCode
-        vk = getattr(value, "vk", None)
-    return vk
 
 
 @dataclass
 class _Binding:
     mods: frozenset[str]
-    vk: int | None  # expected virtual-key code, when the key is known
-    char: str  # fallback target for keys outside the vk table
+    vk: int
     callback: Callable[[], None]
 
 
@@ -83,9 +85,12 @@ class WindowsHotkeyManager(HotkeyManager):
     def __init__(self) -> None:
         self._bindings: dict[str, Callable[[], None]] = {}
         self._listener: keyboard.Listener | None = None
+        self._callback_worker: threading.Thread | None = None
+        self._callback_queue: Queue[Callable[[], None] | None] = Queue()
         self._compiled: list[_Binding] = []
         self._active_mods: set[str] = set()
         self._pressed: set[object] = set()  # non-modifier keys currently held
+        self._suppressed: set[object] = set()  # keys whose matching key-up must also be swallowed
         # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
         # and cleared from the main thread in ``stop()``; this serialises both.
         self._state_lock = threading.Lock()
@@ -102,6 +107,11 @@ class WindowsHotkeyManager(HotkeyManager):
 
     def clear(self) -> None:
         self._bindings.clear()
+        self._compiled = []
+        with self._state_lock:
+            self._active_mods.clear()
+            self._pressed.clear()
+            self._suppressed.clear()
 
     def start(self) -> None:
         """Compile the current bindings and ensure a listener is running.
@@ -112,65 +122,132 @@ class WindowsHotkeyManager(HotkeyManager):
         the thread. Windows needs no permission gate and refuses no grabs, so
         there is nothing to preflight before listening.
         """
-        self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
+        self._compiled = [
+            binding
+            for c, cb in self._bindings.items()
+            if (binding := self._compile(c, cb)) is not None
+        ]
         if self._listener is not None:
             return  # already listening: the new bindings are live immediately
         if not self._bindings:
             return  # nothing to listen for yet
-        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self._ensure_callback_worker()
+        self._listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+            win32_event_filter=self._event_filter,
+        )
         self._listener.start()
 
     def stop(self) -> None:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+        if self._callback_worker is not None:
+            self._callback_queue.put(None)
+            self._callback_worker.join(timeout=1)
+            self._callback_worker = None
+            self._callback_queue = Queue()
         # Drop held-key state so a missed release can't wedge later matches.
         with self._state_lock:
             self._active_mods.clear()
             self._pressed.clear()
+            self._suppressed.clear()
 
     @staticmethod
-    def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
+    def _compile(combo: str, callback: Callable[[], None]) -> _Binding | None:
         parsed = parse_combo(combo)
         mods = frozenset(m for m in ("cmd", "ctrl", "alt", "shift") if parsed[m])
         key = str(parsed["key"]).lower()
-        return _Binding(mods=mods, vk=_WIN_VK.get(key), char=key, callback=callback)
+        vk = _WIN_VK.get(key)
+        if vk is None:
+            return None
+        return _Binding(mods=mods, vk=vk, callback=callback)
 
     def _on_press(self, key: object) -> None:
-        name = _MOD_NAMES.get(key)
-        if name is not None:
-            with self._state_lock:
-                self._active_mods.add(name)
-            return
-        vk = _vk_of(key)
-        char = getattr(key, "char", None)
-        ident = vk if vk is not None else char
-        with self._state_lock:
-            if ident in self._pressed:  # ignore auto-repeat while the key is held
-                return
-            self._pressed.add(ident)
-        self._dispatch(vk, char)
+        # Win32 hook filtering is the only live source of key state. Dispatching
+        # here would happen after the event has already reached the foreground app.
+        return None
 
     def _on_release(self, key: object) -> None:
-        name = _MOD_NAMES.get(key)
-        if name is not None:
-            with self._state_lock:
-                self._active_mods.discard(name)
-            return
-        vk = _vk_of(key)
-        char = getattr(key, "char", None)
-        with self._state_lock:
-            self._pressed.discard(vk if vk is not None else char)
+        return None
 
-    def _dispatch(self, vk: int | None, char: object) -> None:
-        char_l = char.lower() if isinstance(char, str) else None
-        with self._state_lock:
-            active = frozenset(self._active_mods)
+    def _ensure_callback_worker(self) -> None:
+        if self._callback_worker is not None:
+            return
+        self._callback_worker = threading.Thread(target=self._run_callbacks, daemon=True)
+        self._callback_worker.start()
+
+    def _run_callbacks(self) -> None:
+        while True:
+            callback = self._callback_queue.get()
+            if callback is None:
+                return
+            callback()
+
+    def _enqueue_callback(self, callback: Callable[[], None]) -> None:
+        self._ensure_callback_worker()
+        self._callback_queue.put(callback)
+
+    def _match_binding(self, vk: int, active: frozenset[str]) -> _Binding | None:
         for binding in self._compiled:
-            if binding.mods != active:
-                continue
-            if binding.vk is not None:
-                if vk == binding.vk:
-                    binding.callback()
-            elif char_l is not None and char_l == binding.char:
-                binding.callback()
+            if binding.mods == active and binding.vk == vk:
+                return binding
+        return None
+
+    def _event_filter(self, msg, data) -> bool:
+        press_messages = {0x0100, 0x0104}  # WM_KEYDOWN, WM_SYSKEYDOWN
+        release_messages = {0x0101, 0x0105}  # WM_KEYUP, WM_SYSKEYUP
+        vk = getattr(data, "vkCode", None)
+        if vk is None:
+            return True
+        mod = _WIN_MOD_VK.get(vk)
+        if msg in press_messages:
+            if mod is not None:
+                with self._state_lock:
+                    self._active_mods.add(mod)
+                return True
+            with self._state_lock:
+                active = frozenset(self._active_mods)
+                if vk in self._suppressed:
+                    suppress_repeat = True
+                    binding = None
+                elif vk in self._pressed:
+                    return True
+                else:
+                    suppress_repeat = False
+                    self._pressed.add(vk)
+                    binding = self._match_binding(vk, active)
+            if suppress_repeat:
+                return not self._suppress_current_event()
+            if binding is not None:
+                if not self._suppress_current_event():
+                    with self._state_lock:
+                        self._pressed.discard(vk)
+                    return True
+                with self._state_lock:
+                    self._suppressed.add(vk)
+                self._enqueue_callback(binding.callback)
+                return False
+            with self._state_lock:
+                self._pressed.discard(vk)
+        elif msg in release_messages:
+            if mod is not None:
+                with self._state_lock:
+                    self._active_mods.discard(mod)
+                return True
+            with self._state_lock:
+                was_suppressed = vk in self._suppressed
+                if was_suppressed:
+                    self._pressed.discard(vk)
+                    self._suppressed.discard(vk)
+            if was_suppressed:
+                return not self._suppress_current_event()
+        return True
+
+    def _suppress_current_event(self) -> bool:
+        listener = self._listener
+        if listener is not None and hasattr(listener, "suppress_event"):
+            listener.suppress_event()
+            return True
+        return False

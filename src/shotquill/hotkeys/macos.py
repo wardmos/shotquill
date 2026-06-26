@@ -12,6 +12,13 @@ character" key: ⌥A emits "å", ⌥S "ß", ⌥W "∑", so character matching ma
 Option-based combos fire only intermittently. Instead we run a raw listener and
 match the final key by its hardware *key code* (``vk``), which is independent of
 the modifiers held — exactly how reliable Option-friendly hotkey apps behave.
+
+The matched key is also **swallowed** so it does not leak to the foreground app:
+``darwin_intercept`` returns ``None`` for the Quartz event that just fired a
+binding, consuming it system-wide. The modifying event tap this needs is covered
+by the same Input Monitoring grant the listener already requires — no separate
+Accessibility permission, unlike ``CGEventTap``-style suppression is sometimes
+mistaken to need.
 """
 
 from __future__ import annotations
@@ -159,6 +166,8 @@ class MacHotkeyManager(HotkeyManager):
         self._compiled: list[_Binding] = []
         self._active_mods: set[str] = set()
         self._pressed: set[object] = set()  # non-modifier keys currently held
+        self._suppressed: set[object] = set()
+        self._suppress_next_event = False
         # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
         # and cleared from the main thread in ``stop()``; this serialises both.
         self._state_lock = threading.Lock()
@@ -175,6 +184,12 @@ class MacHotkeyManager(HotkeyManager):
 
     def clear(self) -> None:
         self._bindings.clear()
+        self._compiled = []
+        with self._state_lock:
+            self._active_mods.clear()
+            self._pressed.clear()
+            self._suppressed.clear()
+            self._suppress_next_event = False
 
     def start(self) -> None:
         """Compile the current bindings and make sure a listener is running.
@@ -194,17 +209,31 @@ class MacHotkeyManager(HotkeyManager):
             return  # nothing to listen for; don't prompt for permission yet
         if not request_input_monitoring_access():
             raise PermissionError(_INPUT_MONITORING_ERROR)
-        self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        # The same event tap that Input Monitoring lets us listen through can
+        # also *swallow* the matched key: ``darwin_intercept`` runs after
+        # ``on_press`` for each Quartz event and, by returning ``None`,
+        # consumes it system-wide so it never reaches the foreground app. No
+        # Accessibility grant is needed — Input Monitoring covers the
+        # modifying tap — so suppression is always on, not gated behind a
+        # second permission the user would have to discover.
+        self._listener = keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+            darwin_intercept=self._intercept,
+        )
         self._listener.start()
 
     def stop(self) -> None:
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
-        # Drop any held-key state so a missed release can't wedge later matches.
+        # Drop held-key state so a missed release can't wedge later matches. Keep
+        # the one-event suppression flag intact: pynput calls darwin_intercept
+        # after on_press for the same event, and stop() can race between them.
         with self._state_lock:
             self._active_mods.clear()
             self._pressed.clear()
+            self._suppressed.clear()
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
@@ -223,10 +252,16 @@ class MacHotkeyManager(HotkeyManager):
         char = getattr(key, "char", None)
         ident = vk if vk is not None else char
         with self._state_lock:
+            if ident in self._suppressed:
+                self._suppress_next_event = True
+                return
             if ident in self._pressed:  # ignore auto-repeat while the key is held
                 return
             self._pressed.add(ident)
-        self._dispatch(vk, char)
+        if self._dispatch(vk, char):
+            with self._state_lock:
+                self._suppressed.add(ident)
+                self._suppress_next_event = True
 
     def _on_release(self, key: object) -> None:
         name = _MOD_NAMES.get(key)
@@ -236,10 +271,14 @@ class MacHotkeyManager(HotkeyManager):
             return
         vk = _vk_of(key)
         char = getattr(key, "char", None)
+        ident = vk if vk is not None else char
         with self._state_lock:
-            self._pressed.discard(vk if vk is not None else char)
+            self._pressed.discard(ident)
+            if ident in self._suppressed:
+                self._suppressed.discard(ident)
+                self._suppress_next_event = True
 
-    def _dispatch(self, vk: int | None, char: object) -> None:
+    def _dispatch(self, vk: int | None, char: object) -> bool:
         char_l = char.lower() if isinstance(char, str) else None
         with self._state_lock:
             active = frozenset(self._active_mods)
@@ -249,5 +288,21 @@ class MacHotkeyManager(HotkeyManager):
             if binding.vk is not None:
                 if vk == binding.vk:
                     binding.callback()
+                    return True
             elif char_l is not None and char_l == binding.char:
                 binding.callback()
+                return True
+        return False
+
+    def _intercept(self, event_type, event):
+        """Suppress the key event that just fired a ShotQuill hotkey.
+
+        pynput calls ``darwin_intercept`` after dispatching ``on_press`` for the
+        same Quartz event. Returning ``None`` consumes that event system-wide.
+        """
+        with self._state_lock:
+            suppress = self._suppress_next_event
+            self._suppress_next_event = False
+        if suppress:
+            return None
+        return event

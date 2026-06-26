@@ -16,9 +16,10 @@ from shotquill.hotkeys import macos
 class _FakeListener:
     instances: list = []
 
-    def __init__(self, on_press=None, on_release=None):
+    def __init__(self, on_press=None, on_release=None, **kwargs):
         self.on_press = on_press
         self.on_release = on_release
+        self.kwargs = kwargs
         self.started = False
         self.stopped = False
         _FakeListener.instances.append(self)
@@ -135,6 +136,25 @@ def test_disabling_all_hotkeys_unbinds_but_keeps_listener(fake_listener):
     assert fired == []
 
 
+def test_clear_drops_held_suppressed_and_intercept_state(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append("a"))
+    manager.start()
+
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+    manager.clear()
+    manager.register("<alt>+s", lambda: fired.append("s"))
+    manager.start()
+
+    event = object()
+    manager._on_release(_FakeKey(vk=0, char="å"))
+    assert fake_listener.instances[-1].kwargs["darwin_intercept"](None, event) is event
+    manager._on_press(_FakeKey(vk=1, char="s"))
+    assert fired == ["a"]
+
+
 def test_clear_removes_all_bindings(fake_listener):
     manager = macos.MacHotkeyManager()
     manager.register("<alt>+a", lambda: None)
@@ -150,6 +170,17 @@ def test_stop_is_idempotent(fake_listener):
     manager.stop()
     manager.stop()  # second stop is a no-op, must not raise
     assert fake_listener.instances[-1].stopped is True
+
+
+def test_stop_does_not_clear_pending_suppression(fake_listener):
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: None)
+    manager.start()
+    manager._suppress_next_event = True
+
+    manager.stop()
+
+    assert fake_listener.instances[-1].kwargs["darwin_intercept"](None, object()) is None
 
 
 def test_option_combo_matches_by_keycode(fake_listener):
@@ -184,6 +215,38 @@ def test_release_allows_refire(fake_listener):
     manager._on_release(_FakeKey(vk=0, char="å"))
     manager._on_press(_FakeKey(vk=0, char="å"))
     assert fired == [True, True]
+
+
+def test_start_always_installs_the_swallowing_intercept(fake_listener):
+    # Suppression rides on the same Input Monitoring grant the listener already
+    # needs — no second permission gate, so darwin_intercept is always wired up.
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: None)
+    manager.start()
+    assert "darwin_intercept" in fake_listener.instances[-1].kwargs
+
+
+def test_matching_macos_event_press_repeat_and_release_are_suppressed(fake_listener):
+    fired = []
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+    manager.start()
+    listener = fake_listener.instances[-1]
+    event = object()
+
+    manager._on_press(Key.alt)
+    manager._on_press(_FakeKey(vk=0, char="å"))
+
+    assert fired == [True]
+    assert listener.kwargs["darwin_intercept"](None, event) is None
+
+    manager._on_press(_FakeKey(vk=0, char="å"))  # held key auto-repeats
+    assert fired == [True]
+    assert listener.kwargs["darwin_intercept"](None, event) is None
+
+    manager._on_release(_FakeKey(vk=0, char="å"))
+    assert listener.kwargs["darwin_intercept"](None, event) is None
+    assert listener.kwargs["darwin_intercept"](None, event) is event
 
 
 def test_wrong_modifier_does_not_fire(fake_listener):
