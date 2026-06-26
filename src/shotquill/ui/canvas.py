@@ -329,14 +329,8 @@ class AnnotationCanvas(QGraphicsView):
         if event.key() in _CROP_ADJUST_KEYS and self._scene.focusItem() is None:
             event.ignore()
             return
-        if (
-            event.key() in _DELETE_KEYS
-            and self._scene.focusItem() is None
-            and not self._has_uncommitted_selected_text()
-        ):
-            if self._delete_selected_items():
-                event.accept()
-                return
+        if self.handle_delete_key(event):
+            return
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
@@ -503,6 +497,18 @@ class AnnotationCanvas(QGraphicsView):
             self._scene.removeItem(item)
             return
         self._undo.push(_AddItemCommand(self._scene, item))
+
+    def handle_delete_key(self, event) -> bool:
+        if (
+            event.key() not in _DELETE_KEYS
+            or self._scene.focusItem() is not None
+            or self._has_uncommitted_selected_text()
+        ):
+            return False
+        if not self._delete_selected_items():
+            return False
+        event.accept()
+        return True
 
     def _has_uncommitted_selected_text(self) -> bool:
         return any(

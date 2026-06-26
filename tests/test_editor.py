@@ -12,6 +12,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence  # noqa: E402
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem  # noqa: E402
 
 from shotquill.ui import editor as editor_module  # noqa: E402
 from shotquill.ui.editor import EditorWindow, RegionContext  # noqa: E402
@@ -177,6 +178,22 @@ def test_disabled_finish_keys_do_nothing(qtbot, config, tmp_path):
     qtbot.keyClick(window, Qt.Key_Return)
     assert QGuiApplication.clipboard().image().isNull()
     assert list(tmp_path.glob("ShotQuill *.png")) == []
+
+
+def test_backspace_deletes_selected_annotation_when_window_has_focus(qtbot, config):
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    item = QGraphicsRectItem(QRectF(0, 0, 10, 10))
+    item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+    window._canvas.scene().addItem(item)
+    item.setSelected(True)
+
+    qtbot.keyClick(window, Qt.Key_Backspace)
+
+    assert item.scene() is None
+    assert window._canvas.undo_stack().count() == 1
+    window._canvas.undo_stack().undo()
+    assert item.scene() is window._canvas.scene()
 
 
 def test_editor_places_canvas_over_capture_origin(qtbot, config):

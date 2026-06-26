@@ -205,6 +205,8 @@ class EditorCoreMixin:
         if event.key() in _ARROW_DELTAS and self._can_adjust():
             self._adjust_crop(event)
             return True
+        if self._canvas.handle_delete_key(event):
+            return True
         # Quick-finish keys (configurable; Space copies, Enter saves by default).
         # Both close the editor. A focused text annotation consumes the key
         # first, so these never fire mid-typing.
