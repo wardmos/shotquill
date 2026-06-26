@@ -77,6 +77,10 @@ def _draw_rect(qtbot, canvas):
     return next(i for i in canvas.scene().items() if i.zValue() > -1000)
 
 
+def _annotation_items(canvas):
+    return [item for item in canvas.scene().items() if item is not canvas._background]
+
+
 def test_move_items_command_round_trips_position(qtbot):
     from PySide6.QtCore import QPointF
 
@@ -129,6 +133,27 @@ def test_select_click_without_moving_records_no_undo(qtbot):
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
     assert canvas.undo_stack().count() == 1  # no spurious move command
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Backspace, Qt.Key_Delete])
+def test_delete_keys_remove_selected_annotation_and_are_undoable(qtbot, key):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(True)
+
+    qtbot.keyClick(canvas, key)
+
+    assert item.scene() is None
+    assert _annotation_items(canvas) == []
+    assert canvas.undo_stack().count() == 2
+
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+    assert item.isSelected()
+
+    canvas.undo_stack().redo()
+    assert item.scene() is None
+    assert _annotation_items(canvas) == []
 
 
 def test_tiny_click_is_discarded(qtbot):
@@ -330,6 +355,38 @@ def test_text_item_with_content_becomes_undoable_on_focus_out(qtbot):
     assert canvas.undo_stack().count() == 1
     canvas.undo_stack().undo()
     assert _text_items(canvas) == []
+
+
+def test_backspace_deletes_selected_text_annotation_after_editing_finishes(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText("note")
+    _finish_editing(item)
+    canvas._scene.clearFocus()
+    item.setSelected(True)
+
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert _text_items(canvas) == []
+    assert canvas.undo_stack().count() == 2
+    canvas.undo_stack().undo()
+    assert _text_items(canvas) == [item]
+
+
+def test_backspace_does_not_delete_text_annotation_while_editing(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText("note")
+    item.setSelected(True)
+    canvas._scene.setFocusItem(item, Qt.OtherFocusReason)
+
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert item.scene() is canvas.scene()
+    assert _text_items(canvas) == [item]
+    assert canvas.undo_stack().count() == 0
 
 
 def test_whitespace_only_text_item_is_discarded_on_focus_out(qtbot):

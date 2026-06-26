@@ -52,6 +52,7 @@ _NEGLIGIBLE = 3.0
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
+_DELETE_KEYS = (Qt.Key_Backspace, Qt.Key_Delete)
 # How near a viewport edge (logical points) a hover/press counts as grabbing
 # that edge of the crop, to enter mouse crop-adjustment (region captures, while
 # the canvas is still pristine).
@@ -122,6 +123,27 @@ class _MoveItemsCommand(QUndoCommand):
     def redo(self) -> None:
         for item, _old, new in self._moves:
             item.setPos(new)
+
+
+class _DeleteItemsCommand(QUndoCommand):
+    """Undoable removal of one or more selected annotation items."""
+
+    def __init__(self, scene: QGraphicsScene, items: list[QGraphicsItem]) -> None:
+        super().__init__("delete annotation")
+        self._scene = scene
+        self._items = items
+
+    def undo(self) -> None:
+        for item in self._items:
+            if item.scene() is None:
+                self._scene.addItem(item)
+            item.setSelected(True)
+
+    def redo(self) -> None:
+        for item in self._items:
+            if item.scene() is self._scene:
+                item.setSelected(False)
+                self._scene.removeItem(item)
 
 
 class AnnotationCanvas(QGraphicsView):
@@ -307,6 +329,14 @@ class AnnotationCanvas(QGraphicsView):
         if event.key() in _CROP_ADJUST_KEYS and self._scene.focusItem() is None:
             event.ignore()
             return
+        if (
+            event.key() in _DELETE_KEYS
+            and self._scene.focusItem() is None
+            and not self._has_uncommitted_selected_text()
+        ):
+            if self._delete_selected_items():
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
@@ -473,6 +503,23 @@ class AnnotationCanvas(QGraphicsView):
             self._scene.removeItem(item)
             return
         self._undo.push(_AddItemCommand(self._scene, item))
+
+    def _has_uncommitted_selected_text(self) -> bool:
+        return any(
+            isinstance(item, _TextItem) and not item.committed
+            for item in self._scene.selectedItems()
+        )
+
+    def _delete_selected_items(self) -> bool:
+        items = [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._background and item.scene() is self._scene
+        ]
+        if not items:
+            return False
+        self._undo.push(_DeleteItemsCommand(self._scene, items))
+        return True
 
     @staticmethod
     def _is_negligible(item: QGraphicsItem) -> bool:
