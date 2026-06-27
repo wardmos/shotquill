@@ -110,6 +110,20 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
     assert found_white, "expected the tray glyph to be painted white somewhere on the tile"
 
 
+def test_render_tray_pixmap_linux_keeps_mark_inside_viewfinder(qapp):
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    white_pixels = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                white_pixels.append((x, y))
+    assert white_pixels
+    _left, bottom = max(white_pixels, key=lambda point: point[1])
+    assert bottom <= 49
+
+
 @pytest.mark.skipif(
     sys.platform.startswith("win"),
     reason="Qt offscreen glyph rasterization on Windows doesn't punch the template hole; "
