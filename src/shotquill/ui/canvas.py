@@ -64,6 +64,8 @@ _MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
 _SELECTION_OUTLINE_COLOR = "#2d7ff9"
 _SELECTION_OUTLINE_VIEW_PADDING = 4.0
 _SELECTION_HANDLE_VIEW_SIZE = 8.0
+_SELECTION_DRAW_LOG_SECONDS = 2.0
+_SELECTION_DRAW_LOG_LIMIT = 8
 
 
 class _TextItem(QGraphicsTextItem):
@@ -188,6 +190,8 @@ class AnnotationCanvas(QGraphicsView):
         # as the host; a press on a viewport edge hands off to it (see the mouse
         # handlers and set_crop_host).
         self._crop_host: CropHost | None = None
+        self._selection_draw_log_until = 0.0
+        self._selection_draw_log_count = 0
         self._scene.selectionChanged.connect(self._log_selection_changed)
         self._scene.selectionChanged.connect(self._update_selection_effects)
         self._apply_drag_mode()
@@ -370,12 +374,22 @@ class AnnotationCanvas(QGraphicsView):
         return item if item is not self._background else None
 
     def _log_selection_changed(self) -> None:
+        selected_rects = self._selected_annotation_scene_rects()
         annotation_log(
             f"selection.changed selected={len(self._selected_annotation_items())} "
-            f"items={[self._item_label(item) for item in self._selected_annotation_items()]}"
+            f"items={[self._item_label(item) for item in self._selected_annotation_items()]} "
+            f"outline_rects={[self._rect_label(rect) for rect in selected_rects]} "
+            f"viewport=({self.viewport().width()},{self.viewport().height()}) "
+            f"scene_rect={self._rect_label(self._scene.sceneRect())}"
         )
 
     def _update_selection_effects(self) -> None:
+        self._selection_draw_log_until = time.monotonic() + _SELECTION_DRAW_LOG_SECONDS
+        self._selection_draw_log_count = 0
+        annotation_log(
+            f"selection.update_viewport selected={len(self._selected_annotation_items())} "
+            f"viewport=({self.viewport().width()},{self.viewport().height()})"
+        )
         self.viewport().update()
 
     def _scene_units_for_view_pixels(self, pixels: float) -> float:
@@ -393,6 +407,7 @@ class AnnotationCanvas(QGraphicsView):
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802 (Qt override)
         super().drawForeground(painter, rect)
         selected_rects = self._selected_annotation_scene_rects()
+        self._log_selection_draw(rect, selected_rects)
         if not selected_rects:
             return
 
@@ -425,12 +440,34 @@ class AnnotationCanvas(QGraphicsView):
             painter.drawLine(QPointF(right, bottom), QPointF(right, bottom - handle))
         painter.restore()
 
+    def _log_selection_draw(self, dirty_rect: QRectF, selected_rects: list[QRectF]) -> None:
+        if time.monotonic() > self._selection_draw_log_until:
+            return
+        if self._selection_draw_log_count >= _SELECTION_DRAW_LOG_LIMIT:
+            return
+        self._selection_draw_log_count += 1
+        visible_rects = [
+            rect for rect in selected_rects if not rect.intersected(dirty_rect).isNull()
+        ]
+        annotation_log(
+            f"selection.draw count={self._selection_draw_log_count} "
+            f"selected={len(self._selected_annotation_items())} "
+            f"outline_rects={[self._rect_label(rect) for rect in selected_rects]} "
+            f"visible={len(visible_rects)} dirty={self._rect_label(dirty_rect)} "
+            f"viewport=({self.viewport().width()},{self.viewport().height()}) "
+            f"transform=({self.transform().m11():.3f},{self.transform().m22():.3f})"
+        )
+
     def _item_label(self, item: QGraphicsItem | None) -> str:
         if item is None:
             return "None"
         scene_state = "scene" if item.scene() is self._scene else "detached"
         selected = item.isSelected() if item.scene() is self._scene else False
         return f"{type(item).__name__}@{id(item):x}:{scene_state}:selected={selected}"
+
+    @staticmethod
+    def _rect_label(rect: QRectF) -> str:
+        return f"({rect.x():.1f},{rect.y():.1f},{rect.width():.1f},{rect.height():.1f})"
 
     def _next_z(self) -> float:
         self._z += 1.0
