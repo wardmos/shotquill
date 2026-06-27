@@ -27,10 +27,11 @@ def _is_wayland_session() -> bool:
 def get_manager() -> HotkeyManager:
     """Pick the platform hotkey backend (the app layer's factory seam).
 
-    macOS uses pynput with hardware key-code matching (Option-safe); Windows
-    likewise matches by virtual-key code (Ctrl makes the produced character a
-    control code); Linux/X11 uses pynput with character matching; Wayland — where
-    out-of-band key grabs are refused — uses the xdg-desktop-portal
+    macOS uses Carbon RegisterEventHotKey with hardware key-code registration
+    (Option-safe); Windows likewise matches by virtual-key code (Ctrl makes the
+    produced character a control code); Linux/X11 uses pynput with character
+    matching; Wayland — where out-of-band key grabs are refused — uses the
+    xdg-desktop-portal
     GlobalShortcuts backend. The Wayland split mirrors capture (``qtgrab`` vs
     ``wayland``); the portal backend is reached without importing the
     pynput-backed X11 module."""

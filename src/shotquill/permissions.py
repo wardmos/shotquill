@@ -2,12 +2,10 @@
 # Copyright (C) 2026 wardmos
 """macOS privacy permissions: status checks and System Settings deep links.
 
-ShotQuill needs two TCC permissions — Screen Recording for captures and Input
-Monitoring for global hotkeys. Neither can be granted from inside the app;
-this module only *reads* their state (via the Quartz preflight helpers,
-macOS 10.15+) and jumps to the right System Settings pane. Tests and Linux
-development import it without PyObjC, so every check degrades to UNKNOWN
-instead of failing.
+ShotQuill needs the Screen Recording TCC permission for captures. This module
+only *reads* permission state (via the Quartz preflight helpers, macOS 10.15+)
+and jumps to the right System Settings pane. Tests and Linux development import
+it without PyObjC, so every check degrades to UNKNOWN instead of failing.
 """
 
 from __future__ import annotations
@@ -22,7 +20,6 @@ if TYPE_CHECKING:
 SCREEN_CAPTURE_PANE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 )
-# Global hotkeys require Input Monitoring, a *different* pane from screen capture.
 INPUT_MONITORING_PANE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
 )

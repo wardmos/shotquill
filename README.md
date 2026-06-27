@@ -547,7 +547,7 @@ cross-platform UI:
 | GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                  | same                                                   | same                                                   |
 | Screen capture        | ScreenCaptureKit (macOS 14+), `CGWindowList*` fallback | X11: `QScreen.grabWindow`; Wayland: `xdg-desktop-portal` over QtDBus | `QScreen.grabWindow` (per-window via `user32`) |
 | Window enumeration    | `CGWindowList` (always available)                     | X11: EWMH over `python-xlib`; Wayland: by design refuses | `user32` `EnumWindows` (Z-order top-level windows)   |
-| Global hotkeys        | `pynput` (Quartz event tap; needs Input Monitoring)   | `pynput` X11 listener (no permission needed); Wayland refuses (use compositor shortcuts) | `pynput` Win32 listener (no permission needed) |
+| Global hotkeys        | Carbon `RegisterEventHotKey` (no Input Monitoring needed) | `pynput` X11 listener (no permission needed); Wayland refuses (use compositor shortcuts) | `pynput` Win32 listener (no permission needed) |
 | Launch at login       | per-user `LaunchAgent`                                | XDG `~/.config/autostart/shotquill.desktop`            | per-user `Run` key (`HKCU\…\CurrentVersion\Run`)       |
 | Image processing      | Qt (`QImage`)                                          | same                                                   | same                                                   |
 | OCR                   | `pyobjc` → Apple Vision                                | `tesseract` CLI (when installed)                       | WinRT `Windows.Media.Ocr` (optional `windows-ocr` extra) |
@@ -590,7 +590,7 @@ src/shotquill/
 ├── config.py / i18n.py   # QSettings-backed prefs; EN/中文 string table
 ├── imaging.py            # raw capture pixels → QImage
 ├── capture/              # base.py + macos.py (ScreenCaptureKit), qtgrab.py (X11), wayland.py (portal)
-├── hotkeys/              # base.py + macos.py (Quartz tap), linux.py (pynput X11, Wayland-guarded)
+├── hotkeys/              # base.py + macos.py (Carbon), linux.py (pynput X11, Wayland-guarded)
 ├── ocr/                  # base.py interface; macos.py (Apple Vision), linux.py (Tesseract CLI)
 ├── output/               # saver.py (files), clipboard.py
 ├── autostart/            # base.py + macos.py (LaunchAgent), linux.py (XDG .desktop)
@@ -603,14 +603,13 @@ tested headlessly, and `capture/hotkeys/ocr/autostart` backends hide behind
 
 ### Platform permissions
 
-**macOS** — on first run, grant these in **System Settings → Privacy & Security**:
+**macOS** — on first run, grant this in **System Settings → Privacy & Security**:
 
 - **Screen Recording** — required to capture the screen and enumerate windows.
-- **Input Monitoring** — required for the global capture hotkeys to work while
-  other apps are focused.
 
-ShotQuill's Settings dialog shows the live status of both permissions, with a
-button that jumps straight to the right privacy pane.
+Global capture hotkeys use Carbon `RegisterEventHotKey`, so they do not require
+Input Monitoring. ShotQuill's Settings dialog shows the live status of Screen
+Recording, with a button that jumps straight to the right privacy pane.
 
 **Linux / X11** — no special permission is required: the X server lets every
 client read the screen and listen for keys. `xhost`-style restrictions, an

@@ -310,3 +310,13 @@ def test_doctor_hotkeys_check_reports_x11_pynput(monkeypatch):
     check = headless._check_hotkeys()
     assert check["available"] is True
     assert "X11" in check["detail"]
+
+
+def test_doctor_hotkeys_check_reports_macos_carbon(monkeypatch):
+    from shotquill import headless
+
+    monkeypatch.setattr(headless.sys, "platform", "darwin")
+    check = headless._check_hotkeys()
+    assert check["available"] is True
+    assert "RegisterEventHotKey" in check["detail"]
+    assert "Input Monitoring" not in check["detail"]
