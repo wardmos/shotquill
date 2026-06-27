@@ -9,6 +9,11 @@ pytest.importorskip("PySide6")
 from shotquill.ui.settings import SettingsDialog, _EditorKeyRow, _HotkeyRow  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _valid_save_dir(config, tmp_path):
+    config.set_save_dir(str(tmp_path / "captures"))
+
+
 def test_hotkey_row_round_trips_a_combo(qtbot):
     row = _HotkeyRow("<cmd>+<shift>+a")
     qtbot.addWidget(row)
