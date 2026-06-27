@@ -782,7 +782,7 @@ def test_fullscreen_capture_refuses_blocklist_when_windows_unavailable(
 
     monkeypatch.setattr(capturer, "list_windows", _raise)
     grabbed, delivered, notified = [], [], []
-    monkeypatch.setattr(capturer, "capture_fullscreen_image", lambda *a: grabbed.append(True))
+    monkeypatch.setattr(capturer, "capture_fullscreen", lambda *a, **k: grabbed.append(True))
     app = _build_app(qapp, fakes)
     monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
     monkeypatch.setattr(app, "_notify", notified.append)
