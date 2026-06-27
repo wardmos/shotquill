@@ -58,8 +58,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve smoke artifact version
         id: smoke
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          short_sha="$(git rev-parse --short=7 HEAD)"
+          short_sha="${SOURCE_SHA:0:7}"
           version="v0.0.0-smoke-$short_sha"
           artifact_suffix="-$short_sha"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -111,8 +113,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve smoke artifact version
         id: smoke
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          short_sha="$(git rev-parse --short=7 HEAD)"
+          short_sha="${SOURCE_SHA:0:7}"
           version="v0.0.0-smoke-$short_sha"
           artifact_suffix="-$short_sha"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -186,8 +190,10 @@ jobs:
       - name: Resolve smoke artifact version
         id: smoke
         shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          $shortSha = (git rev-parse --short=7 HEAD).Trim()
+          $shortSha = $env:SOURCE_SHA.Substring(0, 7)
           $version = "v0.0.0-smoke-$shortSha"
           $artifactSuffix = "-$shortSha"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
