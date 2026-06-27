@@ -792,9 +792,7 @@ def test_fullscreen_capture_refuses_blocklist_when_windows_unavailable(
     app.shutdown()
 
 
-def test_smart_capture_refuses_blocklist_when_windows_unavailable(
-    qapp, config, fakes, monkeypatch
-):
+def test_smart_capture_refuses_blocklist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
     from shotquill import blocklist as bl
     from shotquill.headless import CapabilityUnsupported
 
@@ -815,9 +813,7 @@ def test_smart_capture_refuses_blocklist_when_windows_unavailable(
     app.shutdown()
 
 
-def test_smart_capture_refuses_allowlist_when_windows_unavailable(
-    qapp, config, fakes, monkeypatch
-):
+def test_smart_capture_refuses_allowlist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
     from shotquill import allowlist as al
     from shotquill import blocklist as bl
     from shotquill.headless import CapabilityUnsupported
