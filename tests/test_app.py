@@ -60,7 +60,7 @@ def test_build_icon_marks_macos_template(qapp, monkeypatch):
 
 def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
     # Non-Mac desktops (Linux/X11 tray) don't tint masks: marking the icon as
-    # a template here would leave a black tile with a transparent "S" — i.e.
+    # a template here would leave a black tile with transparent glyphs — i.e.
     # the very bug the multi-size Linux branch was added to avoid.
     monkeypatch.setattr(app_module.sys, "platform", "linux")
     icon = app_module._build_icon()
@@ -69,7 +69,7 @@ def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
 
 def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
     # The renderer derives padding / radius / glyph height from ``size`` so
-    # small tray panels still get a readable "S" instead of a near-empty tile.
+    # small tray panels still get a readable mark instead of a near-empty tile.
     # Check the extremes the icon factory actually asks for (16 and 64) and
     # confirm each produces a non-empty pixmap with some opaque pixels.
     from PySide6.QtCore import Qt
@@ -78,9 +78,9 @@ def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
         pixmap = app_module._render_tray_pixmap(size, is_mac=False)
         assert pixmap.size().width() == size
         assert pixmap.size().height() == size
-        # Sample the centre pixel: the "S" sits there and is painted white,
-        # so the alpha must be non-zero. (Fully transparent centre would
-        # mean either the tile or the glyph went missing.)
+        # Sample the centre pixel: the mark sits there, so the alpha must be
+        # non-zero. (Fully transparent centre would mean either the tile or the
+        # glyph went missing.)
         centre = pixmap.toImage().pixelColor(size // 2, size // 2)
         assert centre.alpha() > 0
         # And not the placeholder transparent fill.
@@ -88,7 +88,7 @@ def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
 
 
 def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
-    # The Linux/X11 tray path can't tint masks, so the "S" must be painted
+    # The Linux/X11 tray path can't tint masks, so the mark must be painted
     # directly — verify by scanning for any white-ish pixel. A regression
     # that left the glyph unpainted (or painted it black on black) would
     # leave only a featureless black tile that's invisible against a dark
@@ -107,7 +107,7 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
                 break
         if found_white:
             break
-    assert found_white, "expected the 'S' glyph to be painted white somewhere on the tile"
+    assert found_white, "expected the tray glyph to be painted white somewhere on the tile"
 
 
 @pytest.mark.skipif(
@@ -117,12 +117,12 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
 )
 def test_render_tray_pixmap_macos_knocks_glyph_out_of_mask(qapp):
     # macOS reads the icon as a *template*: every opaque pixel is tinted by
-    # AppKit, every transparent pixel passes through. The "S" is rendered
+    # AppKit, every transparent pixel passes through. The mark is rendered
     # with ``CompositionMode_DestinationOut`` so the glyph carves a
     # transparent hole through the black tile — the menu-bar colour shines
     # through there. A regression that swapped the composition mode (e.g.
     # painted black-on-black) would still produce a black tile but with no
-    # punched-out "S", so the icon would read as a solid square. Detect by
+    # punched-out mark, so the icon would read as a solid square. Detect by
     # confirming there's at least one fully-transparent pixel *inside* the
     # tile boundary: only the knock-out path produces that.
     pixmap = app_module._render_tray_pixmap(64, is_mac=True)
@@ -137,7 +137,7 @@ def test_render_tray_pixmap_macos_knocks_glyph_out_of_mask(qapp):
                 break
         if found_hole:
             break
-    assert found_hole, "macOS template must punch the 'S' out of the black tile"
+    assert found_hole, "macOS template must punch the mark out of the black tile"
     # The macOS path never paints white — only black with knock-outs — so any
     # white pixel anywhere means the wrong branch ran.
     for y in range(image.height()):
