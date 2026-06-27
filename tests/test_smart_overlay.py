@@ -377,6 +377,21 @@ def test_painted_window_uses_unoccluded_preview_pixels(qtbot):
     assert (after.red(), after.green(), after.blue()) == (255, 0, 0)
 
 
+def test_preview_cache_is_bounded(qtbot):
+    windows = [
+        WindowInfo(window_id=i, owner=f"Demo {i}", title="", bounds=Rect(i * 10, 0, 10, 10))
+        for i in range(4)
+    ]
+    overlay = _overlay(qtbot, windows=windows)
+
+    for window in windows:
+        overlay._on_preview_ready(window.window_id, _screenshot(10, 10, "red"))
+
+    assert len(overlay._previews) <= 3
+    assert 0 not in overlay._previews
+    assert set(overlay._previews) == {1, 2, 3}
+
+
 def test_pointed_window_gets_hairline_before_highlight_switches(qtbot):
     # Pointing must give instant feedback even though the highlight only
     # switches on a click (the default): the window under the pointer is

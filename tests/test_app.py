@@ -939,6 +939,30 @@ def test_smart_region_delivers_when_allowlist_disabled(qapp, config, fakes, monk
     app.shutdown()
 
 
+def test_smart_region_skips_region_context_when_adjust_disabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    config.set_region_adjust(False)
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+    delivered = []
+    monkeypatch.setattr(
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((origin, region)),
+    )
+    app._smart_screenshot = QImage(4, 3, QImage.Format.Format_ARGB32)
+    app._smart_geometry = QRect(0, 0, 4, 3)
+
+    app._smart_region_selected(QImage(2, 2, QImage.Format.Format_ARGB32), QRect(0, 0, 2, 2))
+
+    assert delivered == [(QRect(0, 0, 2, 2), None)]
+    app.shutdown()
+
+
 def test_capture_window_image_refuses_not_allowed_window(qapp, config, fakes, monkeypatch):
     from PySide6.QtCore import QRect
 
@@ -1256,6 +1280,23 @@ def test_smart_capture_shelves_open_settings_until_overlay_closes(qapp, config, 
     overlay.close()  # every accept/cancel path ends in close()
     qapp.sendPostedEvents(None, QEvent.DeferredDelete)  # let WA_DeleteOnClose land
     assert dialog.isVisible()  # restored, not closed: edits survive
+    app.shutdown()
+
+
+def test_smart_capture_releases_fullscreen_snapshot_when_overlay_closes(qapp, config, fakes):
+    from PySide6.QtCore import QEvent
+
+    app = _build_app(qapp, fakes)
+    app._capture_smart()
+    assert app._smart_screenshot is not None
+    assert app._smart_geometry is not None
+
+    overlay = next(w for w in app._windows if isinstance(w, app_module.SmartOverlay))
+    overlay.close()
+    qapp.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    assert app._smart_screenshot is None
+    assert app._smart_geometry is None
     app.shutdown()
 
 
