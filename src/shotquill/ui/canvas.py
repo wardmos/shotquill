@@ -26,7 +26,6 @@ from PySide6.QtGui import (
     QUndoStack,
 )
 from PySide6.QtWidgets import (
-    QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -62,8 +61,9 @@ _CROP_EDGE_MARGIN = 10.0
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
 _MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
-_SELECTION_GLOW_COLOR = "#2d7ff9"
-_SELECTION_GLOW_BLUR = 14
+_SELECTION_OUTLINE_COLOR = "#2d7ff9"
+_SELECTION_OUTLINE_VIEW_PADDING = 4.0
+_SELECTION_HANDLE_VIEW_SIZE = 8.0
 
 
 class _TextItem(QGraphicsTextItem):
@@ -376,19 +376,54 @@ class AnnotationCanvas(QGraphicsView):
         )
 
     def _update_selection_effects(self) -> None:
-        for item in self._annotation_items():
-            effect = item.graphicsEffect()
-            selected_glow = bool(effect and effect.property("shotquillSelectionGlow"))
-            if item.isSelected():
-                if not selected_glow:
-                    glow = QGraphicsDropShadowEffect()
-                    glow.setProperty("shotquillSelectionGlow", True)
-                    glow.setColor(QColor(_SELECTION_GLOW_COLOR))
-                    glow.setBlurRadius(_SELECTION_GLOW_BLUR)
-                    glow.setOffset(0, 0)
-                    item.setGraphicsEffect(glow)
-            elif selected_glow:
-                item.setGraphicsEffect(None)
+        self.viewport().update()
+
+    def _scene_units_for_view_pixels(self, pixels: float) -> float:
+        transform = self.transform()
+        scale = max(abs(transform.m11()), abs(transform.m22()), 0.01)
+        return pixels / scale
+
+    def _selected_annotation_scene_rects(self) -> list[QRectF]:
+        padding = self._scene_units_for_view_pixels(_SELECTION_OUTLINE_VIEW_PADDING)
+        return [
+            item.mapRectToScene(item.boundingRect()).adjusted(-padding, -padding, padding, padding)
+            for item in self._selected_annotation_items()
+        ]
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802 (Qt override)
+        super().drawForeground(painter, rect)
+        selected_rects = self._selected_annotation_scene_rects()
+        if not selected_rects:
+            return
+
+        pen = QPen(QColor(_SELECTION_OUTLINE_COLOR))
+        pen.setWidthF(1.5)
+        pen.setCosmetic(True)
+        pen.setStyle(Qt.DashLine)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+
+        handle = self._scene_units_for_view_pixels(_SELECTION_HANDLE_VIEW_SIZE)
+        for selected_rect in selected_rects:
+            visible = selected_rect.intersected(rect)
+            if visible.isNull():
+                continue
+            painter.drawRect(selected_rect)
+            left = selected_rect.left()
+            right = selected_rect.right()
+            top = selected_rect.top()
+            bottom = selected_rect.bottom()
+            painter.drawLine(QPointF(left, top), QPointF(left + handle, top))
+            painter.drawLine(QPointF(left, top), QPointF(left, top + handle))
+            painter.drawLine(QPointF(right, top), QPointF(right - handle, top))
+            painter.drawLine(QPointF(right, top), QPointF(right, top + handle))
+            painter.drawLine(QPointF(left, bottom), QPointF(left + handle, bottom))
+            painter.drawLine(QPointF(left, bottom), QPointF(left, bottom - handle))
+            painter.drawLine(QPointF(right, bottom), QPointF(right - handle, bottom))
+            painter.drawLine(QPointF(right, bottom), QPointF(right, bottom - handle))
+        painter.restore()
 
     def _item_label(self, item: QGraphicsItem | None) -> str:
         if item is None:
