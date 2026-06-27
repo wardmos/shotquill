@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import os
 
-_CROP_ENABLED = bool(os.environ.get("SHOTQUILL_CROP_DEBUG"))
+_ENABLED = bool(os.environ.get("SHOTQUILL_CROP_DEBUG"))
 _ANNOTATION_ENABLED = bool(os.environ.get("SHOTQUILL_ANNOTATION_DEBUG"))
 
 
 def crop_log(message: str) -> None:  # pragma: no cover - opt-in diagnostic
-    _write_log("crop-debug.log", message, enabled=_CROP_ENABLED)
+    _write_log("crop-debug.log", message, enabled=_ENABLED)
 
 
 def annotation_log(message: str) -> None:  # pragma: no cover - opt-in diagnostic
