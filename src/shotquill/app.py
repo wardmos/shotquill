@@ -30,7 +30,6 @@ from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
-from shotquill.ui._debug import annotation_log, annotation_log_path
 from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
@@ -296,7 +295,6 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_fullscreen(self) -> None:
-        annotation_log("capture.fullscreen start")
         self._shelve_settings_dialog()
         blocklist = self._load_blocklist_or_abort()
         if blocklist is None:
@@ -317,12 +315,10 @@ class ShotquillApp(QObject):
         finally:
             self._unshelve_settings_dialog()
         if screenshot is not None:
-            annotation_log("capture.fullscreen deliver")
             self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
 
     @Slot()
     def _capture_smart(self) -> None:
-        annotation_log("capture.smart start")
         self._shelve_settings_dialog()
         blocklist = self._load_blocklist_or_abort()
         if blocklist is None:
@@ -553,13 +549,8 @@ class ShotquillApp(QObject):
         # and skips the editor. With both auto toggles off, the editor opens —
         # placed over ``origin`` (the shot's on-screen rect) when known, with
         # ``region`` keeping a region capture's crop arrow-key adjustable there.
-        annotation_log(
-            f"capture.deliver size={image.width()}x{image.height()} "
-            f"origin={origin} region={region is not None}"
-        )
         self._signal_capture()
         if self._auto_output(image):
-            annotation_log("capture.deliver auto_output")
             return
         self._open_editor(image, origin, region)
 
@@ -598,18 +589,11 @@ class ShotquillApp(QObject):
         if not self._config.region_adjust():
             region = None  # the user turned crop adjustment off in Settings
         editor = self._make_editor(image, origin, region)
-        annotation_log(f"editor.open shell={type(editor).__name__} origin={origin}")
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)
         editor.show()
         editor.raise_()
         editor.activateWindow()
-        focus_widget = editor.focusWidget()
-        annotation_log(
-            f"editor.open shown shell={type(editor).__name__} "
-            f"active={editor.isActiveWindow()} "
-            f"focus={type(focus_widget).__name__ if focus_widget else None}"
-        )
 
     def _make_editor(self, image: QImage, origin: QRect | None, region: RegionContext | None):
         """Pick the editor shell: the unified full-screen spotlight surface when
@@ -740,7 +724,6 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ShotQuill")
     app.setQuitOnLastWindowClosed(False)
-    annotation_log(f"app.start version={__version__} log={annotation_log_path()}")
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         from shotquill.i18n import tray_unavailable_body_key

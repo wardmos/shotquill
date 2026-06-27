@@ -37,11 +37,3 @@ def test_swallows_errors_when_enabled(monkeypatch):
     monkeypatch.setattr(paths, "capture_tmp_dir", _boom)
     # Must not propagate — diagnostics never break the app.
     _debug.crop_log("entry")
-
-
-def test_annotation_log_uses_platform_log_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(paths, "audit_log_path", lambda: tmp_path / "Logs" / "audit.log")
-    _debug.annotation_log("annotation entry")
-    assert (tmp_path / "Logs" / "annotation-debug.log").read_text(encoding="utf-8") == (
-        "annotation entry\n"
-    )

@@ -23,7 +23,6 @@ from PySide6.QtCore import QKeyCombination, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QImage, QKeySequence, QPixmap
 
 from shotquill.i18n import adjust_hint_key, key_display_name, t
-from shotquill.ui._debug import annotation_log
 from shotquill.ui.canvas import AnnotationCanvas
 from shotquill.ui.geometry import scale_rect_edges
 from shotquill.ui.toolbar import create_toolbar
@@ -202,12 +201,7 @@ class EditorCoreMixin:
         """
         if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
             focus_item = self._canvas.scene().focusItem()
-            annotation_log(
-                f"editor.key key={event.key()} modifiers={event.modifiers()} "
-                f"focus_item={type(focus_item).__name__ if focus_item else None} "
-                f"selected={len(self._canvas.scene().selectedItems())}"
-            )
-            if focus_item is None and self._canvas.delete_selected_items(source="editor.key"):
+            if focus_item is None and self._canvas.delete_selected_items():
                 event.accept()
                 return True
         # Crop adjustment first: until the first annotation lands, the arrow keys
