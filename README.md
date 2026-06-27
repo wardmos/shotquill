@@ -316,9 +316,9 @@ blocklist defends against an over-eager or prompt-injected agent reaching for
 a password manager *through ShotQuill*, not against a determined adversary
 with code execution. Two honest limits: a full-screen capture can only be
 redacted where windows can be enumerated (macOS and X11; not under Wayland,
-which forbids it — the gap is logged as `redact_unavailable` rather than
-silently passed through), and an unreadable blocklist file fails *closed*
-(captures are refused until you fix it).
+which forbids it — blocklist-protected whole-screen / interactive captures are
+refused there rather than captured plainly), and an unreadable blocklist file
+fails *closed* (captures are refused until you fix it).
 
 ---
 

@@ -186,9 +186,10 @@ def _capture_image(
     capturer = headless.get_capturer(include_cursor=include_cursor)
     if getattr(args, "interactive", False):
         # The compositor frames the shot and hands back the user's selection.
-        # An enforcing allowlist still refuses it (the picker can land on any
-        # window or the whole screen — same contract as a fullscreen grab); the
-        # blocklist cannot apply on Wayland, so the picker is the only gate.
+        # An enforcing allowlist refuses it (the picker can land on any window
+        # or the whole screen — same contract as a fullscreen grab). An active
+        # blocklist also refuses it because the already-composited selection
+        # cannot be checked/redacted after the portal returns it.
         result, target, matched = headless.perform_interactive_capture(capturer, via="cli")
     else:
         result, target, matched = headless.perform_capture(

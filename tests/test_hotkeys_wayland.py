@@ -184,6 +184,82 @@ def test_globalshortcuts_available_returns_bool_without_raising():
     assert isinstance(wayland.globalshortcuts_available(), bool)
 
 
+def test_request_handle_path_derives_per_portal_spec():
+    assert (
+        wayland._request_handle_path(":1.42", "shotquill_abc")
+        == "/org/freedesktop/portal/desktop/request/1_42/shotquill_abc"
+    )
+    assert (
+        wayland._request_handle_path("1.512", "token")
+        == "/org/freedesktop/portal/desktop/request/1_512/token"
+    )
+
+
+def test_call_request_subscribes_to_predicted_response_before_call(monkeypatch):
+    manager = WaylandHotkeyManager()
+    events = []
+    callbacks = []
+
+    class _Timer:
+        def setSingleShot(self, value):
+            pass
+
+        @property
+        def timeout(self):
+            return self
+
+        def connect(self, callback):
+            pass
+
+        def start(self, timeout):
+            pass
+
+    class _Loop:
+        def exec(self):
+            # A real test bus would deliver the signal asynchronously. Here the
+            # point is ordering: the predicted-path connect must already exist
+            # before the portal method call is made, or a fast Response can be
+            # missed in production.
+            events.append(("loop",))
+            callbacks[-1](_Message(0, {}))
+
+        def quit(self):
+            pass
+
+    class _Reply:
+        def arguments(self):
+            return ["/org/freedesktop/portal/desktop/request/1_42/token"]
+
+        def errorMessage(self):
+            return ""
+
+    class _Bus:
+        def baseService(self):
+            return ":1.42"
+
+        def connect(self, service, path, iface, signal, callback):
+            events.append(("connect", path))
+            callbacks.append(callback)
+            return True
+
+        def disconnect(self, service, path, iface, signal, callback):
+            events.append(("disconnect", path))
+
+    class _Iface:
+        def call(self, method, *args):
+            events.append(("call", method))
+            return _Reply()
+
+    monkeypatch.setattr(wayland, "_PORTAL_TIMEOUT_MS", 1)
+    monkeypatch.setattr("PySide6.QtCore.QTimer", _Timer)
+    monkeypatch.setattr("PySide6.QtCore.QEventLoop", _Loop)
+    result = manager._call_request(_Bus(), _Iface(), "BindShortcuts", "token", "session", [], "", {})
+    predicted = "/org/freedesktop/portal/desktop/request/1_42/token"
+    assert result == {}
+    assert events[0] == ("connect", predicted)
+    assert events[1] == ("call", "BindShortcuts")
+
+
 def test_get_manager_routes_wayland_to_portal_backend(monkeypatch):
     from shotquill import hotkeys
 
