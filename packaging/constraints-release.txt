@@ -19,7 +19,7 @@ pyinstaller-hooks-contrib==2026.6
 
 # All pyobjc packages release in lockstep; pin the core plus every framework
 # binding pyproject.toml declares.
-pyobjc-core==12.2
+pyobjc-core==12.2.1
 pyobjc-framework-Cocoa==12.2
 pyobjc-framework-Quartz==12.2
 pyobjc-framework-ScreenCaptureKit==12.2
