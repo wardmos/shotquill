@@ -135,6 +135,32 @@ def test_select_click_without_moving_records_no_undo(qtbot):
     assert canvas.undo_stack().count() == 1  # no spurious move command
 
 
+def test_selected_annotation_gets_a_subtle_visual_effect(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+
+    item.setSelected(True)
+
+    effect = item.graphicsEffect()
+    assert effect is not None
+    assert effect.property("shotquillSelectionGlow") is True
+
+    item.setSelected(False)
+    assert item.graphicsEffect() is None
+
+
+def test_selection_effect_is_not_exported(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(True)
+    assert item.graphicsEffect() is not None
+
+    image = canvas.export_image()
+
+    assert not image.isNull()
+    assert item.graphicsEffect() is None
+
+
 def test_delete_key_removes_selected_item_and_is_undoable(qtbot):
     canvas = _canvas(qtbot)
     item = _draw_rect(qtbot, canvas)

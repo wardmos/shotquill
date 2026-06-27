@@ -26,6 +26,7 @@ from PySide6.QtGui import (
     QUndoStack,
 )
 from PySide6.QtWidgets import (
+    QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -61,6 +62,8 @@ _CROP_EDGE_MARGIN = 10.0
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
 _MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
+_SELECTION_GLOW_COLOR = "#2d7ff9"
+_SELECTION_GLOW_BLUR = 14
 
 
 class _TextItem(QGraphicsTextItem):
@@ -186,6 +189,7 @@ class AnnotationCanvas(QGraphicsView):
         # handlers and set_crop_host).
         self._crop_host: CropHost | None = None
         self._scene.selectionChanged.connect(self._log_selection_changed)
+        self._scene.selectionChanged.connect(self._update_selection_effects)
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -370,6 +374,21 @@ class AnnotationCanvas(QGraphicsView):
             f"selection.changed selected={len(self._selected_annotation_items())} "
             f"items={[self._item_label(item) for item in self._selected_annotation_items()]}"
         )
+
+    def _update_selection_effects(self) -> None:
+        for item in self._annotation_items():
+            effect = item.graphicsEffect()
+            selected_glow = bool(effect and effect.property("shotquillSelectionGlow"))
+            if item.isSelected():
+                if not selected_glow:
+                    glow = QGraphicsDropShadowEffect()
+                    glow.setProperty("shotquillSelectionGlow", True)
+                    glow.setColor(QColor(_SELECTION_GLOW_COLOR))
+                    glow.setBlurRadius(_SELECTION_GLOW_BLUR)
+                    glow.setOffset(0, 0)
+                    item.setGraphicsEffect(glow)
+            elif selected_glow:
+                item.setGraphicsEffect(None)
 
     def _item_label(self, item: QGraphicsItem | None) -> str:
         if item is None:
