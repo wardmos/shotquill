@@ -48,6 +48,7 @@ dmypy.json
 coverage.xml
 *.cover
 htmlcov/
+site/
 nosetests.xml
 junit*.xml
 
@@ -61,6 +62,11 @@ junit*.xml
 *.deb
 *.rpm
 *.snap
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.xz
 
 # ── PyInstaller ─────────────────────────────────────────
 *.spec
@@ -68,6 +74,8 @@ junit*.xml
 # CLI exes); it's source, not a generated artifact.
 !packaging/windows/shotquill.spec
 *.manifest
+upx/
+upx.zip
 
 # ── OS — macOS ──────────────────────────────────────────
 .DS_Store
