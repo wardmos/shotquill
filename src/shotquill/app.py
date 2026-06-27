@@ -420,6 +420,7 @@ class ShotquillApp(QObject):
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
         overlay.destroyed.connect(self._unshelve_settings_dialog)
+        overlay.destroyed.connect(self._clear_smart_capture_state)
         overlay.destroyed.connect(lambda: self._clear_smart_debug_id(operation_id))
         # present_overlay shows the overlay the way the platform needs: one
         # stay-on-top window spanning the virtual desktop (X11), Wayland
@@ -463,9 +464,10 @@ class ShotquillApp(QObject):
             _LOG.debug("op=%s smart_region refused allowlist_enabled=true", self._smart_debug_id)
             return
         _LOG.debug("op=%s smart_region deliver rect=%s", self._smart_debug_id, rect)
-        self._deliver_capture(
-            image, rect, region=RegionContext(self._smart_screenshot, self._smart_geometry)
-        )
+        region = None
+        if self._config.region_adjust():
+            region = RegionContext(self._smart_screenshot, self._smart_geometry)
+        self._deliver_capture(image, rect, region=region)
 
     def _smart_fullscreen_selected(self) -> None:
         """Deliver the full-screen shot, unless the allowlist forbids it."""
@@ -883,6 +885,10 @@ class ShotquillApp(QObject):
     def _clear_smart_debug_id(self, operation_id: str) -> None:
         if self._smart_debug_id == operation_id:
             self._smart_debug_id = None
+
+    def _clear_smart_capture_state(self) -> None:
+        self._smart_screenshot = None
+        self._smart_geometry = None
 
     def shutdown(self) -> None:
         self._hotkeys.stop()

@@ -85,6 +85,10 @@ _DRAG_THRESHOLD = 4
 # How long the pointer must rest on a window before its un-occluded preview is
 # fetched — sweeping across windows must not fire a capture per window passed.
 _PREVIEW_DELAY_MS = 120
+# Keep only a few un-occluded window previews: each entry is a QPixmap that may
+# be a full-size window surface, so sweeping across many windows must not retain
+# every one until the overlay closes.
+_MAX_WINDOW_PREVIEWS = 3
 # Keyboard cursor nudging: arrows or WASD move the *real* pointer one logical
 # point per press (Shift steps by 10) so a drag can start, follow, and end on
 # an exact pixel — the loupe magnifies, but the hand still has to hit the
@@ -547,6 +551,7 @@ class SmartOverlay(QWidget):
         # A null image marks a failed fetch; remember it so it isn't retried and
         # painting keeps using the frozen screenshot for that window.
         self._previews[window_id] = None if image.isNull() else QPixmap.fromImage(image)
+        self._trim_preview_cache()
         if self._hover is not None and self._windows[self._hover].window_id == window_id:
             self._refresh()
         else:
@@ -554,12 +559,36 @@ class SmartOverlay(QWidget):
             # now-hovered window (if any) so it isn't starved by the busy gate.
             self._schedule_preview()
 
+    def _trim_preview_cache(self) -> None:
+        """Drop the oldest preview entries, keeping the current hover if possible."""
+        if len(self._previews) <= _MAX_WINDOW_PREVIEWS:
+            return
+        current_id = self._windows[self._hover].window_id if self._hover is not None else None
+        while len(self._previews) > _MAX_WINDOW_PREVIEWS:
+            for cached_id in list(self._previews):
+                if cached_id != current_id:
+                    self._previews.pop(cached_id, None)
+                    break
+            else:
+                self._previews.pop(next(iter(self._previews)), None)
+
     def closeEvent(self, event) -> None:
         # No new preview fetches once the overlay is going away; an in-flight
         # worker may still finish, but its result is dropped above.
         self._closed = True
         self._hover_timer.stop()
         self._preview_timer.stop()
+        controller = getattr(self, "_controller", None)
+        if hasattr(self, "_controller"):
+            delattr(self, "_controller")
+        if controller is not None:
+            release = getattr(controller, "release", None)
+            if callable(release):
+                release()
+        self._previews.clear()
+        self._windows = []
+        self._screenshot = QImage()
+        self._pixmap = QPixmap()
         super().closeEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -1047,7 +1076,15 @@ class SmartOverlayController:
     def _close_views(self) -> None:
         for view in self._live_views():
             view.close()
+            view._on_focus_change = None
+            view._brain = None
         self._views = []
+
+    def release(self) -> None:
+        """Break references to the overlay brain and its per-screen views."""
+        self._finished = True
+        self._close_views()
+        self._brain = None
 
     def _on_focus_change(self) -> None:
         # Cancel if focus left every one of our views (a hot corner, Cmd-Tab, a
