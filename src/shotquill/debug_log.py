@@ -123,8 +123,7 @@ def _debug_handlers(logger: logging.Logger) -> list[logging.FileHandler]:
     return [
         handler
         for handler in logger.handlers
-        if getattr(handler, _HANDLER_MARKER, False)
-        and isinstance(handler, logging.FileHandler)
+        if getattr(handler, _HANDLER_MARKER, False) and isinstance(handler, logging.FileHandler)
     ]
 
 
