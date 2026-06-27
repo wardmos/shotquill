@@ -796,6 +796,9 @@ def test_ocr_unsupported_exits_4(monkeypatch, capsys):
 
     monkeypatch.setattr(headless, "get_recognizer", _nope)
     assert cli.main(["ocr", "whatever.png"]) == headless.EXIT_UNSUPPORTED
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "squill: ocr is not available: requires macOS Vision" in err
 
 
 def test_ocr_captures_when_no_path(fake_recognizer, fake_capturer, capsys, isolated_audit):
