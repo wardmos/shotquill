@@ -392,6 +392,33 @@ def test_preview_cache_is_bounded(qtbot):
     assert set(overlay._previews) == {1, 2, 3}
 
 
+def test_close_releases_controller_cycle_and_pixel_buffers(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: _screenshot())
+    overlay._on_preview_ready(42, _screenshot(10, 10, "red"))
+
+    class _Controller:
+        def __init__(self, brain):
+            self._brain = brain
+            self.released = False
+
+        def release(self):
+            self.released = True
+            self._brain = None
+
+    controller = _Controller(overlay)
+    overlay._controller = controller
+
+    overlay.close()
+
+    assert controller.released is True
+    assert controller._brain is None
+    assert getattr(overlay, "_controller", None) is None
+    assert overlay._previews == {}
+    assert overlay._windows == []
+    assert overlay._screenshot.isNull()
+    assert overlay._pixmap.isNull()
+
+
 def test_pointed_window_gets_hairline_before_highlight_switches(qtbot):
     # Pointing must give instant feedback even though the highlight only
     # switches on a click (the default): the window under the pointer is

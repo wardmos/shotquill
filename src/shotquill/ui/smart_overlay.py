@@ -578,6 +578,17 @@ class SmartOverlay(QWidget):
         self._closed = True
         self._hover_timer.stop()
         self._preview_timer.stop()
+        controller = getattr(self, "_controller", None)
+        if hasattr(self, "_controller"):
+            delattr(self, "_controller")
+        if controller is not None:
+            release = getattr(controller, "release", None)
+            if callable(release):
+                release()
+        self._previews.clear()
+        self._windows = []
+        self._screenshot = QImage()
+        self._pixmap = QPixmap()
         super().closeEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -1065,7 +1076,15 @@ class SmartOverlayController:
     def _close_views(self) -> None:
         for view in self._live_views():
             view.close()
+            view._on_focus_change = None
+            view._brain = None
         self._views = []
+
+    def release(self) -> None:
+        """Break references to the overlay brain and its per-screen views."""
+        self._finished = True
+        self._close_views()
+        self._brain = None
 
     def _on_focus_change(self) -> None:
         # Cancel if focus left every one of our views (a hot corner, Cmd-Tab, a
