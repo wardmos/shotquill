@@ -147,6 +147,7 @@ def test_delete_key_removes_selected_item_and_is_undoable(qtbot):
     qtbot.keyClick(canvas, Qt.Key_Delete)
 
     assert item.scene() is None
+    assert not item.isSelected()
     assert stack.count() == 2
     stack.undo()
     assert item.scene() is canvas.scene()

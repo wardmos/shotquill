@@ -144,6 +144,7 @@ class _DeleteItemsCommand(QUndoCommand):
         annotation_log(f"delete.command redo count={len(self._items)}")
         for item, _was_selected in self._items:
             if item.scene() is self._scene:
+                item.setSelected(False)
                 self._scene.removeItem(item)
 
 

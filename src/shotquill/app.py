@@ -30,6 +30,7 @@ from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
+from shotquill.ui._debug import annotation_log, annotation_log_path
 from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
@@ -724,6 +725,7 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ShotQuill")
     app.setQuitOnLastWindowClosed(False)
+    annotation_log(f"app.start version={__version__} log={annotation_log_path()}")
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         from shotquill.i18n import tray_unavailable_body_key

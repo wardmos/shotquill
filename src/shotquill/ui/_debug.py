@@ -8,14 +8,15 @@ to ``<temp>/shotquill/crop-debug.log``. This pins down macOS-only crop edge-drag
 behaviour that cannot be reproduced on a headless / non-macOS host. The log holds
 only geometry (sizes and coordinates), never image pixels.
 
-Annotation editing decisions are written unconditionally to
-``<temp>/shotquill/annotation-debug.log`` while this diagnostics branch is under
-test.
+Annotation editing decisions are written unconditionally to the platform log
+directory (``~/Library/Logs/shotquill/annotation-debug.log`` on macOS) while
+this diagnostics branch is under test.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 _ENABLED = bool(os.environ.get("SHOTQUILL_CROP_DEBUG"))
 _ANNOTATION_ENABLED = True
@@ -26,7 +27,21 @@ def crop_log(message: str) -> None:  # pragma: no cover - opt-in diagnostic
 
 
 def annotation_log(message: str) -> None:  # pragma: no cover - opt-in diagnostic
-    _write_log("annotation-debug.log", message, enabled=_ANNOTATION_ENABLED)
+    if not _ANNOTATION_ENABLED:
+        return
+    try:
+        path = annotation_log_path()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(message + "\n")
+    except Exception:
+        pass  # diagnostics must never break the app
+
+
+def annotation_log_path() -> Path:
+    from shotquill.paths import audit_log_path
+
+    return audit_log_path().with_name("annotation-debug.log")
 
 
 def _write_log(filename: str, message: str, *, enabled: bool) -> None:  # pragma: no cover

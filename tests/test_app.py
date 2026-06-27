@@ -202,6 +202,19 @@ def test_run_shows_dialog_when_tray_unavailable(qapp, monkeypatch):
     assert body
 
 
+def test_run_writes_annotation_startup_log(qapp, monkeypatch):
+    shown = _stub_run_environment(qapp, monkeypatch)
+    logs = []
+    monkeypatch.setattr(app_module, "annotation_log", lambda message: logs.append(message))
+    monkeypatch.setattr(app_module, "annotation_log_path", lambda: "/tmp/annotation-debug.log")
+
+    rc = app_module.run()
+
+    assert rc == 1
+    assert shown
+    assert logs == [f"app.start version={app_module.__version__} log=/tmp/annotation-debug.log"]
+
+
 def test_run_dialog_body_is_linux_specific_on_linux(qapp, monkeypatch):
     # Lock in the platform branch: on Linux the body must mention the
     # AppIndicator extension — the actionable hint for the common GNOME 42+
