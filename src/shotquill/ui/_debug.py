@@ -1,28 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Opt-in crop-adjust diagnostics.
+"""UI debug helpers.
 
-Off by default. Set ``SHOTQUILL_CROP_DEBUG=1`` before launching to append a line
-per crop-adjust decision (press routing, overlay entry, re-crop, window resize)
-to ``<temp>/shotquill/crop-debug.log``. This pins down macOS-only crop edge-drag
-behaviour that cannot be reproduced on a headless / non-macOS host. The log holds
-only geometry (sizes and coordinates), never image pixels.
+These route through the app-wide debug logger, so crop-adjust diagnostics follow
+the same debug-mode switch and platform log file as every other subsystem.
 """
 
 from __future__ import annotations
 
-import os
+from shotquill import debug_log
 
-_ENABLED = bool(os.environ.get("SHOTQUILL_CROP_DEBUG"))
+_LOG = debug_log.get_logger(__name__)
 
 
 def crop_log(message: str) -> None:  # pragma: no cover - opt-in diagnostic
-    if not _ENABLED:
-        return
     try:
-        from shotquill.paths import capture_tmp_dir
-
-        with (capture_tmp_dir() / "crop-debug.log").open("a", encoding="utf-8") as fh:
-            fh.write(message + "\n")
+        _LOG.debug("crop %s", message)
     except Exception:
         pass  # diagnostics must never break the app
