@@ -124,6 +124,22 @@ def test_render_tray_pixmap_linux_keeps_mark_inside_viewfinder(qapp):
     assert bottom <= 49
 
 
+def test_render_tray_pixmap_linux_keeps_central_mark_compact(qapp):
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    centre_pixels = []
+    for y in range(image.height()):
+        for x in range(30, 36):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                centre_pixels.append((x, y))
+    assert centre_pixels
+    top = min(y for _x, y in centre_pixels)
+    bottom = max(y for _x, y in centre_pixels)
+    assert top >= 25
+    assert bottom <= 47
+
+
 @pytest.mark.skipif(
     sys.platform.startswith("win"),
     reason="Qt offscreen glyph rasterization on Windows doesn't punch the template hole; "
