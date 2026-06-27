@@ -768,6 +768,73 @@ def test_smart_capture_survives_list_windows_unsupported(qapp, config, fakes, mo
     app.shutdown()
 
 
+def test_fullscreen_capture_refuses_blocklist_when_windows_unavailable(
+    qapp, config, fakes, monkeypatch
+):
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    grabbed, delivered, notified = [], [], []
+    monkeypatch.setattr(capturer, "capture_fullscreen", lambda *a, **k: grabbed.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_fullscreen()
+    assert grabbed == [] and delivered == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
+def test_smart_capture_refuses_blocklist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a, **k: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
+def test_smart_capture_refuses_allowlist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    al.save(al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a, **k: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
 # --- allowlist enforcement on the GUI path ----------------------------------
 
 

@@ -219,6 +219,33 @@ def test_portal_available_returns_a_bool_without_raising():
     assert isinstance(wayland.portal_available(), bool)  # never raises, even with no bus
 
 
+def test_ensure_gui_app_uses_packaged_desktop_id(monkeypatch):
+    from shotquill.capture import wayland
+    from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
+
+    class _FakeApp:
+        name = None
+        desktop = None
+
+        def __init__(self, args):
+            self.args = args
+
+        @classmethod
+        def instance(cls):
+            return None
+
+        def setApplicationName(self, name):
+            type(self).name = name
+
+        def setDesktopFileName(self, desktop):
+            type(self).desktop = desktop
+
+    monkeypatch.setattr("PySide6.QtGui.QGuiApplication", _FakeApp)
+    wayland._ensure_gui_app()
+    assert _FakeApp.name == "ShotQuill"
+    assert _FakeApp.desktop == LINUX_GUI_DESKTOP_FILE_NAME
+
+
 def test_doctor_capture_detail_reports_reachable_portal(monkeypatch):
     from shotquill.capture import wayland
 

@@ -25,6 +25,7 @@ from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
 from shotquill.config import Config, human_readable_hotkey
+from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
 from shotquill.headless import get_capturer
 from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
@@ -330,11 +331,17 @@ class ShotquillApp(QObject):
             return
         self._allowlist = allowlist
         # Snapshot the window list *before* showing the overlay so our own
-        # window isn't a target. An empty/failed list is fine — the overlay
-        # then only offers full-screen and region modes.
+        # window isn't a target. An empty/failed list is fine only when no
+        # privacy policy needs window identity. If a blocklist/allowlist is in
+        # force, failing to enumerate means we cannot prove what is safe to show
+        # or redact, so fail closed rather than leak pixels on Wayland.
         try:
             windows = self._capturer.list_windows()
-        except Exception:
+        except Exception as exc:
+            if blocklist or allowlist:
+                self._window_policy_unavailable(exc)
+                self._unshelve_settings_dialog()
+                return
             windows = []
         # Resolve which on-screen windows are blocklisted up front, so the click
         # and hover-preview paths can refuse / skip them without re-querying.
@@ -463,6 +470,8 @@ class ShotquillApp(QObject):
         # (a string of X11 round-trips) a second time.
         if blocked is None:
             blocked = self._blocked_on_screen(blocklist)
+            if blocked is None:
+                return None
         exclude_ids = frozenset(w.window_id for w in blocked)
         try:
             fast_grab = getattr(self._capturer, "capture_fullscreen_image", None)
@@ -520,19 +529,23 @@ class ShotquillApp(QObject):
             self._notify(t("notify.allowlist_unreadable").format(error=exc))
             return None
 
-    def _blocked_on_screen(self, blocklist: bl.Blocklist) -> list:
+    def _window_policy_unavailable(self, error: Exception) -> None:
+        self._notify(t("notify.window_policy_unavailable").format(error=error))
+
+    def _blocked_on_screen(self, blocklist: bl.Blocklist) -> list | None:
         """Blocklisted windows currently on screen, so a blocked app never reaches
         the editor, clipboard, or a saved file — the same protection the CLI/MCP
         get, on the human path.
 
-        Empty when nothing is blocked or the windows can't be enumerated (macOS
-        always can; a backend that can't enumerate also can't redact)."""
+        Empty when nothing is blocked. ``None`` means an active blocklist could
+        not be enforced because the backend cannot enumerate windows."""
         if not blocklist:
             return []
         try:
             windows = self._capturer.list_windows()
-        except Exception:
-            return []
+        except Exception as exc:
+            self._window_policy_unavailable(exc)
+            return None
         return blocklist.blocked(windows)
 
     def _notify(self, message: str) -> None:
@@ -723,6 +736,7 @@ class ShotquillApp(QObject):
 def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ShotQuill")
+    app.setDesktopFileName(LINUX_GUI_DESKTOP_FILE_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():

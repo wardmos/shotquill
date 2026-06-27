@@ -170,14 +170,25 @@ def test_interactive_is_refused_when_allowlist_enabled():
     # "only these apps" allowlist refuses it outright — same as a fullscreen grab.
     cap = FakeCapturer(windows=[TERMINAL])
     with pytest.raises(headless.CaptureBlocked) as exc:
-        headless.perform_interactive_capture(cap, allowlist=TERM_ONLY)
+        headless.perform_interactive_capture(cap, blocklist=EMPTY, allowlist=TERM_ONLY)
     assert exc.value.exit_code == headless.EXIT_BLOCKED
     assert cap.captured == []  # refused before the picker is ever shown
 
 
+def test_interactive_is_refused_when_blocklist_enabled():
+    cap = FakeCapturer(windows=[TERMINAL])
+    block_terminal = bl.Blocklist((bl.BlockRule(bundle_id="com.apple.Terminal"),))
+    with pytest.raises(headless.CaptureBlocked) as exc:
+        headless.perform_interactive_capture(cap, blocklist=block_terminal, allowlist=DISABLED)
+    assert exc.value.exit_code == headless.EXIT_BLOCKED
+    assert cap.captured == []
+
+
 def test_interactive_proceeds_when_allowlist_disabled():
     cap = FakeCapturer(windows=[TERMINAL])
-    result, target, matched = headless.perform_interactive_capture(cap, allowlist=DISABLED)
+    result, target, matched = headless.perform_interactive_capture(
+        cap, blocklist=EMPTY, allowlist=DISABLED
+    )
     assert isinstance(result, CaptureResult)
     assert (target, matched) == ("interactive", 1)
     assert cap.captured == ["interactive"]

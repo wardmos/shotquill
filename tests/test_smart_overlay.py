@@ -706,6 +706,33 @@ def test_present_goes_fullscreen_on_wayland(qtbot, monkeypatch):
     assert calls == ["fullscreen"]
 
 
+def test_present_overlay_uses_fullscreen_controller_on_multi_output_wayland(qtbot, monkeypatch):
+    # A Wayland fullscreen surface is per-output, so multi-monitor sessions need
+    # one fullscreen view per screen instead of one virtual-desktop top-level.
+    from shotquill.ui import smart_overlay
+
+    overlay = _overlay(qtbot)
+    calls = []
+
+    class _Controller:
+        def __init__(self, brain, *, fullscreen=False):
+            calls.append(("controller", brain is overlay, fullscreen))
+
+        def present(self):
+            calls.append(("present",))
+
+    class _App:
+        def screens(self):
+            return [object(), object()]
+
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: True)
+    monkeypatch.setattr(smart_overlay.sys, "platform", "linux")
+    monkeypatch.setattr(smart_overlay, "SmartOverlayController", _Controller)
+    monkeypatch.setattr(overlay, "present", lambda: calls.append(("single",)))
+    smart_overlay.present_overlay(overlay, _App())
+    assert calls == [("controller", True, True), ("present",)]
+
+
 # --- CropAdjustOverlay: drag edges/corners to fine-tune an existing crop -----
 
 from shotquill.ui.smart_overlay import CropAdjustOverlay  # noqa: E402
