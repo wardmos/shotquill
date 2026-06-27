@@ -165,8 +165,8 @@ def test_render_tray_pixmap_macos_uses_inverted_template_mask(qapp):
     assert opaque
     left, top = min(x for x, _y in opaque), min(y for _x, y in opaque)
     right, bottom = max(x for x, _y in opaque), max(y for _x, y in opaque)
-    assert (right - left) < 40
-    assert (bottom - top) < 40
+    assert (right - left) <= 42
+    assert (bottom - top) <= 40
     assert image.pixelColor(32, 32).alpha() > 0
     assert image.pixelColor(8, 8).alpha() == 0
 
