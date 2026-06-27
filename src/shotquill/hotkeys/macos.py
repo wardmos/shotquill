@@ -139,8 +139,7 @@ class _CarbonAPI:
 
 def _load_carbon_api() -> _CarbonAPI:
     path = (
-        ctypes.util.find_library("Carbon")
-        or "/System/Library/Frameworks/Carbon.framework/Carbon"
+        ctypes.util.find_library("Carbon") or "/System/Library/Frameworks/Carbon.framework/Carbon"
     )
     try:
         carbon = ctypes.CDLL(path)
