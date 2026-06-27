@@ -111,8 +111,8 @@ def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
         painter.setBrush(QColor("black"))
     else:
         painter.setBrush(tile_color)
-    painter.drawEllipse(31, 35, 4, 5)
-    painter.drawRect(32, 40, 1, 5)
+    painter.drawEllipse(31, 35, 3, 3)
+    painter.drawRect(32, 38, 1, 6)
     painter.end()
     return pixmap
 
@@ -132,16 +132,16 @@ def _draw_tray_corners(painter: QPainter) -> None:
 def _draw_tray_nib(painter: QPainter) -> None:
     """Draw the central pen nib on a 64×64 design grid."""
     nib = QPainterPath()
-    nib.moveTo(30.2, 43.5)
-    nib.cubicTo(29.4, 39.6, 28.1, 36.9, 26.1, 34.6)
-    nib.cubicTo(28.8, 29.7, 33.0, 26.8, 39.5, 25.2)
-    nib.cubicTo(38.5, 30.0, 35.4, 33.1, 31.6, 34.7)
-    nib.cubicTo(34.0, 34.7, 36.5, 34.1, 38.2, 33.2)
-    nib.cubicTo(36.8, 36.5, 36.8, 39.8, 38.0, 42.8)
-    nib.cubicTo(36.1, 44.3, 34.8, 45.2, 33.6, 45.2)
+    nib.moveTo(29.3, 44.8)
+    nib.cubicTo(28.5, 40.0, 27.1, 37.2, 25.1, 34.8)
+    nib.cubicTo(27.1, 28.4, 31.7, 24.8, 39.5, 23.0)
+    nib.cubicTo(38.5, 28.4, 35.1, 31.6, 30.1, 33.6)
+    nib.cubicTo(32.9, 33.6, 35.9, 33.0, 38.1, 32.0)
+    nib.cubicTo(36.3, 35.4, 36.1, 38.6, 37.7, 41.6)
+    nib.cubicTo(35.3, 43.6, 34.1, 44.8, 33.3, 44.8)
     nib.closeSubpath()
     painter.drawPath(nib)
-    painter.drawRoundedRect(30, 44, 7, 3, 1, 1)
+    painter.drawRoundedRect(30, 44, 6, 2, 1, 1)
 
 
 class _HotkeyBridge(QObject):

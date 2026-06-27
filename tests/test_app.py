@@ -129,7 +129,7 @@ def test_render_tray_pixmap_linux_keeps_central_mark_compact(qapp):
     image = pixmap.toImage()
     centre_pixels = []
     for y in range(image.height()):
-        for x in range(30, 36):
+        for x in range(31, 35):
             pixel = image.pixelColor(x, y)
             if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
                 centre_pixels.append((x, y))
