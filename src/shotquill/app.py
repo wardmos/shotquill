@@ -160,8 +160,8 @@ class ShotquillApp(QObject):
         self._smart_debug_id: str | None = None
 
         self._bridge = _HotkeyBridge()
-        # Hotkeys are emitted from pynput's listener thread. Force queued delivery
-        # so capture code always runs on Qt's GUI thread, where widgets/windows are safe.
+        # Hotkey backends may emit from a platform callback thread. Force queued
+        # delivery so capture code always runs on Qt's GUI thread.
         self._bridge.smart_requested.connect(
             self._capture_smart, Qt.ConnectionType.QueuedConnection
         )
@@ -243,9 +243,9 @@ class ShotquillApp(QObject):
             self._apply_permission_gated_hotkeys()
 
     def _apply_hotkeys(self) -> bool:
-        # Note: no stop() here. Restarting the pynput listener while Qt runs
-        # crashes the process (SIGTRAP on the listener thread), so the manager
-        # keeps one listener alive and start() just swaps in the new bindings.
+        # Note: no stop() here. Backends handle re-applying settings internally:
+        # Carbon re-registers shortcuts, Wayland refreshes portal bindings, and
+        # pynput-backed platforms avoid unsafe listener restarts.
         self._hotkeys.clear()
         # The description is shown in the compositor's own shortcuts settings on
         # the Wayland (GlobalShortcuts portal) backend; the pynput backends ignore

@@ -14,6 +14,14 @@ from shotquill.hotkeys import macos
 from shotquill.hotkeys.base import HotkeyUnavailable
 
 
+class _LogRecorder:
+    def __init__(self):
+        self.messages = []
+
+    def debug(self, message, *args):
+        self.messages.append(message % args if args else message)
+
+
 class _FakeCarbonAPI:
     def __init__(self):
         self.target = ctypes.c_void_p(9001)
@@ -173,6 +181,39 @@ def test_event_handler_returns_parameter_error(carbon_api):
     carbon_api.event_param_status = -50
 
     assert manager._handle_event(None, 1, None) == -50
+
+
+def test_debug_log_records_registration_and_dispatch(carbon_api, monkeypatch):
+    log = _LogRecorder()
+    fired = []
+    monkeypatch.setattr(macos, "_LOG", log)
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: fired.append(True))
+
+    manager.start()
+    manager._handle_event(None, 1, None)
+
+    assert fired == [True]
+    assert "carbon hotkeys start bindings=1" in log.messages
+    assert "carbon api loaded" in log.messages
+    assert "carbon handler installed" in log.messages
+    assert "carbon hotkey registered combo=<alt>+a id=1 vk=0 mods=2048" in log.messages
+    assert "carbon hotkeys active registered=1" in log.messages
+    assert "carbon event dispatch combo=<alt>+a id=1" in log.messages
+
+
+def test_debug_log_records_registration_failure(carbon_api, monkeypatch):
+    log = _LogRecorder()
+    carbon_api.register_status = -9878
+    monkeypatch.setattr(macos, "_LOG", log)
+    manager = macos.MacHotkeyManager()
+    manager.register("<alt>+a", lambda: None)
+
+    with pytest.raises(HotkeyUnavailable):
+        manager.start()
+
+    assert any("carbon hotkey register_failed combo=<alt>+a" in msg for msg in log.messages)
+    assert "carbon hotkeys start rollback registered=0" in log.messages
 
 
 def test_rebind_unregisters_old_hotkeys_and_keeps_handler(carbon_api):

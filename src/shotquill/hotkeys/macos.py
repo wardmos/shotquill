@@ -16,8 +16,11 @@ import ctypes.util
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from shotquill import debug_log
 from shotquill.hotkeys.base import HotkeyManager, HotkeyUnavailable
 from shotquill.hotkeys.combo import parse_combo
+
+_LOG = debug_log.get_logger(__name__)
 
 # macOS hardware virtual key codes (kVK_ANSI_* / kVK_F*), keyed by the lowercase
 # token the settings UI emits (a-z, 0-9, f1-f12).
@@ -225,17 +228,22 @@ class MacHotkeyManager(HotkeyManager):
             combo: self._compile(combo, callback) for combo, callback in self._bindings.items()
         }
         if not self._compiled:
+            _LOG.debug("carbon hotkeys start skipped_no_bindings")
             return
+        _LOG.debug("carbon hotkeys start bindings=%s", len(self._compiled))
         self._ensure_api()
         self._ensure_handler()
         try:
             for binding in self._compiled.values():
                 self._register_binding(binding)
         except Exception:
+            _LOG.debug("carbon hotkeys start rollback registered=%s", len(self._registered))
             self._unregister_all()
             raise
+        _LOG.debug("carbon hotkeys active registered=%s", len(self._registered))
 
     def stop(self) -> None:
+        _LOG.debug("carbon hotkeys stop registered=%s", len(self._registered))
         self._unregister_all()
         if self._handler_ref is not None and self._api is not None:
             self._api.remove_event_handler(self._handler_ref)
@@ -257,6 +265,7 @@ class MacHotkeyManager(HotkeyManager):
     def _ensure_api(self) -> None:
         if self._api is None:
             self._api = _load_carbon_api()
+            _LOG.debug("carbon api loaded")
 
     def _ensure_handler(self) -> None:
         if self._handler_ref is not None:
@@ -264,6 +273,7 @@ class MacHotkeyManager(HotkeyManager):
         assert self._api is not None
         target = self._api.get_application_event_target()
         if not target:
+            _LOG.debug("carbon handler missing_application_event_target")
             raise HotkeyUnavailable("macOS application event target is unavailable")
         event_type = _EventTypeSpec(_EVENT_CLASS_KEYBOARD, _EVENT_HOTKEY_PRESSED)
         handler_ref = ctypes.c_void_p()
@@ -278,8 +288,10 @@ class MacHotkeyManager(HotkeyManager):
         )
         if status != _NO_ERR:
             self._handler_proc = None
+            _LOG.debug("carbon handler install_failed status=%s", status)
             raise HotkeyUnavailable(f"macOS hotkey event handler failed ({status})")
         self._handler_ref = handler_ref
+        _LOG.debug("carbon handler installed")
 
     def _register_binding(self, binding: _Binding) -> None:
         assert self._api is not None
@@ -296,16 +308,32 @@ class MacHotkeyManager(HotkeyManager):
             ctypes.byref(ref),
         )
         if status != _NO_ERR:
+            _LOG.debug(
+                "carbon hotkey register_failed combo=%s id=%s vk=%s mods=%s status=%s",
+                binding.combo,
+                hotkey_id,
+                binding.vk,
+                binding.mods,
+                status,
+            )
             raise HotkeyUnavailable(
                 f"macOS hotkey registration failed for {binding.combo!r} ({status})"
             )
         self._registered[hotkey_id] = _RegisteredBinding(binding=binding, ref=ref)
+        _LOG.debug(
+            "carbon hotkey registered combo=%s id=%s vk=%s mods=%s",
+            binding.combo,
+            hotkey_id,
+            binding.vk,
+            binding.mods,
+        )
 
     def _unregister_binding(self, binding: _Binding) -> None:
         for hotkey_id, registered in list(self._registered.items()):
             if registered.binding.combo == binding.combo:
                 self._unregister_hotkey_ref(registered.ref)
                 self._registered.pop(hotkey_id, None)
+                _LOG.debug("carbon hotkey unregistered combo=%s id=%s", binding.combo, hotkey_id)
 
     def _unregister_all(self) -> None:
         for registered in list(self._registered.values()):
@@ -329,10 +357,19 @@ class MacHotkeyManager(HotkeyManager):
             ctypes.byref(hotkey_id),
         )
         if status != _NO_ERR:
+            _LOG.debug("carbon event parameter_error status=%s", status)
             return status
         if hotkey_id.signature != _SIGNATURE:
+            _LOG.debug("carbon event ignored signature=%s id=%s", hotkey_id.signature, hotkey_id.id)
             return _NO_ERR
         registered = self._registered.get(hotkey_id.id)
         if registered is not None:
+            _LOG.debug(
+                "carbon event dispatch combo=%s id=%s",
+                registered.binding.combo,
+                hotkey_id.id,
+            )
             registered.binding.callback()
+        else:
+            _LOG.debug("carbon event unknown id=%s", hotkey_id.id)
         return _NO_ERR
