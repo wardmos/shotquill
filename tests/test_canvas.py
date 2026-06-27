@@ -48,9 +48,36 @@ def test_drawing_a_rectangle_pushes_one_undo_command(qtbot):
     assert canvas.undo_stack().count() == 1
 
 
-def test_drawing_a_rectangle_selects_it(qtbot):
+def test_drawing_a_rectangle_does_not_select_it(qtbot):
     canvas = _canvas(qtbot)
     item = _draw_rect(qtbot, canvas)
+
+    assert not item.isSelected()
+    assert canvas._selected_annotation_scene_rects() == []
+
+
+def test_clicking_inside_rectangle_selects_it_while_drawing_tool_is_active(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    stack = canvas.undo_stack()
+
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+
+    assert item.isSelected()
+    assert canvas._selected_annotation_scene_rects()
+    assert stack.count() == 1
+
+
+def test_select_tool_clicking_inside_rectangle_selects_it(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    canvas.set_tool(Tool.SELECT)
+
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
 
     assert item.isSelected()
     assert canvas._selected_annotation_scene_rects()

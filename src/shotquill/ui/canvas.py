@@ -66,6 +66,8 @@ _SELECTION_OUTLINE_VIEW_PADDING = 4.0
 _SELECTION_HANDLE_VIEW_SIZE = 8.0
 _SELECTION_DRAW_LOG_SECONDS = 2.0
 _SELECTION_DRAW_LOG_LIMIT = 8
+_SELECTION_HIT_VIEW_TOLERANCE = 8.0
+_SELECTION_CLICK_VIEW_TOLERANCE = 4
 
 
 class _TextItem(QGraphicsTextItem):
@@ -174,6 +176,8 @@ class AnnotationCanvas(QGraphicsView):
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
         self._last_hit_item: QGraphicsItem | None = None
+        self._press_hit_item: QGraphicsItem | None = None
+        self._press_view_pos = None
         # Positions of movable items captured at the start of a select-drag, so
         # the release can record an undoable move for whatever actually shifted.
         self._move_snapshot: dict[QGraphicsItem, QPointF] | None = None
@@ -373,6 +377,34 @@ class AnnotationCanvas(QGraphicsView):
         item = self.itemAt(pos)
         return item if item is not self._background else None
 
+    def _annotation_item_at_view_pos(self, pos) -> QGraphicsItem | None:
+        scene_pos = self.mapToScene(pos)
+        padding = self._scene_units_for_view_pixels(_SELECTION_HIT_VIEW_TOLERANCE)
+        for item in sorted(self._annotation_items(), key=lambda it: it.zValue(), reverse=True):
+            hit_rect = item.mapRectToScene(item.boundingRect()).adjusted(
+                -padding, -padding, padding, padding
+            )
+            if hit_rect.contains(scene_pos):
+                return item
+        return None
+
+    def _select_annotation_item(self, item: QGraphicsItem | None, *, source: str) -> bool:
+        if item is None or item.scene() is not self._scene:
+            return False
+        if not item.flags() & QGraphicsItem.ItemIsSelectable:
+            return False
+        self._scene.clearSelection()
+        item.setSelected(True)
+        self._last_hit_item = item
+        annotation_log(f"selection.pick source={source} item={self._item_label(item)}")
+        return True
+
+    def _is_click_release(self, pos) -> bool:
+        return (
+            self._press_view_pos is not None
+            and (pos - self._press_view_pos).manhattanLength() <= _SELECTION_CLICK_VIEW_TOLERANCE
+        )
+
     def _log_selection_changed(self) -> None:
         selected_rects = self._selected_annotation_scene_rects()
         annotation_log(
@@ -512,11 +544,18 @@ class AnnotationCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._press_view_pos = event.position().toPoint()
+            self._press_hit_item = self._annotation_item_at_view_pos(self._press_view_pos)
+        else:
+            self._press_view_pos = None
+            self._press_hit_item = None
         annotation_log(
             f"mouse.press button={event.button()} tool={self._tool.name} "
             f"pos={event.position().toPoint()} scene={self.mapToScene(event.position().toPoint())} "
             f"selected={len(self._selected_annotation_items())} "
-            f"annotations={len(self._annotation_items())}"
+            f"annotations={len(self._annotation_items())} "
+            f"hit={self._item_label(self._press_hit_item)}"
         )
         # A press on a crop edge (region capture, still pristine) opens the
         # full-screen adjust surface instead of starting a rubber-band select.
@@ -636,6 +675,8 @@ class AnnotationCanvas(QGraphicsView):
             self._move_snapshot = None
             if moved:
                 self._undo.push(_MoveItemsCommand(moved))
+            elif self._is_click_release(event.position().toPoint()):
+                self._select_annotation_item(self._press_hit_item, source="select.click")
             return
 
         # Only the left button finishes a drag: a stray right/middle release
@@ -657,12 +698,14 @@ class AnnotationCanvas(QGraphicsView):
         if self._is_negligible(item):
             annotation_log(f"draw.discard negligible item={self._item_label(item)}")
             self._scene.removeItem(item)
+            if self._is_click_release(event.position().toPoint()):
+                self._select_annotation_item(
+                    self._press_hit_item, source=f"{self._tool.name}.click"
+                )
             return
 
         item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
         self._undo.push(_AddItemCommand(self._scene, item))
-        self._scene.clearSelection()
-        item.setSelected(True)
         annotation_log(f"draw.commit item={self._item_label(item)}")
 
     def _create_text(self, pos: QPointF) -> None:
