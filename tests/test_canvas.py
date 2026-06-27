@@ -48,6 +48,41 @@ def test_drawing_a_rectangle_pushes_one_undo_command(qtbot):
     assert canvas.undo_stack().count() == 1
 
 
+def test_drawing_a_rectangle_does_not_select_it(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+
+    assert not item.isSelected()
+    assert canvas._selected_annotation_scene_rects() == []
+
+
+def test_clicking_inside_rectangle_selects_it_while_drawing_tool_is_active(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    stack = canvas.undo_stack()
+
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+
+    assert item.isSelected()
+    assert canvas._selected_annotation_scene_rects()
+    assert stack.count() == 1
+
+
+def test_select_tool_clicking_inside_rectangle_selects_it(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    canvas.set_tool(Tool.SELECT)
+
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+
+    assert item.isSelected()
+    assert canvas._selected_annotation_scene_rects()
+
+
 def test_right_release_mid_drag_does_not_commit_the_item(qtbot):
     # A stray right-button release while the left button is still dragging must
     # not finish the annotation early — the drag continues and only the left
@@ -75,6 +110,10 @@ def _draw_rect(qtbot, canvas):
     qtbot.mouseMove(viewport, pos=QPoint(80, 60))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
     return next(i for i in canvas.scene().items() if i.zValue() > -1000)
+
+
+def _annotation_items(canvas):
+    return [item for item in canvas.scene().items() if item.zValue() > -1000]
 
 
 def test_move_items_command_round_trips_position(qtbot):
@@ -129,6 +168,106 @@ def test_select_click_without_moving_records_no_undo(qtbot):
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
     assert canvas.undo_stack().count() == 1  # no spurious move command
+
+
+def test_selected_annotation_has_a_view_selection_rect(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+
+    item.setSelected(True)
+
+    rects = canvas._selected_annotation_scene_rects()
+    assert len(rects) == 1
+    assert rects[0].contains(item.mapRectToScene(item.boundingRect()))
+
+    item.setSelected(False)
+    assert canvas._selected_annotation_scene_rects() == []
+
+
+def test_selection_effect_is_not_exported(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    unselected = canvas.export_image()
+
+    item.setSelected(True)
+
+    selected = canvas.export_image()
+
+    assert not selected.isNull()
+    assert selected == unselected
+
+
+def test_delete_key_removes_selected_item_and_is_undoable(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    stack = canvas.undo_stack()
+    assert stack.count() == 1
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Delete)
+
+    assert item.scene() is None
+    assert not item.isSelected()
+    assert stack.count() == 2
+    stack.undo()
+    assert item.scene() is canvas.scene()
+    assert item.isSelected()
+    stack.redo()
+    assert item.scene() is None
+
+
+def test_backspace_deletes_multiple_selected_items_as_one_undo_command(qtbot):
+    canvas = _canvas(qtbot)
+    first = _draw_rect(qtbot, canvas)
+    second = _draw_rect(qtbot, canvas)
+    assert len(_annotation_items(canvas)) == 2
+    stack = canvas.undo_stack()
+    assert stack.count() == 2
+
+    canvas.set_tool(Tool.SELECT)
+    first.setSelected(True)
+    second.setSelected(True)
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert first.scene() is None
+    assert second.scene() is None
+    assert stack.count() == 3
+    stack.undo()
+    assert sorted(_annotation_items(canvas), key=id) == sorted([first, second], key=id)
+    assert first.isSelected()
+    assert second.isSelected()
+    stack.redo()
+    assert _annotation_items(canvas) == []
+
+
+def test_delete_key_falls_back_to_last_hit_annotation(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(False)
+    canvas._last_hit_item = item
+
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Delete)
+
+    assert item.scene() is None
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+
+
+def test_delete_key_removes_single_annotation_without_selection(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(False)
+
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert item.scene() is None
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
 
 
 def test_tiny_click_is_discarded(qtbot):

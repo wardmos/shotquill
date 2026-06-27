@@ -199,6 +199,11 @@ class EditorCoreMixin:
         The shell's ``keyPressEvent`` calls this first, then falls back to
         ``super().keyPressEvent``.
         """
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            focus_item = self._canvas.scene().focusItem()
+            if focus_item is None and self._canvas.delete_selected_items():
+                event.accept()
+                return True
         # Crop adjustment first: until the first annotation lands, the arrow keys
         # nudge a region capture's crop (⇧ steps by 10, ⌥ resizes). The canvas
         # declines plain arrows so they reach the shell.
