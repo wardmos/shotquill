@@ -482,7 +482,7 @@ def test_dialog_accepts_valid_save_dir(qtbot, config, tmp_path):
     assert config.save_dir() == str(tmp_path / "shots")
 
 
-def test_permission_rows_show_status_and_open_the_right_pane(qtbot, config, monkeypatch):
+def test_permission_row_shows_status_and_opens_screen_recording_pane(qtbot, config, monkeypatch):
     from PySide6.QtWidgets import QPushButton
 
     from shotquill import permissions
@@ -490,26 +490,23 @@ def test_permission_rows_show_status_and_open_the_right_pane(qtbot, config, monk
     from shotquill.permissions import PermissionStatus
     from shotquill.ui import settings as settings_module
 
-    # The permission rows only render on macOS (the only platform with these
-    # TCC grants). Pin sys.platform so the test exercises that branch on any
-    # host — otherwise the rows would be hidden on a Linux CI box and the
-    # ``_screen_permission`` attr would be ``None``.
+    # The Screen Recording permission row only renders on macOS. Pin
+    # sys.platform so the test exercises that branch on any host — otherwise the
+    # row would be hidden on a Linux CI box and the ``_screen_permission`` attr
+    # would be ``None``.
     monkeypatch.setattr(settings_module.sys, "platform", "darwin")
 
     opened = []
     monkeypatch.setattr(permissions, "screen_capture_status", lambda: PermissionStatus.GRANTED)
-    monkeypatch.setattr(permissions, "input_monitoring_status", lambda: PermissionStatus.DENIED)
     monkeypatch.setattr(permissions, "open_screen_capture_pane", lambda: opened.append("screen"))
-    monkeypatch.setattr(permissions, "open_input_monitoring_pane", lambda: opened.append("input"))
 
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
     assert dialog._screen_permission._label.text() == t("settings.permission_granted")
-    assert dialog._input_permission._label.text() == t("settings.permission_denied")
+    assert dialog._input_permission is None
 
     dialog._screen_permission.findChild(QPushButton).click()
-    dialog._input_permission.findChild(QPushButton).click()
-    assert opened == ["screen", "input"]
+    assert opened == ["screen"]
 
 
 def test_permission_rows_show_unknown_when_state_is_unreadable(qtbot, config, monkeypatch):
@@ -549,8 +546,8 @@ def test_permission_rows_refresh_when_dialog_reactivates(qtbot, config, monkeypa
 
 
 def test_permission_rows_hidden_on_linux(qtbot, config, monkeypatch):
-    # Linux has no equivalent of macOS Screen Recording / Input Monitoring
-    # grants — the rows would surface meaningless "Unknown" status plus an
+    # Linux has no equivalent of macOS Screen Recording grants — the rows would
+    # surface meaningless "Unknown" status plus an
     # "Open System Settings" button that would shell out to a macOS-only
     # `x-apple-systempreferences:` URL. They must not appear in the dialog.
     from shotquill.ui import settings as settings_module

@@ -961,13 +961,13 @@ def _check_hotkeys() -> dict:
     that a backend exists. On Wayland out-of-band key grabs are refused, so the
     hotkeys go through the xdg-desktop-portal GlobalShortcuts interface, which a
     minimal desktop may not ship; surface that as the actionable thing to fix. On
-    X11 pynput grabs keys without a grant; on macOS it needs Input Monitoring
-    (a runtime prompt, so reported best-effort)."""
+    X11 pynput grabs keys without a grant; on macOS RegisterEventHotKey registers
+    only the configured shortcuts and does not need Input Monitoring."""
     if sys.platform == "darwin":
         return {
             "capability": "hotkeys",
             "available": True,
-            "detail": "pynput (needs the Input Monitoring permission)",
+            "detail": "Carbon RegisterEventHotKey",
         }
     if sys.platform.startswith("linux"):
         if _is_wayland_session():

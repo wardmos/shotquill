@@ -1,45 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""macOS global hotkeys via ``pynput``.
+"""macOS global hotkeys via Carbon ``RegisterEventHotKey``.
 
-pynput delivers key events on its own listener thread, so callbacks must not
-touch Qt UI directly — the app layer marshals them onto the main thread with a
-queued signal. Requires the "Input Monitoring" permission on macOS.
-
-We do **not** use ``pynput.keyboard.GlobalHotKeys`` because it matches the final
-key by *character*. On macOS the Option (⌥) modifier is the "alternate
-character" key: ⌥A emits "å", ⌥S "ß", ⌥W "∑", so character matching makes
-Option-based combos fire only intermittently. Instead we run a raw listener and
-match the final key by its hardware *key code* (``vk``), which is independent of
-the modifiers held — exactly how reliable Option-friendly hotkey apps behave.
-
-The matched key is also **swallowed** so it does not leak to the foreground app:
-``darwin_intercept`` returns ``None`` for the Quartz event that just fired a
-binding, consuming it system-wide. The modifying event tap this needs is covered
-by the same Input Monitoring grant the listener already requires — no separate
-Accessibility permission, unlike ``CGEventTap``-style suppression is sometimes
-mistaken to need.
+This backend registers each configured key combination with the system instead
+of listening to every keyboard event. That keeps Option-based shortcuts reliable
+by matching hardware virtual key codes, avoids the Input Monitoring permission
+required by raw event taps, and lets macOS consume the registered shortcut before
+it reaches the foreground application.
 """
 
 from __future__ import annotations
 
-import threading
+import ctypes
+import ctypes.util
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from pynput import keyboard
-from pynput.keyboard import Key
-
-from shotquill.hotkeys.base import HotkeyManager
+from shotquill import debug_log
+from shotquill.hotkeys.base import HotkeyManager, HotkeyUnavailable
 from shotquill.hotkeys.combo import parse_combo
-from shotquill.permissions import quartz_function
 
-_INPUT_MONITORING_ERROR = "Input Monitoring permission is required for global hotkeys."
+_LOG = debug_log.get_logger(__name__)
 
 # macOS hardware virtual key codes (kVK_ANSI_* / kVK_F*), keyed by the lowercase
-# token the settings UI emits (a–z, 0–9, f1–f12). The key code is positional and
-# does not change when Option rewrites the produced character, so matching on it
-# is what makes Option combos reliable.
+# token the settings UI emits (a-z, 0-9, f1-f12).
 _MAC_VK: dict[str, int] = {
     # letters
     "a": 0,
@@ -94,215 +78,298 @@ _MAC_VK: dict[str, int] = {
     "f12": 111,
 }
 
-# Every pynput modifier key (generic + left/right variants) -> canonical name.
-_MOD_NAMES: dict[object, str] = {
-    Key.alt: "alt",
-    Key.alt_l: "alt",
-    Key.alt_r: "alt",
-    Key.cmd: "cmd",
-    Key.cmd_l: "cmd",
-    Key.cmd_r: "cmd",
-    Key.ctrl: "ctrl",
-    Key.ctrl_l: "ctrl",
-    Key.ctrl_r: "ctrl",
-    Key.shift: "shift",
-    Key.shift_l: "shift",
-    Key.shift_r: "shift",
+# Carbon modifier masks from Events.h.
+_CARBON_MODS = {
+    "cmd": 1 << 8,
+    "shift": 1 << 9,
+    "alt": 1 << 11,
+    "ctrl": 1 << 12,
 }
-if hasattr(Key, "alt_gr"):  # present on some layouts; treat as Option
-    _MOD_NAMES[Key.alt_gr] = "alt"
+
+_NO_ERR = 0
+_EVENT_HOTKEY_PRESSED = 5
+_EVENT_CLASS_KEYBOARD = int.from_bytes(b"keyb", "big")
+_EVENT_PARAM_DIRECT_OBJECT = int.from_bytes(b"----", "big")
+_TYPE_EVENT_HOTKEY_ID = int.from_bytes(b"hkid", "big")
+_SIGNATURE = int.from_bytes(b"SQuL", "big")
 
 
-def _vk_of(key: object) -> int | None:
-    """Hardware key code for a pynput key (a ``KeyCode`` or a ``Key`` member)."""
-    vk = getattr(key, "vk", None)
-    if vk is None:
-        value = getattr(key, "value", None)  # Key enum members wrap a KeyCode
-        vk = getattr(value, "vk", None)
-    return vk
+class _EventTypeSpec(ctypes.Structure):
+    _fields_ = [
+        ("eventClass", ctypes.c_uint32),
+        ("eventKind", ctypes.c_uint32),
+    ]
 
 
-def has_input_monitoring_access() -> bool:
-    """Whether macOS currently allows this process to listen for key events.
-
-    Fails *open* (True) when the state can't be read — the listener gate must
-    not block hotkeys on Linux development or an old macOS, unlike the
-    settings UI, which shows the same situation as "unknown".
-    """
-    preflight = quartz_function("CGPreflightListenEventAccess")
-    if preflight is None:
-        return True
-    try:
-        return bool(preflight())
-    except Exception:
-        return True
+class _EventHotKeyID(ctypes.Structure):
+    _fields_ = [
+        ("signature", ctypes.c_uint32),
+        ("id", ctypes.c_uint32),
+    ]
 
 
-def request_input_monitoring_access() -> bool:
-    """Ask macOS for Input Monitoring access if needed; return whether it is granted."""
-    if has_input_monitoring_access():
-        return True
-    request = quartz_function("CGRequestListenEventAccess")
-    if request is None:
-        return True
-    try:
-        return bool(request())
-    except Exception:
-        return has_input_monitoring_access()
+_EventHandlerProc = ctypes.CFUNCTYPE(
+    ctypes.c_int32,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+)
+
+
+@dataclass(frozen=True)
+class _Binding:
+    combo: str
+    mods: int
+    vk: int
+    callback: Callable[[], None]
 
 
 @dataclass
-class _Binding:
-    mods: frozenset[str]
-    vk: int | None  # expected hardware key code, when the key is known
-    char: str  # fallback target for keys outside the vk table
-    callback: Callable[[], None]
+class _RegisteredBinding:
+    binding: _Binding
+    ref: ctypes.c_void_p
+
+
+@dataclass
+class _CarbonAPI:
+    register_hotkey: Callable
+    unregister_hotkey: Callable
+    install_event_handler: Callable
+    remove_event_handler: Callable
+    get_application_event_target: Callable
+    get_event_parameter: Callable
+
+
+def _load_carbon_api() -> _CarbonAPI:
+    path = (
+        ctypes.util.find_library("Carbon") or "/System/Library/Frameworks/Carbon.framework/Carbon"
+    )
+    try:
+        carbon = ctypes.CDLL(path)
+    except OSError as exc:
+        raise HotkeyUnavailable("macOS Carbon hotkey API is unavailable") from exc
+
+    carbon.RegisterEventHotKey.argtypes = [
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        _EventHotKeyID,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    carbon.RegisterEventHotKey.restype = ctypes.c_int32
+    carbon.UnregisterEventHotKey.argtypes = [ctypes.c_void_p]
+    carbon.UnregisterEventHotKey.restype = ctypes.c_int32
+    carbon.InstallEventHandler.argtypes = [
+        ctypes.c_void_p,
+        _EventHandlerProc,
+        ctypes.c_uint32,
+        ctypes.POINTER(_EventTypeSpec),
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    carbon.InstallEventHandler.restype = ctypes.c_int32
+    carbon.RemoveEventHandler.argtypes = [ctypes.c_void_p]
+    carbon.RemoveEventHandler.restype = ctypes.c_int32
+    carbon.GetApplicationEventTarget.argtypes = []
+    carbon.GetApplicationEventTarget.restype = ctypes.c_void_p
+    carbon.GetEventParameter.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    carbon.GetEventParameter.restype = ctypes.c_int32
+
+    return _CarbonAPI(
+        register_hotkey=carbon.RegisterEventHotKey,
+        unregister_hotkey=carbon.UnregisterEventHotKey,
+        install_event_handler=carbon.InstallEventHandler,
+        remove_event_handler=carbon.RemoveEventHandler,
+        get_application_event_target=carbon.GetApplicationEventTarget,
+        get_event_parameter=carbon.GetEventParameter,
+    )
 
 
 class MacHotkeyManager(HotkeyManager):
     def __init__(self) -> None:
         self._bindings: dict[str, Callable[[], None]] = {}
-        self._listener: keyboard.Listener | None = None
-        self._compiled: list[_Binding] = []
-        self._active_mods: set[str] = set()
-        self._pressed: set[object] = set()  # non-modifier keys currently held
-        self._suppressed: set[object] = set()
-        self._suppress_next_event = False
-        # ``_active_mods``/``_pressed`` are mutated on pynput's listener thread
-        # and cleared from the main thread in ``stop()``; this serialises both.
-        self._state_lock = threading.Lock()
+        self._compiled: dict[str, _Binding] = {}
+        self._registered: dict[int, _RegisteredBinding] = {}
+        self._api: _CarbonAPI | None = None
+        self._handler_ref: ctypes.c_void_p | None = None
+        self._handler_proc: _EventHandlerProc | None = None
+        self._next_id = 1
 
     def register(
         self, combo: str, callback: Callable[[], None], description: str | None = None
     ) -> None:
-        # ``description`` is only meaningful to the Wayland portal backend; this
-        # raw pynput listener grabs by key, so it is accepted and ignored here.
+        # ``description`` is meaningful to the Wayland portal backend; Carbon's
+        # global hotkey API registers only the key combination.
         self._bindings[combo] = callback
 
     def unregister(self, combo: str) -> None:
         self._bindings.pop(combo, None)
+        binding = self._compiled.pop(combo, None)
+        if binding is not None:
+            self._unregister_binding(binding)
 
     def clear(self) -> None:
         self._bindings.clear()
-        self._compiled = []
-        with self._state_lock:
-            self._active_mods.clear()
-            self._pressed.clear()
-            self._suppressed.clear()
-            self._suppress_next_event = False
+        self._compiled.clear()
+        self._unregister_all()
 
     def start(self) -> None:
-        """Compile the current bindings and make sure a listener is running.
-
-        The listener is started at most once per process: stopping a pynput
-        listener and starting a fresh one while Qt owns the main loop trips a
-        dispatch assertion inside macOS frameworks (EXC_BREAKPOINT/SIGTRAP on
-        the new listener thread), killing the app — observed when re-applying
-        hotkeys after the Settings dialog. So re-applying settings hot-swaps
-        ``_compiled`` (an atomic reference swap, safe to race with the listener
-        thread's reads) and leaves the running listener untouched.
-        """
-        self._compiled = [self._compile(c, cb) for c, cb in self._bindings.items()]
-        if self._listener is not None:
-            return  # already listening: the new bindings are live immediately
-        if not self._bindings:
-            return  # nothing to listen for; don't prompt for permission yet
-        if not request_input_monitoring_access():
-            raise PermissionError(_INPUT_MONITORING_ERROR)
-        # The same event tap that Input Monitoring lets us listen through can
-        # also *swallow* the matched key: ``darwin_intercept`` runs after
-        # ``on_press`` for each Quartz event and, by returning ``None`,
-        # consumes it system-wide so it never reaches the foreground app. No
-        # Accessibility grant is needed — Input Monitoring covers the
-        # modifying tap — so suppression is always on, not gated behind a
-        # second permission the user would have to discover.
-        self._listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release,
-            darwin_intercept=self._intercept,
-        )
-        self._listener.start()
+        self._unregister_all()
+        self._compiled = {
+            combo: self._compile(combo, callback) for combo, callback in self._bindings.items()
+        }
+        if not self._compiled:
+            _LOG.debug("carbon hotkeys start skipped_no_bindings")
+            return
+        _LOG.debug("carbon hotkeys start bindings=%s", len(self._compiled))
+        self._ensure_api()
+        self._ensure_handler()
+        try:
+            for binding in self._compiled.values():
+                self._register_binding(binding)
+        except Exception:
+            _LOG.debug("carbon hotkeys start rollback registered=%s", len(self._registered))
+            self._unregister_all()
+            raise
+        _LOG.debug("carbon hotkeys active registered=%s", len(self._registered))
 
     def stop(self) -> None:
-        if self._listener is not None:
-            self._listener.stop()
-            self._listener = None
-        # Drop held-key state so a missed release can't wedge later matches. Keep
-        # the one-event suppression flag intact: pynput calls darwin_intercept
-        # after on_press for the same event, and stop() can race between them.
-        with self._state_lock:
-            self._active_mods.clear()
-            self._pressed.clear()
-            self._suppressed.clear()
+        _LOG.debug("carbon hotkeys stop registered=%s", len(self._registered))
+        self._unregister_all()
+        if self._handler_ref is not None and self._api is not None:
+            self._api.remove_event_handler(self._handler_ref)
+            self._handler_ref = None
+        self._handler_proc = None
 
     @staticmethod
     def _compile(combo: str, callback: Callable[[], None]) -> _Binding:
         parsed = parse_combo(combo)
-        mods = frozenset(m for m in ("cmd", "ctrl", "alt", "shift") if parsed[m])
         key = str(parsed["key"]).lower()
-        return _Binding(mods=mods, vk=_MAC_VK.get(key), char=key, callback=callback)
+        if key not in _MAC_VK:
+            raise HotkeyUnavailable(f"unsupported macOS hotkey key: {key!r}")
+        mods = 0
+        for name, mask in _CARBON_MODS.items():
+            if parsed[name]:
+                mods |= mask
+        return _Binding(combo=combo, mods=mods, vk=_MAC_VK[key], callback=callback)
 
-    def _on_press(self, key: object) -> None:
-        name = _MOD_NAMES.get(key)
-        if name is not None:
-            with self._state_lock:
-                self._active_mods.add(name)
+    def _ensure_api(self) -> None:
+        if self._api is None:
+            self._api = _load_carbon_api()
+            _LOG.debug("carbon api loaded")
+
+    def _ensure_handler(self) -> None:
+        if self._handler_ref is not None:
             return
-        vk = _vk_of(key)
-        char = getattr(key, "char", None)
-        ident = vk if vk is not None else char
-        with self._state_lock:
-            if ident in self._suppressed:
-                self._suppress_next_event = True
-                return
-            if ident in self._pressed:  # ignore auto-repeat while the key is held
-                return
-            self._pressed.add(ident)
-        if self._dispatch(vk, char):
-            with self._state_lock:
-                self._suppressed.add(ident)
-                self._suppress_next_event = True
+        assert self._api is not None
+        target = self._api.get_application_event_target()
+        if not target:
+            _LOG.debug("carbon handler missing_application_event_target")
+            raise HotkeyUnavailable("macOS application event target is unavailable")
+        event_type = _EventTypeSpec(_EVENT_CLASS_KEYBOARD, _EVENT_HOTKEY_PRESSED)
+        handler_ref = ctypes.c_void_p()
+        self._handler_proc = _EventHandlerProc(self._handle_event)
+        status = self._api.install_event_handler(
+            target,
+            self._handler_proc,
+            1,
+            ctypes.byref(event_type),
+            None,
+            ctypes.byref(handler_ref),
+        )
+        if status != _NO_ERR:
+            self._handler_proc = None
+            _LOG.debug("carbon handler install_failed status=%s", status)
+            raise HotkeyUnavailable(f"macOS hotkey event handler failed ({status})")
+        self._handler_ref = handler_ref
+        _LOG.debug("carbon handler installed")
 
-    def _on_release(self, key: object) -> None:
-        name = _MOD_NAMES.get(key)
-        if name is not None:
-            with self._state_lock:
-                self._active_mods.discard(name)
-            return
-        vk = _vk_of(key)
-        char = getattr(key, "char", None)
-        ident = vk if vk is not None else char
-        with self._state_lock:
-            self._pressed.discard(ident)
-            if ident in self._suppressed:
-                self._suppressed.discard(ident)
-                self._suppress_next_event = True
+    def _register_binding(self, binding: _Binding) -> None:
+        assert self._api is not None
+        hotkey_id = self._next_id
+        self._next_id += 1
+        carbon_id = _EventHotKeyID(_SIGNATURE, hotkey_id)
+        ref = ctypes.c_void_p()
+        status = self._api.register_hotkey(
+            binding.vk,
+            binding.mods,
+            carbon_id,
+            self._api.get_application_event_target(),
+            0,
+            ctypes.byref(ref),
+        )
+        if status != _NO_ERR:
+            _LOG.debug(
+                "carbon hotkey register_failed combo=%s id=%s vk=%s mods=%s status=%s",
+                binding.combo,
+                hotkey_id,
+                binding.vk,
+                binding.mods,
+                status,
+            )
+            raise HotkeyUnavailable(
+                f"macOS hotkey registration failed for {binding.combo!r} ({status})"
+            )
+        self._registered[hotkey_id] = _RegisteredBinding(binding=binding, ref=ref)
+        _LOG.debug(
+            "carbon hotkey registered combo=%s id=%s vk=%s mods=%s",
+            binding.combo,
+            hotkey_id,
+            binding.vk,
+            binding.mods,
+        )
 
-    def _dispatch(self, vk: int | None, char: object) -> bool:
-        char_l = char.lower() if isinstance(char, str) else None
-        with self._state_lock:
-            active = frozenset(self._active_mods)
-        for binding in self._compiled:
-            if binding.mods != active:
-                continue
-            if binding.vk is not None:
-                if vk == binding.vk:
-                    binding.callback()
-                    return True
-            elif char_l is not None and char_l == binding.char:
-                binding.callback()
-                return True
-        return False
+    def _unregister_binding(self, binding: _Binding) -> None:
+        for hotkey_id, registered in list(self._registered.items()):
+            if registered.binding.combo == binding.combo:
+                self._unregister_hotkey_ref(registered.ref)
+                self._registered.pop(hotkey_id, None)
+                _LOG.debug("carbon hotkey unregistered combo=%s id=%s", binding.combo, hotkey_id)
 
-    def _intercept(self, event_type, event):
-        """Suppress the key event that just fired a ShotQuill hotkey.
+    def _unregister_all(self) -> None:
+        for registered in list(self._registered.values()):
+            self._unregister_hotkey_ref(registered.ref)
+        self._registered.clear()
 
-        pynput calls ``darwin_intercept`` after dispatching ``on_press`` for the
-        same Quartz event. Returning ``None`` consumes that event system-wide.
-        """
-        with self._state_lock:
-            suppress = self._suppress_next_event
-            self._suppress_next_event = False
-        if suppress:
-            return None
-        return event
+    def _unregister_hotkey_ref(self, ref: ctypes.c_void_p) -> None:
+        if self._api is not None:
+            self._api.unregister_hotkey(ref)
+
+    def _handle_event(self, _next_handler, event, _user_data) -> int:
+        assert self._api is not None
+        hotkey_id = _EventHotKeyID()
+        status = self._api.get_event_parameter(
+            event,
+            _EVENT_PARAM_DIRECT_OBJECT,
+            _TYPE_EVENT_HOTKEY_ID,
+            None,
+            ctypes.sizeof(_EventHotKeyID),
+            None,
+            ctypes.byref(hotkey_id),
+        )
+        if status != _NO_ERR:
+            _LOG.debug("carbon event parameter_error status=%s", status)
+            return status
+        if hotkey_id.signature != _SIGNATURE:
+            _LOG.debug("carbon event ignored signature=%s id=%s", hotkey_id.signature, hotkey_id.id)
+            return _NO_ERR
+        registered = self._registered.get(hotkey_id.id)
+        if registered is not None:
+            _LOG.debug(
+                "carbon event dispatch combo=%s id=%s",
+                registered.binding.combo,
+                hotkey_id.id,
+            )
+            registered.binding.callback()
+        else:
+            _LOG.debug("carbon event unknown id=%s", hotkey_id.id)
+        return _NO_ERR

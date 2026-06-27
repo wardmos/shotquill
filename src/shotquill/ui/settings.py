@@ -368,24 +368,20 @@ class SettingsDialog(QDialog):
         self._sound.setChecked(config.sound_on_capture())
         form.addRow("", self._sound)
 
-        # Both permission rows are macOS-only concepts (Screen Recording / Input
-        # Monitoring TCC grants). Off-darwin the status probes return UNKNOWN
+        # Screen Recording is a macOS-only TCC grant. Off-darwin the status probe returns UNKNOWN
         # and the "Open System Settings" button would shell out to `open
         # x-apple-systempreferences:…` — a no-op (or wrong handler) on Linux.
-        # Hide the rows entirely there so Settings doesn't show meaningless
-        # controls; keep the attrs as ``None`` so ``changeEvent`` can skip them.
+        # Hide the row entirely there so Settings doesn't show meaningless
+        # controls. Global hotkeys use RegisterEventHotKey and do not need Input
+        # Monitoring, so there is no hotkey permission row.
         if sys.platform == "darwin":
             self._screen_permission = _PermissionRow(
                 permissions.screen_capture_status, permissions.open_screen_capture_pane
             )
-            self._input_permission = _PermissionRow(
-                permissions.input_monitoring_status, permissions.open_input_monitoring_pane
-            )
             form.addRow(t("settings.permission_screen"), self._screen_permission)
-            form.addRow(t("settings.permission_input"), self._input_permission)
         else:
             self._screen_permission = None
-            self._input_permission = None
+        self._input_permission = None
 
         self._blocklist_button = QPushButton(t("settings.blocklist_button"))
         self._blocklist_button.clicked.connect(self._open_blocklist)
@@ -415,7 +411,6 @@ class SettingsDialog(QDialog):
             and self._screen_permission is not None
         ):
             self._screen_permission.refresh()
-            self._input_permission.refresh()
         super().changeEvent(event)
 
     def _open_blocklist(self) -> None:

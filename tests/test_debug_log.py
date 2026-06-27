@@ -68,6 +68,17 @@ def test_env_false_overrides_enabled_config(monkeypatch, tmp_path):
     assert debug_log.configure(_Config(True)) is None
 
 
+def test_configure_swallows_log_path_errors(monkeypatch):
+    monkeypatch.delenv(debug_log.ENV_DEBUG, raising=False)
+
+    def _boom():
+        raise OSError("log path denied")
+
+    monkeypatch.setattr(paths, "debug_log_path", _boom)
+
+    assert debug_log.configure(_Config(True)) is None
+
+
 def test_new_operation_id_is_prefixed_and_unique():
     first = debug_log.new_operation_id("Capture")
     second = debug_log.new_operation_id("Capture")
