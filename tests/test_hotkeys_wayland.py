@@ -253,7 +253,9 @@ def test_call_request_subscribes_to_predicted_response_before_call(monkeypatch):
     monkeypatch.setattr(wayland, "_PORTAL_TIMEOUT_MS", 1)
     monkeypatch.setattr("PySide6.QtCore.QTimer", _Timer)
     monkeypatch.setattr("PySide6.QtCore.QEventLoop", _Loop)
-    result = manager._call_request(_Bus(), _Iface(), "BindShortcuts", "token", "session", [], "", {})
+    result = manager._call_request(
+        _Bus(), _Iface(), "BindShortcuts", "token", "session", [], "", {}
+    )
     predicted = "/org/freedesktop/portal/desktop/request/1_42/token"
     assert result == {}
     assert events[0] == ("connect", predicted)

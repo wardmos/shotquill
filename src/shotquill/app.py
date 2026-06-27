@@ -38,6 +38,7 @@ from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
 
+
 def _build_icon() -> QIcon:
     """Build the menu-bar / tray mark.
 
