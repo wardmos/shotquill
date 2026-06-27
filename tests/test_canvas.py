@@ -48,6 +48,14 @@ def test_drawing_a_rectangle_pushes_one_undo_command(qtbot):
     assert canvas.undo_stack().count() == 1
 
 
+def test_drawing_a_rectangle_selects_it(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+
+    assert item.isSelected()
+    assert canvas._selected_annotation_scene_rects()
+
+
 def test_right_release_mid_drag_does_not_commit_the_item(qtbot):
     # A stray right-button release while the left button is still dragging must
     # not finish the annotation early — the drag continues and only the left

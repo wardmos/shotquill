@@ -660,8 +660,10 @@ class AnnotationCanvas(QGraphicsView):
             return
 
         item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
-        annotation_log(f"draw.commit item={self._item_label(item)}")
         self._undo.push(_AddItemCommand(self._scene, item))
+        self._scene.clearSelection()
+        item.setSelected(True)
+        annotation_log(f"draw.commit item={self._item_label(item)}")
 
     def _create_text(self, pos: QPointF) -> None:
         # The undo entry is deferred to _finish_text: only text that survives
