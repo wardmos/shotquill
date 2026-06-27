@@ -56,6 +56,16 @@ jobs:
             pip freeze | grep -iE '^(pyinstaller|pyside6|shiboken6|pyobjc)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Resolve smoke artifact version
+        id: smoke
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          short_sha="${SOURCE_SHA:0:7}"
+          version="v0.0.0-smoke-$short_sha"
+          artifact_suffix="-$short_sha"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_suffix=$artifact_suffix" >> "$GITHUB_OUTPUT"
       - name: Build .app + DMG (smoke)
         # universal2 only: it needs universal2 wheels for every binary dep, so
         # it is the strictest of the three arches — the thinned arm64/x86_64
@@ -64,11 +74,11 @@ jobs:
         # the LZMA default releases ship with.
         env:
           SHOTQUILL_DMG_FORMAT: UDZO
-        run: bash packaging/macos/build_dmg.sh v0.0.0-smoke universal2
+        run: bash packaging/macos/build_dmg.sh "${{ steps.smoke.outputs.version }}" universal2
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v7
         with:
-          name: shotquill-dmg-smoke
+          name: shotquill-dmg-smoke${{ steps.smoke.outputs.artifact_suffix }}
           path: dist/ShotQuill-*.dmg
           if-no-files-found: error
           retention-days: 7
@@ -101,8 +111,18 @@ jobs:
             pip freeze | grep -iE '^(pyinstaller|pyside6|shiboken6)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Resolve smoke artifact version
+        id: smoke
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          short_sha="${SOURCE_SHA:0:7}"
+          version="v0.0.0-smoke-$short_sha"
+          artifact_suffix="-$short_sha"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_suffix=$artifact_suffix" >> "$GITHUB_OUTPUT"
       - name: Build AppImage (smoke)
-        run: bash packaging/linux/build_appimage.sh v0.0.0-smoke
+        run: bash packaging/linux/build_appimage.sh "${{ steps.smoke.outputs.version }}"
       - name: Install Qt runtime system libraries
         # The AppImage deliberately doesn't bundle the EGL/GL stack (Mesa) —
         # every desktop distro ships it with the graphical session. The bare
@@ -123,7 +143,7 @@ jobs:
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v7
         with:
-          name: shotquill-appimage-smoke
+          name: shotquill-appimage-smoke${{ steps.smoke.outputs.artifact_suffix }}
           path: dist/ShotQuill-*.AppImage
           if-no-files-found: error
           retention-days: 7
@@ -167,9 +187,20 @@ jobs:
           '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           pip freeze | Select-String -Pattern '^(pyinstaller|pyside6|shiboken6|pillow)' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Resolve smoke artifact version
+        id: smoke
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $shortSha = $env:SOURCE_SHA.Substring(0, 7)
+          $version = "v0.0.0-smoke-$shortSha"
+          $artifactSuffix = "-$shortSha"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "artifact_suffix=$artifactSuffix" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: Build GUI + CLI exes (smoke)
         shell: pwsh
-        run: .\packaging\windows\build_exe.ps1 v0.0.0-smoke
+        run: .\packaging\windows\build_exe.ps1 "${{ steps.smoke.outputs.version }}"
       - name: Smoke-test the CLI exe
         # Proves the frozen bundle launches (Python + Qt load) and the lazily
         # imported Windows backends resolve under PyInstaller.
@@ -182,7 +213,7 @@ jobs:
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: shotquill-windows-smoke
+          name: shotquill-windows-smoke${{ steps.smoke.outputs.artifact_suffix }}
           path: dist/shotquill/**
           if-no-files-found: error
           retention-days: 7
