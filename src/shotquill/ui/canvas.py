@@ -229,6 +229,7 @@ class AnnotationCanvas(QGraphicsView):
         return self._width
 
     def set_tool(self, tool: Tool) -> None:
+        annotation_log(f"tool.set old={self._tool.name} new={tool.name}")
         self._tool = tool
         self._apply_drag_mode()
         self._update_idle_cursor()
@@ -351,6 +352,10 @@ class AnnotationCanvas(QGraphicsView):
         for item in candidates:
             if item in self._annotation_items() and item.flags() & QGraphicsItem.ItemIsSelectable:
                 return item
+        annotations = self._annotation_items()
+        if len(annotations) == 1 and annotations[0].flags() & QGraphicsItem.ItemIsSelectable:
+            annotation_log(f"delete.fallback singleton item={self._item_label(annotations[0])}")
+            return annotations[0]
         return None
 
     def _item_under_cursor(self) -> QGraphicsItem | None:
@@ -416,6 +421,12 @@ class AnnotationCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        annotation_log(
+            f"mouse.press button={event.button()} tool={self._tool.name} "
+            f"pos={event.position().toPoint()} scene={self.mapToScene(event.position().toPoint())} "
+            f"selected={len(self._selected_annotation_items())} "
+            f"annotations={len(self._annotation_items())}"
+        )
         # A press on a crop edge (region capture, still pristine) opens the
         # full-screen adjust surface instead of starting a rubber-band select.
         if event.button() == Qt.LeftButton:
@@ -486,6 +497,7 @@ class AnnotationCanvas(QGraphicsView):
             item.setZValue(self._next_z())
             self._scene.addItem(item)
             self._temp_item = item
+            annotation_log(f"draw.start tool={tool.name} item={self._item_label(item)}")
 
     def mouseMoveEvent(self, event) -> None:
         if self._temp_item is None:
@@ -514,6 +526,12 @@ class AnnotationCanvas(QGraphicsView):
                 self._temp_item.update_rect(self._mosaic_rect)
 
     def mouseReleaseEvent(self, event) -> None:
+        annotation_log(
+            f"mouse.release button={event.button()} tool={self._tool.name} "
+            f"pos={event.position().toPoint()} temp={self._item_label(self._temp_item)} "
+            f"selected={len(self._selected_annotation_items())} "
+            f"annotations={len(self._annotation_items())}"
+        )
         # A select-drag finishing: let Qt commit the new positions, then record
         # an undoable move for whatever actually shifted (a plain click or a
         # rubber-band select moves nothing and pushes no command).
@@ -546,10 +564,12 @@ class AnnotationCanvas(QGraphicsView):
             self._mosaic_rect = None
 
         if self._is_negligible(item):
+            annotation_log(f"draw.discard negligible item={self._item_label(item)}")
             self._scene.removeItem(item)
             return
 
         item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+        annotation_log(f"draw.commit item={self._item_label(item)}")
         self._undo.push(_AddItemCommand(self._scene, item))
 
     def _create_text(self, pos: QPointF) -> None:

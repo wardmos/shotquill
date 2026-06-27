@@ -195,6 +195,19 @@ def test_delete_key_falls_back_to_last_hit_annotation(qtbot):
     assert item.scene() is canvas.scene()
 
 
+def test_delete_key_removes_single_annotation_without_selection(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(False)
+
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert item.scene() is None
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+
+
 def test_tiny_click_is_discarded(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.RECT)
