@@ -24,6 +24,7 @@ DEFAULT_DEBUG_MODE = False
 ENV_DEBUG = "SHOTQUILL_DEBUG"
 _LOGGER_NAME = "shotquill"
 _HANDLER_MARKER = "_shotquill_debug_handler"
+_NULL_HANDLER_MARKER = "_shotquill_null_handler"
 
 
 class _DebugConfig(Protocol):
@@ -82,6 +83,7 @@ def configure(config: _DebugConfig | None = None) -> Path | None:
     logger = get_logger()
     if not is_enabled(config):
         _remove_debug_handlers(logger)
+        _install_null_handler(logger)
         return None
 
     try:
@@ -89,6 +91,7 @@ def configure(config: _DebugConfig | None = None) -> Path | None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         _install_file_handler(logger, path)
     except Exception:
+        _install_null_handler(logger)
         return None
     logger.debug(
         "debug logging enabled pid=%s program=%s path=%s",
@@ -100,6 +103,7 @@ def configure(config: _DebugConfig | None = None) -> Path | None:
 
 
 def _install_file_handler(logger: logging.Logger, path: Path) -> None:
+    _remove_null_handlers(logger)
     existing = _debug_handlers(logger)
     if existing and all(Path(handler.baseFilename) == path for handler in existing):
         logger.setLevel(logging.DEBUG)
@@ -127,7 +131,31 @@ def _debug_handlers(logger: logging.Logger) -> list[logging.FileHandler]:
     ]
 
 
+def _null_handlers(logger: logging.Logger) -> list[logging.NullHandler]:
+    return [
+        handler
+        for handler in logger.handlers
+        if getattr(handler, _NULL_HANDLER_MARKER, False)
+        and isinstance(handler, logging.NullHandler)
+    ]
+
+
+def _install_null_handler(logger: logging.Logger) -> None:
+    if not _null_handlers(logger):
+        handler = logging.NullHandler()
+        setattr(handler, _NULL_HANDLER_MARKER, True)
+        logger.addHandler(handler)
+    logger.setLevel(logging.NOTSET)
+    logger.propagate = False
+
+
 def _remove_debug_handlers(logger: logging.Logger) -> None:
     for handler in _debug_handlers(logger):
+        logger.removeHandler(handler)
+        handler.close()
+
+
+def _remove_null_handlers(logger: logging.Logger) -> None:
+    for handler in _null_handlers(logger):
         logger.removeHandler(handler)
         handler.close()

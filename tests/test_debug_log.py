@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 
 from shotquill import debug_log, paths
@@ -32,6 +33,23 @@ def test_disabled_by_default_does_not_create_log(monkeypatch, tmp_path):
     debug_log.get_logger("test").debug("ignored")
 
     assert not (tmp_path / "debug.log").exists()
+    assert debug_log._null_handlers(debug_log.get_logger())
+
+
+def test_disabled_exception_logging_does_not_use_last_resort(monkeypatch, tmp_path):
+    monkeypatch.delenv(debug_log.ENV_DEBUG, raising=False)
+    monkeypatch.setattr(debug_log, "DEFAULT_DEBUG_MODE", False)
+    monkeypatch.setattr(paths, "debug_log_path", lambda: tmp_path / "debug.log")
+    stream = io.StringIO()
+    monkeypatch.setattr(logging, "lastResort", logging.StreamHandler(stream))
+
+    assert debug_log.configure() is None
+    try:
+        raise RuntimeError("hidden")
+    except RuntimeError:
+        debug_log.get_logger("test").exception("suppressed")
+
+    assert stream.getvalue() == ""
 
 
 def test_config_enables_file_logging(monkeypatch, tmp_path):
@@ -77,6 +95,7 @@ def test_configure_swallows_log_path_errors(monkeypatch):
     monkeypatch.setattr(paths, "debug_log_path", _boom)
 
     assert debug_log.configure(_Config(True)) is None
+    assert debug_log._null_handlers(debug_log.get_logger())
 
 
 def test_new_operation_id_is_prefixed_and_unique():
@@ -134,3 +153,4 @@ def test_crop_log_swallows_logger_errors(monkeypatch):
 
 def teardown_module(module):
     debug_log._remove_debug_handlers(logging.getLogger("shotquill"))
+    debug_log._remove_null_handlers(logging.getLogger("shotquill"))
