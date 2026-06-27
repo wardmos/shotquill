@@ -45,9 +45,14 @@ def _ensure_gui_app() -> None:
     precisely how Wayland is meant to be captured."""
     from PySide6.QtGui import QGuiApplication
 
-    if QGuiApplication.instance() is None:
+    app = QGuiApplication.instance()
+    if app is None:
         # Qt keeps its own reference once constructed; we only need it to exist.
-        QGuiApplication([])
+        from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
+
+        app = QGuiApplication([])
+        app.setApplicationName("ShotQuill")
+        app.setDesktopFileName(LINUX_GUI_DESKTOP_FILE_NAME)
 
 
 class PortalScreenCapturer(ScreenCapturer):

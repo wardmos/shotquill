@@ -52,6 +52,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "无法读取你的白名单，ShotQuill 不会截图"
         "（它无法判断哪些被允许）。请在设置里修复。（{error}）",
     },
+    "notify.window_policy_unavailable": {
+        "en": "ShotQuill can't inspect windows on this desktop, so it won't capture "
+        "while a blocklist or allowlist is active. ({error})",
+        "zh": "ShotQuill 无法检查此桌面上的窗口；当排除名单或白名单启用时不会截图。（{error}）",
+    },
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.open_folder_failed": {
         "en": "Couldn't open the save folder: {error}",

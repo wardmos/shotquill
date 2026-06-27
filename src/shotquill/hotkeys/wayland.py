@@ -201,7 +201,7 @@ class WaylandHotkeyManager(HotkeyManager):
         token = "shotquill_" + uuid.uuid4().hex
         session_token = "shotquill_" + uuid.uuid4().hex
         options = {"handle_token": token, "session_handle_token": session_token}
-        results = self._await_request(bus, iface.call("CreateSession", options))
+        results = self._call_request(bus, iface, "CreateSession", token, options)
         handle = results.get("session_handle")
         if not handle:
             raise HotkeyUnavailable("the GlobalShortcuts portal opened no session")
@@ -216,20 +216,22 @@ class WaylandHotkeyManager(HotkeyManager):
             [shortcut_id, {"description": description, "preferred_trigger": trigger}]
             for shortcut_id, _combo, trigger, description in specs
         ]
-        self._await_request(bus, iface.call("BindShortcuts", session, shortcuts, "", {}))
+        token = "shotquill_" + uuid.uuid4().hex
+        self._call_request(
+            bus, iface, "BindShortcuts", token, session, shortcuts, "", {"handle_token": token}
+        )
 
-    def _await_request(self, bus, reply) -> dict:
-        """Drive a Qt event loop until a portal ``Request`` answers; return its
-        results vardict (response code 0), or raise :class:`HotkeyUnavailable` on
-        a rejected call, a cancel, or a timeout."""
+    def _call_request(self, bus, iface, method: str, token: str, *call_args) -> dict:
+        """Call a portal Request-returning method and wait for its ``Response``.
+
+        Subscribe to the predicted request path *before* issuing the method call.
+        The portal may emit ``Response`` immediately, and subscribing only after
+        the reply comes back can miss that signal and leave the hotkey setup
+        waiting until timeout. The path is derivable from our unique bus name and
+        ``handle_token`` (xdg-desktop-portal API >= 0.9); if a backend still
+        returns a different path, subscribe to that too.
+        """
         from PySide6.QtCore import QEventLoop, QTimer
-
-        args = reply.arguments()
-        if not args:
-            raise HotkeyUnavailable(
-                f"the GlobalShortcuts portal rejected a call: {reply.errorMessage()}"
-            )
-        request_path = args[0]
 
         state: dict = {}
         loop = QEventLoop()
@@ -240,13 +242,35 @@ class WaylandHotkeyManager(HotkeyManager):
             state["results"] = payload[1] if len(payload) > 1 else {}
             loop.quit()
 
-        bus.connect(_PORTAL_SERVICE, request_path, _REQUEST_IFACE, "Response", _on_response)
+        predicted_path = _request_handle_path(bus.baseService(), token)
+        connected: list[str] = []
+        if bus.connect(_PORTAL_SERVICE, predicted_path, _REQUEST_IFACE, "Response", _on_response):
+            connected.append(predicted_path)
+
+        reply = iface.call(method, *call_args)
+        reply_args = reply.arguments()
+        if not reply_args:
+            for path in connected:
+                bus.disconnect(_PORTAL_SERVICE, path, _REQUEST_IFACE, "Response", _on_response)
+            raise HotkeyUnavailable(
+                f"the GlobalShortcuts portal rejected a call: {reply.errorMessage()}"
+            )
+        request_path = reply_args[0]
+        if request_path and request_path != predicted_path:
+            if bus.connect(_PORTAL_SERVICE, request_path, _REQUEST_IFACE, "Response", _on_response):
+                connected.append(request_path)
+        if not connected:
+            raise HotkeyUnavailable(
+                "could not subscribe to the GlobalShortcuts portal's Response signal"
+            )
         timer = QTimer()
         timer.setSingleShot(True)
         timer.timeout.connect(loop.quit)
         timer.start(_PORTAL_TIMEOUT_MS)
-        loop.exec()
-        bus.disconnect(_PORTAL_SERVICE, request_path, _REQUEST_IFACE, "Response", _on_response)
+        if "response" not in state:
+            loop.exec()
+        for path in connected:
+            bus.disconnect(_PORTAL_SERVICE, path, _REQUEST_IFACE, "Response", _on_response)
 
         if "response" not in state:
             raise HotkeyUnavailable("the GlobalShortcuts portal did not respond in time")
@@ -287,3 +311,14 @@ def globalshortcuts_available() -> bool:
         return bool(iface.isValid())
     except Exception:
         return False
+
+
+def _request_handle_path(unique_name: str, token: str) -> str:
+    """The Request object path a portal call will use for ``handle_token``.
+
+    ``Response`` must be subscribed before the method call, so derive the path
+    from the caller's unique bus name using the xdg-desktop-portal request-path
+    convention: ``/org/freedesktop/portal/desktop/request/<sender>/<token>``.
+    """
+    sender = unique_name.removeprefix(":").replace(".", "_")
+    return f"/org/freedesktop/portal/desktop/request/{sender}/{token}"

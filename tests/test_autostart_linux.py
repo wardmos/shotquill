@@ -99,6 +99,9 @@ def test_gui_desktop_and_icon_files_ship_in_packaging():
     assert desktop_body.startswith("[Desktop Entry]")
     assert "Terminal=false" in desktop_body  # GUI variant, not the AppImage CLI one
     assert "Exec=shotquill" in desktop_body
+    from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
+
+    assert desktop.name == f"{LINUX_GUI_DESKTOP_FILE_NAME}.desktop"
     icon_body = icon.read_text(encoding="utf-8")
     assert icon_body.lstrip().startswith("<?xml") or icon_body.lstrip().startswith("<svg")
 
