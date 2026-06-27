@@ -46,12 +46,11 @@ def _build_icon() -> QIcon:
 
     On macOS we render a *template* image: monochrome, only the alpha channel
     matters, and macOS tints the opaque pixels to match the menu bar (white on
-    dark, dark on light) like its own status items — so the tile is solid black
-    with the mark knocked out and flagged as a mask. Other desktops (Linux/X11
-    tray) don't tint a mask, which would leave a black tile with transparent
-    glyphs — invisible on dark panels — so there we draw a self-contained icon:
-    a blue tile with the mark painted in white. The colored Launchpad icon is a
-    separate ``.icns`` and is unaffected.
+    dark, dark on light) like its own status items — so only the capture/pen mark
+    is opaque and the surrounding tile is transparent. Other desktops (Linux/X11
+    tray) don't tint a mask, so there we draw a self-contained icon: a blue tile
+    with the mark painted in white. The colored Launchpad icon is a separate
+    ``.icns`` and is unaffected.
 
     For non-macOS tray icons we attach multiple pixel sizes (16/22/24/32/48/64)
     so Qt can pick the right one for a HiDPI panel; a single 64px pixmap would
@@ -75,9 +74,10 @@ def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
     """Render the rounded-square capture/pen tray glyph at ``size``×``size`` pixels.
 
     The proportions (corner radius, tile padding, glyph height) are all derived
-    from ``size`` so smaller pixmaps stay legible. macOS gets the mark knocked
-    out of a black mask; everywhere else the mark is painted white over a blue
-    tile so it reads on dark panels without relying on the desktop to tint it.
+    from ``size`` so smaller pixmaps stay legible. macOS gets an inverted
+    template mask: the mark is opaque and the tile is transparent. Everywhere
+    else the mark is painted white over a blue tile so it reads on dark panels
+    without relying on the desktop to tint it.
     """
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
@@ -85,18 +85,19 @@ def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setPen(Qt.NoPen)
     tile_color = QColor("black") if is_mac else QColor("#087cf3")
-    painter.setBrush(tile_color)
-    padding = max(1, round(size * 6 / 64))
-    radius = max(2, round(size * 14 / 64))
-    tile = size - 2 * padding
-    painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
-    if is_mac:
-        painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
-        mark_color = QColor("black")
-    else:
-        mark_color = QColor("white")
+    mark_color = QColor("black") if is_mac else QColor("white")
+    if not is_mac:
+        painter.setBrush(tile_color)
+        padding = max(1, round(size * 6 / 64))
+        radius = max(2, round(size * 14 / 64))
+        tile = size - 2 * padding
+        painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
 
     painter.scale(size / 64, size / 64)
+    if is_mac:
+        painter.translate(32, 32)
+        painter.scale(1.12, 1.12)
+        painter.translate(-32, -32)
     pen = QPen(mark_color, 4.0)
     pen.setCapStyle(Qt.RoundCap)
     pen.setJoinStyle(Qt.RoundJoin)
@@ -107,7 +108,7 @@ def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
     painter.setBrush(mark_color)
     _draw_tray_nib(painter)
     if is_mac:
-        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
         painter.setBrush(QColor("black"))
     else:
         painter.setBrush(tile_color)
