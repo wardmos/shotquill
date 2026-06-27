@@ -325,6 +325,10 @@ class SettingsDialog(QDialog):
         self._include_cursor.setChecked(config.include_cursor())
         form.addRow("", self._include_cursor)
 
+        self._debug_mode = QCheckBox(t("settings.debug_mode"))
+        self._debug_mode.setChecked(config.debug_mode())
+        form.addRow("", self._debug_mode)
+
         self._hover_switch = QComboBox()
         for choice in _HOVER_SWITCH_CHOICES:
             self._hover_switch.addItem(_hover_switch_label(choice), choice)
@@ -510,6 +514,7 @@ class SettingsDialog(QDialog):
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_include_cursor(self._include_cursor.isChecked())
+        self._config.set_debug_mode(self._debug_mode.isChecked())
         self._config.set_hover_switch_delay_ms(self._hover_switch.currentData())
         self._config.set_region_adjust(self._region_adjust.isChecked())
         self._config.set_editor_backdrop(self._editor_backdrop.isChecked())

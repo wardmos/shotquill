@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
 from shotquill import blocklist as bl  # noqa: E402
+from shotquill import debug_log, paths  # noqa: E402
 from shotquill.capture.base import CaptureResult, Rect, WindowInfo  # noqa: E402
 from shotquill.permissions import PermissionStatus  # noqa: E402
 
@@ -435,6 +436,29 @@ def test_grab_takes_qimage_fast_path_when_nothing_blocked(qapp, config, fakes, m
     assert app._grab(bl.Blocklist()) is sentinel
     assert seen == [frozenset()]
     app.shutdown()
+
+
+def test_grab_fast_path_writes_completion_debug_log(qapp, config, fakes, monkeypatch, tmp_path):
+    from PySide6.QtGui import QImage
+
+    log = tmp_path / "debug.log"
+    config.set_debug_mode(True)
+    monkeypatch.setattr(paths, "debug_log_path", lambda: log)
+    capturer, _hotkeys, _autostart = fakes
+    sentinel = QImage(7, 5, QImage.Format.Format_RGBA8888)
+    capturer.capture_fullscreen_image = lambda exclude=frozenset(): sentinel
+
+    app = _build_app(qapp, fakes)
+    app._current_debug_id = "capture-test"
+    assert app._grab(bl.Blocklist()) is sentinel
+    for handler in debug_log._debug_handlers(debug_log.get_logger()):
+        handler.flush()
+
+    text = log.read_text(encoding="utf-8")
+    assert "op=capture-test" in text
+    assert "backend=qimage_fast" in text
+    app.shutdown()
+    debug_log.configure(None)
 
 
 def test_grab_falls_back_when_backend_has_no_fast_path(qapp, config, fakes):

@@ -20,7 +20,7 @@ from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from shotquill import __version__, permissions, redact
+from shotquill import __version__, debug_log, permissions, redact
 from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
@@ -37,6 +37,8 @@ from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
+
+_LOG = debug_log.get_logger(__name__)
 
 
 def _build_icon() -> QIcon:
@@ -124,6 +126,8 @@ class ShotquillApp(QObject):
         super().__init__()
         self._app = app
         self._config = Config()
+        debug_log.configure(self._config)
+        _LOG.debug("gui init platform=%s version=%s", sys.platform, __version__)
         set_language(self._config.language())
 
         # Platform backends behind the factory seams: macOS gets ScreenCaptureKit
@@ -152,6 +156,8 @@ class ShotquillApp(QObject):
         self._allowlist = al.Allowlist()
         self._smart_screenshot = None
         self._smart_geometry = None
+        self._current_debug_id: str | None = None
+        self._smart_debug_id: str | None = None
 
         self._bridge = _HotkeyBridge()
         # Hotkeys are emitted from pynput's listener thread. Force queued delivery
@@ -169,6 +175,7 @@ class ShotquillApp(QObject):
         self._tray.show()
         self._app.applicationStateChanged.connect(self._retry_pending_permissions)
         self._apply_permission_gated_hotkeys()
+        _LOG.debug("gui ready")
 
     def _hotkey_label(self, action: str) -> str:
         """Display string for a hotkey, or empty if the user disabled it."""
@@ -250,12 +257,16 @@ class ShotquillApp(QObject):
         )
         for action, emit, label in actions:
             if self._config.hotkey_enabled(action):
+                _LOG.debug(
+                    "register hotkey action=%s combo=%s", action, self._config.hotkey(action)
+                )
                 self._hotkeys.register(self._config.hotkey(action), emit, description=label)
         try:
             self._hotkeys.start()
         except HotkeyUnavailable as exc:
             # The session refuses global grabs (e.g. Wayland). Nothing to grant
             # — surface the reason once and keep the tray menu working.
+            _LOG.exception("hotkeys unavailable reason=%s", exc.reason)
             self._notify(t("notify.hotkeys_unavailable").format(reason=exc.reason))
         except PermissionError:
             # The deep-link is macOS-specific (an x-apple-systempreferences URL
@@ -264,7 +275,9 @@ class ShotquillApp(QObject):
                 self._show_permission_prompt("input_monitoring")
             else:
                 self._notify(t("notify.hotkeys_need_input_monitoring"))
+            _LOG.exception("hotkey permission error")
             return False
+        _LOG.debug("hotkeys active")
         return True
 
     def _shelve_settings_dialog(self) -> None:
@@ -296,38 +309,60 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_fullscreen(self) -> None:
-        self._shelve_settings_dialog()
-        blocklist = self._load_blocklist_or_abort()
-        if blocklist is None:
-            self._unshelve_settings_dialog()
-            return
-        allowlist = self._load_allowlist_or_abort()
-        if allowlist is None:
-            self._unshelve_settings_dialog()
-            return
-        if allowlist:
-            # An allowlist restricts capture to specific apps, so a whole-screen
-            # grab cannot be honoured — refuse it (matching the CLI/MCP contract).
-            self._notify(t("notify.allowlist_whole_screen"))
-            self._unshelve_settings_dialog()
-            return
+        operation_id = debug_log.new_operation_id("capture")
+        previous = self._current_debug_id
+        self._current_debug_id = operation_id
         try:
-            screenshot = self._grab(blocklist)
+            _LOG.debug("op=%s capture_fullscreen start", operation_id)
+            self._shelve_settings_dialog()
+            blocklist = self._load_blocklist_or_abort()
+            if blocklist is None:
+                self._unshelve_settings_dialog()
+                return
+            allowlist = self._load_allowlist_or_abort()
+            if allowlist is None:
+                self._unshelve_settings_dialog()
+                return
+            if allowlist:
+                # An allowlist restricts capture to specific apps, so a whole-screen
+                # grab cannot be honoured — refuse it (matching the CLI/MCP contract).
+                self._notify(t("notify.allowlist_whole_screen"))
+                self._unshelve_settings_dialog()
+                _LOG.debug("op=%s capture_fullscreen refused allowlist_enabled=true", operation_id)
+                return
+            try:
+                screenshot = self._grab(blocklist)
+            finally:
+                self._unshelve_settings_dialog()
+            if screenshot is not None:
+                _LOG.debug(
+                    "op=%s capture_fullscreen deliver size=%sx%s",
+                    operation_id,
+                    screenshot.width(),
+                    screenshot.height(),
+                )
+                self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
         finally:
-            self._unshelve_settings_dialog()
-        if screenshot is not None:
-            self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
+            self._current_debug_id = previous
 
     @Slot()
     def _capture_smart(self) -> None:
+        operation_id = debug_log.new_operation_id("capture")
+        self._current_debug_id = operation_id
+        self._smart_debug_id = operation_id
+        _LOG.debug("op=%s capture_smart start", operation_id)
         self._shelve_settings_dialog()
         blocklist = self._load_blocklist_or_abort()
         if blocklist is None:
             self._unshelve_settings_dialog()
+            self._clear_smart_debug_id(operation_id)
+            self._current_debug_id = None
             return
         allowlist = self._load_allowlist_or_abort()
         if allowlist is None:
             self._unshelve_settings_dialog()
+            self._clear_smart_debug_id(operation_id)
+            self._current_debug_id = None
             return
         self._allowlist = allowlist
         # Snapshot the window list *before* showing the overlay so our own
@@ -337,10 +372,14 @@ class ShotquillApp(QObject):
         # or redact, so fail closed rather than leak pixels on Wayland.
         try:
             windows = self._capturer.list_windows()
+            _LOG.debug("op=%s capture_smart windows count=%s", operation_id, len(windows))
         except Exception as exc:
+            _LOG.exception("op=%s capture_smart list_windows failed", operation_id)
             if blocklist or allowlist:
                 self._window_policy_unavailable(exc)
                 self._unshelve_settings_dialog()
+                self._clear_smart_debug_id(operation_id)
+                self._current_debug_id = None
                 return
             windows = []
         # Resolve which on-screen windows are blocklisted up front, so the click
@@ -356,6 +395,9 @@ class ShotquillApp(QObject):
         screenshot = self._grab(blocklist, blocked=list(self._blocked_windows.values()))
         if screenshot is None:
             self._unshelve_settings_dialog()
+            _LOG.debug("op=%s capture_smart abort screenshot_unavailable", operation_id)
+            self._clear_smart_debug_id(operation_id)
+            self._current_debug_id = None
             return
         geometry = self._app.primaryScreen().virtualGeometry()
         self._smart_screenshot = screenshot
@@ -378,12 +420,20 @@ class ShotquillApp(QObject):
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
         overlay.destroyed.connect(self._unshelve_settings_dialog)
+        overlay.destroyed.connect(lambda: self._clear_smart_debug_id(operation_id))
         # present_overlay shows the overlay the way the platform needs: one
         # stay-on-top window spanning the virtual desktop (X11), Wayland
         # fullscreen, or — on macOS, where a single window sits under the menu
         # bar and only covers one display — one menu-bar-level window per screen
         # sharing this overlay as their brain.
         present_overlay(overlay, self._app)
+        _LOG.debug(
+            "op=%s capture_smart overlay shown blocked=%s not_allowed=%s",
+            operation_id,
+            len(self._blocked_windows),
+            len(self._not_allowed_windows),
+        )
+        self._current_debug_id = None
 
     def _window_preview_image(self, window_id: int) -> QImage | None:
         """One window's un-occluded pixels for the overlay's hover preview.
@@ -399,13 +449,20 @@ class ShotquillApp(QObject):
         try:
             return result_to_qimage(self._capturer.capture_window(window_id))
         except Exception:
+            _LOG.exception(
+                "op=%s window preview failed window_id=%s",
+                self._smart_debug_id,
+                window_id,
+            )
             return None
 
     def _smart_region_selected(self, image: QImage, rect: QRect) -> None:
         """Deliver a region crop, unless the allowlist forbids whole-screen grabs."""
         if self._allowlist:
             self._notify(t("notify.allowlist_whole_screen"))
+            _LOG.debug("op=%s smart_region refused allowlist_enabled=true", self._smart_debug_id)
             return
+        _LOG.debug("op=%s smart_region deliver rect=%s", self._smart_debug_id, rect)
         self._deliver_capture(
             image, rect, region=RegionContext(self._smart_screenshot, self._smart_geometry)
         )
@@ -414,25 +471,61 @@ class ShotquillApp(QObject):
         """Deliver the full-screen shot, unless the allowlist forbids it."""
         if self._allowlist:
             self._notify(t("notify.allowlist_whole_screen"))
+            _LOG.debug(
+                "op=%s smart_fullscreen refused allowlist_enabled=true", self._smart_debug_id
+            )
             return
+        _LOG.debug("op=%s smart_fullscreen deliver", self._smart_debug_id)
         self._deliver_capture(self._smart_screenshot, self._smart_geometry)
 
     def _capture_window_image(self, window_id: int, origin: QRect) -> None:
-        blocked = self._blocked_windows.get(window_id)
-        if blocked is not None:
-            self._notify(t("notify.capture_blocked").format(app=blocked.owner))
-            return
-        not_allowed = self._not_allowed_windows.get(window_id)
-        if not_allowed is not None:
-            self._notify(t("notify.capture_not_allowed").format(app=not_allowed.owner))
-            return
+        operation_id = self._smart_debug_id or debug_log.new_operation_id("capture")
+        previous = self._current_debug_id
+        self._current_debug_id = operation_id
         try:
-            result = self._capturer.capture_window(window_id)
-        except Exception as exc:
-            self._notify(t("notify.capture_failed").format(error=exc))
-            return
-        result = self._redact_window_overlaps(result, origin)
-        self._deliver_capture(result_to_qimage(result), origin)
+            _LOG.debug(
+                "op=%s capture_window start window_id=%s origin=%s",
+                operation_id,
+                window_id,
+                origin,
+            )
+            blocked = self._blocked_windows.get(window_id)
+            if blocked is not None:
+                self._notify(t("notify.capture_blocked").format(app=blocked.owner))
+                _LOG.debug(
+                    "op=%s capture_window refused blocklisted window_id=%s owner=%s",
+                    operation_id,
+                    window_id,
+                    blocked.owner,
+                )
+                return
+            not_allowed = self._not_allowed_windows.get(window_id)
+            if not_allowed is not None:
+                self._notify(t("notify.capture_not_allowed").format(app=not_allowed.owner))
+                _LOG.debug(
+                    "op=%s capture_window refused not_allowed window_id=%s owner=%s",
+                    operation_id,
+                    window_id,
+                    not_allowed.owner,
+                )
+                return
+            try:
+                result = self._capturer.capture_window(window_id)
+            except Exception as exc:
+                self._notify(t("notify.capture_failed").format(error=exc))
+                _LOG.exception("op=%s capture_window failed window_id=%s", operation_id, window_id)
+                return
+            result = self._redact_window_overlaps(result, origin)
+            _LOG.debug(
+                "op=%s capture_window deliver window_id=%s size=%sx%s",
+                operation_id,
+                window_id,
+                result.width,
+                result.height,
+            )
+            self._deliver_capture(result_to_qimage(result), origin)
+        finally:
+            self._current_debug_id = previous
 
     def _redact_window_overlaps(self, result, target: QRect):
         """Hide windows stacked over the target whose pixels must not leak, when
@@ -473,6 +566,13 @@ class ShotquillApp(QObject):
             if blocked is None:
                 return None
         exclude_ids = frozenset(w.window_id for w in blocked)
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s grab fullscreen blocked=%s exclude_count=%s",
+            operation_id,
+            len(blocked),
+            len(exclude_ids),
+        )
         try:
             fast_grab = getattr(self._capturer, "capture_fullscreen_image", None)
             if not blocked and fast_grab is not None:
@@ -483,16 +583,32 @@ class ShotquillApp(QObject):
                 # thrashes swap — and costs seconds — when memory is tight.
                 # (getattr keeps duck-typed capturers without the fast path
                 # working — they just fall through to the CaptureResult route.)
-                return fast_grab(exclude_ids)
+                image = fast_grab(exclude_ids)
+                _LOG.debug(
+                    "op=%s grab fullscreen complete backend=qimage_fast size=%sx%s",
+                    operation_id,
+                    image.width(),
+                    image.height(),
+                )
+                return image
             result = self._capturer.capture_fullscreen(exclude_window_ids=exclude_ids)
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
+            _LOG.exception("op=%s grab fullscreen failed", operation_id)
             return None
         remaining = [w for w in blocked if w.window_id not in result.excluded_window_ids]
         if remaining:
+            _LOG.debug("op=%s grab fullscreen redacting remaining=%s", operation_id, len(remaining))
             result, _ = redact.redact_bounds(
                 result, (result.origin_x, result.origin_y), [w.bounds for w in remaining]
             )
+        _LOG.debug(
+            "op=%s grab fullscreen complete backend=capture_result size=%sx%s scale=%s",
+            operation_id,
+            result.width,
+            result.height,
+            result.scale,
+        )
         return result_to_qimage(result)
 
     def _load_blocklist_or_abort(self) -> bl.Blocklist | None:
@@ -513,6 +629,7 @@ class ShotquillApp(QObject):
             return bl.load()
         except bl.BlocklistError as exc:
             self._notify(t("notify.blocklist_unreadable").format(error=exc))
+            _LOG.exception("blocklist load failed")
             return None
 
     def _load_allowlist_or_abort(self) -> al.Allowlist | None:
@@ -527,6 +644,7 @@ class ShotquillApp(QObject):
             return al.load()
         except al.AllowlistError as exc:
             self._notify(t("notify.allowlist_unreadable").format(error=exc))
+            _LOG.exception("allowlist load failed")
             return None
 
     def _window_policy_unavailable(self, error: Exception) -> None:
@@ -544,6 +662,7 @@ class ShotquillApp(QObject):
         try:
             windows = self._capturer.list_windows()
         except Exception as exc:
+            _LOG.exception("blocked_on_screen list_windows failed")
             self._window_policy_unavailable(exc)
             return None
         return blocklist.blocked(windows)
@@ -562,6 +681,15 @@ class ShotquillApp(QObject):
         # and skips the editor. With both auto toggles off, the editor opens —
         # placed over ``origin`` (the shot's on-screen rect) when known, with
         # ``region`` keeping a region capture's crop arrow-key adjustable there.
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s deliver_capture size=%sx%s origin=%s region=%s",
+            operation_id,
+            image.width(),
+            image.height(),
+            origin,
+            bool(region),
+        )
         self._signal_capture()
         if self._auto_output(image):
             return
@@ -579,6 +707,15 @@ class ShotquillApp(QObject):
         copy = self._config.auto_copy_after_capture()
         if not (save or copy):
             return False
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s auto_output save=%s copy=%s size=%sx%s",
+            operation_id,
+            save,
+            copy,
+            image.width(),
+            image.height(),
+        )
         if copy:
             from shotquill.output.clipboard import copy_qimage
 
@@ -590,6 +727,7 @@ class ShotquillApp(QObject):
                 save_qimage(image, self._config.save_dir(), self._config.image_format())
             except OSError as exc:
                 self._notify(t("notify.save_failed").format(error=exc))
+                _LOG.exception("op=%s auto_save failed", operation_id)
                 return False
         return True
 
@@ -601,6 +739,15 @@ class ShotquillApp(QObject):
     ) -> None:
         if not self._config.region_adjust():
             region = None  # the user turned crop adjustment off in Settings
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s open_editor size=%sx%s origin=%s region=%s",
+            operation_id,
+            image.width(),
+            image.height(),
+            origin,
+            bool(region),
+        )
         editor = self._make_editor(image, origin, region)
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)
@@ -647,6 +794,7 @@ class ShotquillApp(QObject):
         try:
             self._autostart.set_enabled(self._config.autostart())
         except OSError:
+            _LOG.exception("autostart sync failed")
             pass  # non-fatal: launch-at-login is a convenience, not core function
 
     def _open_save_folder(self) -> None:
@@ -675,6 +823,7 @@ class ShotquillApp(QObject):
             subprocess.run([opener, str(directory)], check=True, timeout=20)
         except (OSError, subprocess.SubprocessError) as exc:
             self._notify(t("notify.open_folder_failed").format(error=exc))
+            _LOG.exception("open save folder failed")
 
     def _open_settings(self) -> None:
         # Modeless on purpose. exec() would make the dialog application-modal,
@@ -696,6 +845,8 @@ class ShotquillApp(QObject):
         dialog.activateWindow()
 
     def _apply_settings(self) -> None:
+        debug_log.configure(self._config)
+        _LOG.debug("settings applied debug_mode=%s", self._config.debug_mode())
         set_language(self._config.language())
         self._capturer.include_cursor = self._config.include_cursor()
         self._apply_permission_gated_hotkeys()
@@ -728,6 +879,10 @@ class ShotquillApp(QObject):
     def _forget(self, window: object) -> None:
         if window in self._windows:
             self._windows.remove(window)
+
+    def _clear_smart_debug_id(self, operation_id: str) -> None:
+        if self._smart_debug_id == operation_id:
+            self._smart_debug_id = None
 
     def shutdown(self) -> None:
         self._hotkeys.stop()

@@ -216,6 +216,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Include mouse pointer in screenshots",
         "zh": "截图包含鼠标指针",
     },
+    "settings.debug_mode": {
+        "en": "Debug mode (write detailed logs)",
+        "zh": "Debug 模式（写入详细日志）",
+    },
     "settings.flash": {"en": "Flash on capture", "zh": "截图时闪光"},
     "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},
     "settings.hover_switch": {"en": "Highlight window after", "zh": "悬停高亮窗口"},

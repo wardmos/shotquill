@@ -4,6 +4,7 @@ from shotquill.config import (
     DEFAULT_AUTO_COPY,
     DEFAULT_AUTO_SAVE,
     DEFAULT_AUTOSTART,
+    DEFAULT_DEBUG_MODE,
     DEFAULT_EDITOR_HOTKEYS,
     DEFAULT_FLASH,
     DEFAULT_HOTKEYS,
@@ -83,6 +84,10 @@ def test_auto_output_defaults_off():
     assert DEFAULT_AUTO_COPY is False
 
 
+def test_debug_mode_defaults_off():
+    assert DEFAULT_DEBUG_MODE is False
+
+
 def test_hover_switch_defaults():
     # By default the overlay only switches its highlighted window when one is
     # clicked; NEVER is the sentinel for that mode (any negative value).
@@ -141,6 +146,7 @@ def test_config_returns_defaults_when_unset(config):
     assert config.sound_on_capture() is DEFAULT_SOUND
     assert config.autostart() is DEFAULT_AUTOSTART
     assert config.include_cursor() is DEFAULT_INCLUDE_CURSOR
+    assert config.debug_mode() is DEFAULT_DEBUG_MODE
 
 
 def test_config_hotkey_round_trip(config):
@@ -190,10 +196,12 @@ def test_config_bool_round_trips(config):
     config.set_sound_on_capture(True)
     config.set_autostart(True)
     config.set_include_cursor(True)
+    config.set_debug_mode(True)
     assert config.flash_on_capture() is False
     assert config.sound_on_capture() is True
     assert config.autostart() is True
     assert config.include_cursor() is True
+    assert config.debug_mode() is True
 
 
 def test_region_adjust_defaults_on(config):
