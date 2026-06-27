@@ -131,3 +131,20 @@ def audit_log_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local" / "state")
     return base / "shotquill" / "audit.log"
+
+
+def debug_log_path() -> Path:
+    """Where opt-in debug diagnostics are written (computed, not created).
+
+    macOS uses ``~/Library/Logs/shotquill`` so logs are easy to inspect in the
+    standard user log location; Windows keeps them under local app data; Linux
+    follows XDG state. The debug logger owns creating the parent directory.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Logs"
+        return base / "shotquill" / "debug.log"
+    if sys.platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA", "") or Path.home() / "AppData" / "Local"
+        return Path(local) / "shotquill" / "Logs" / "debug.log"
+    base = Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local" / "state")
+    return base / "shotquill" / "debug.log"

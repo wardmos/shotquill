@@ -17,7 +17,7 @@ import types
 
 import pytest
 
-from shotquill import audit, cli, headless, paths
+from shotquill import audit, cli, debug_log, headless, paths
 from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, WindowInfo
 
 PNG_MAGIC = b"\x89PNG"
@@ -93,6 +93,11 @@ def _audit_entries(log) -> list[dict]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
+def _flush_debug_log() -> None:
+    for handler in debug_log._debug_handlers(debug_log.get_logger()):
+        handler.flush()
+
+
 # --- dispatch ---------------------------------------------------------------
 
 
@@ -102,6 +107,30 @@ def test_no_args_launches_gui(monkeypatch):
 
     monkeypatch.setattr(app_module, "run", lambda: 42)
     assert cli.main([]) == 42
+
+
+def test_cli_debug_uses_persisted_config(config, monkeypatch, tmp_path):
+    log = tmp_path / "debug.log"
+    config.set_debug_mode(True)
+    monkeypatch.delenv(debug_log.ENV_DEBUG, raising=False)
+    monkeypatch.setattr(paths, "debug_log_path", lambda: log)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--version"])
+    assert excinfo.value.code == 0
+    _flush_debug_log()
+
+    assert "cli main command=--version" in log.read_text(encoding="utf-8")
+    debug_log.configure(None)
+
+
+def test_cli_debug_argv_summary_omits_values():
+    command, argc, flags = cli._argv_summary(
+        ["capture", "--app", "Private App", "--title=Secret Title", "--output", "/tmp/private.png"]
+    )
+    assert command == "capture"
+    assert argc == 6
+    assert flags == ["--app", "--output", "--title"]
 
 
 def test_version_flag_exits_zero():
