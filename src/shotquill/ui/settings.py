@@ -325,6 +325,10 @@ class SettingsDialog(QDialog):
         self._include_cursor.setChecked(config.include_cursor())
         form.addRow("", self._include_cursor)
 
+        self._debug_mode = QCheckBox(t("settings.debug_mode"))
+        self._debug_mode.setChecked(config.debug_mode())
+        form.addRow("", self._debug_mode)
+
         self._hover_switch = QComboBox()
         for choice in _HOVER_SWITCH_CHOICES:
             self._hover_switch.addItem(_hover_switch_label(choice), choice)
@@ -364,24 +368,20 @@ class SettingsDialog(QDialog):
         self._sound.setChecked(config.sound_on_capture())
         form.addRow("", self._sound)
 
-        # Both permission rows are macOS-only concepts (Screen Recording / Input
-        # Monitoring TCC grants). Off-darwin the status probes return UNKNOWN
+        # Screen Recording is a macOS-only TCC grant. Off-darwin the status probe returns UNKNOWN
         # and the "Open System Settings" button would shell out to `open
         # x-apple-systempreferences:…` — a no-op (or wrong handler) on Linux.
-        # Hide the rows entirely there so Settings doesn't show meaningless
-        # controls; keep the attrs as ``None`` so ``changeEvent`` can skip them.
+        # Hide the row entirely there so Settings doesn't show meaningless
+        # controls. Global hotkeys use RegisterEventHotKey and do not need Input
+        # Monitoring, so there is no hotkey permission row.
         if sys.platform == "darwin":
             self._screen_permission = _PermissionRow(
                 permissions.screen_capture_status, permissions.open_screen_capture_pane
             )
-            self._input_permission = _PermissionRow(
-                permissions.input_monitoring_status, permissions.open_input_monitoring_pane
-            )
             form.addRow(t("settings.permission_screen"), self._screen_permission)
-            form.addRow(t("settings.permission_input"), self._input_permission)
         else:
             self._screen_permission = None
-            self._input_permission = None
+        self._input_permission = None
 
         self._blocklist_button = QPushButton(t("settings.blocklist_button"))
         self._blocklist_button.clicked.connect(self._open_blocklist)
@@ -411,7 +411,6 @@ class SettingsDialog(QDialog):
             and self._screen_permission is not None
         ):
             self._screen_permission.refresh()
-            self._input_permission.refresh()
         super().changeEvent(event)
 
     def _open_blocklist(self) -> None:
@@ -510,6 +509,7 @@ class SettingsDialog(QDialog):
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_include_cursor(self._include_cursor.isChecked())
+        self._config.set_debug_mode(self._debug_mode.isChecked())
         self._config.set_hover_switch_delay_ms(self._hover_switch.currentData())
         self._config.set_region_adjust(self._region_adjust.isChecked())
         self._config.set_editor_backdrop(self._editor_backdrop.isChecked())

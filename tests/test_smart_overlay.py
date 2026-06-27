@@ -377,6 +377,48 @@ def test_painted_window_uses_unoccluded_preview_pixels(qtbot):
     assert (after.red(), after.green(), after.blue()) == (255, 0, 0)
 
 
+def test_preview_cache_is_bounded(qtbot):
+    windows = [
+        WindowInfo(window_id=i, owner=f"Demo {i}", title="", bounds=Rect(i * 10, 0, 10, 10))
+        for i in range(4)
+    ]
+    overlay = _overlay(qtbot, windows=windows)
+
+    for window in windows:
+        overlay._on_preview_ready(window.window_id, _screenshot(10, 10, "red"))
+
+    assert len(overlay._previews) <= 3
+    assert 0 not in overlay._previews
+    assert set(overlay._previews) == {1, 2, 3}
+
+
+def test_close_releases_controller_cycle_and_pixel_buffers(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: _screenshot())
+    overlay._on_preview_ready(42, _screenshot(10, 10, "red"))
+
+    class _Controller:
+        def __init__(self, brain):
+            self._brain = brain
+            self.released = False
+
+        def release(self):
+            self.released = True
+            self._brain = None
+
+    controller = _Controller(overlay)
+    overlay._controller = controller
+
+    overlay.close()
+
+    assert controller.released is True
+    assert controller._brain is None
+    assert getattr(overlay, "_controller", None) is None
+    assert overlay._previews == {}
+    assert overlay._windows == []
+    assert overlay._screenshot.isNull()
+    assert overlay._pixmap.isNull()
+
+
 def test_pointed_window_gets_hairline_before_highlight_switches(qtbot):
     # Pointing must give instant feedback even though the highlight only
     # switches on a click (the default): the window under the pointer is
@@ -704,6 +746,33 @@ def test_present_goes_fullscreen_on_wayland(qtbot, monkeypatch):
     monkeypatch.setattr(overlay, "showFullScreen", lambda: calls.append("fullscreen"))
     overlay.present()
     assert calls == ["fullscreen"]
+
+
+def test_present_overlay_uses_fullscreen_controller_on_multi_output_wayland(qtbot, monkeypatch):
+    # A Wayland fullscreen surface is per-output, so multi-monitor sessions need
+    # one fullscreen view per screen instead of one virtual-desktop top-level.
+    from shotquill.ui import smart_overlay
+
+    overlay = _overlay(qtbot)
+    calls = []
+
+    class _Controller:
+        def __init__(self, brain, *, fullscreen=False):
+            calls.append(("controller", brain is overlay, fullscreen))
+
+        def present(self):
+            calls.append(("present",))
+
+    class _App:
+        def screens(self):
+            return [object(), object()]
+
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: True)
+    monkeypatch.setattr(smart_overlay.sys, "platform", "linux")
+    monkeypatch.setattr(smart_overlay, "SmartOverlayController", _Controller)
+    monkeypatch.setattr(overlay, "present", lambda: calls.append(("single",)))
+    smart_overlay.present_overlay(overlay, _App())
+    assert calls == [("controller", True, True), ("present",)]
 
 
 # --- CropAdjustOverlay: drag edges/corners to fine-tune an existing crop -----

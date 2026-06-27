@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
 from shotquill import blocklist as bl  # noqa: E402
+from shotquill import debug_log, paths  # noqa: E402
 from shotquill.capture.base import CaptureResult, Rect, WindowInfo  # noqa: E402
 from shotquill.permissions import PermissionStatus  # noqa: E402
 
@@ -437,6 +438,29 @@ def test_grab_takes_qimage_fast_path_when_nothing_blocked(qapp, config, fakes, m
     app.shutdown()
 
 
+def test_grab_fast_path_writes_completion_debug_log(qapp, config, fakes, monkeypatch, tmp_path):
+    from PySide6.QtGui import QImage
+
+    log = tmp_path / "debug.log"
+    config.set_debug_mode(True)
+    monkeypatch.setattr(paths, "debug_log_path", lambda: log)
+    capturer, _hotkeys, _autostart = fakes
+    sentinel = QImage(7, 5, QImage.Format.Format_RGBA8888)
+    capturer.capture_fullscreen_image = lambda exclude=frozenset(): sentinel
+
+    app = _build_app(qapp, fakes)
+    app._current_debug_id = "capture-test"
+    assert app._grab(bl.Blocklist()) is sentinel
+    for handler in debug_log._debug_handlers(debug_log.get_logger()):
+        handler.flush()
+
+    text = log.read_text(encoding="utf-8")
+    assert "op=capture-test" in text
+    assert "backend=qimage_fast" in text
+    app.shutdown()
+    debug_log.configure(None)
+
+
 def test_grab_falls_back_when_backend_has_no_fast_path(qapp, config, fakes):
     # A duck-typed capturer without capture_fullscreen_image (the shared fake)
     # must still work — _grab falls through to the CaptureResult route.
@@ -768,6 +792,73 @@ def test_smart_capture_survives_list_windows_unsupported(qapp, config, fakes, mo
     app.shutdown()
 
 
+def test_fullscreen_capture_refuses_blocklist_when_windows_unavailable(
+    qapp, config, fakes, monkeypatch
+):
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    grabbed, delivered, notified = [], [], []
+    monkeypatch.setattr(capturer, "capture_fullscreen", lambda *a, **k: grabbed.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_fullscreen()
+    assert grabbed == [] and delivered == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
+def test_smart_capture_refuses_blocklist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a, **k: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
+def test_smart_capture_refuses_allowlist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    al.save(al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a, **k: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
 # --- allowlist enforcement on the GUI path ----------------------------------
 
 
@@ -845,6 +936,30 @@ def test_smart_region_delivers_when_allowlist_disabled(qapp, config, fakes, monk
     app._smart_screenshot, app._smart_geometry = QImage(), QRect()
     app._smart_region_selected(QImage(), QRect(0, 0, 2, 2))
     assert len(delivered) == 1
+    app.shutdown()
+
+
+def test_smart_region_skips_region_context_when_adjust_disabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    config.set_region_adjust(False)
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+    delivered = []
+    monkeypatch.setattr(
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((origin, region)),
+    )
+    app._smart_screenshot = QImage(4, 3, QImage.Format.Format_ARGB32)
+    app._smart_geometry = QRect(0, 0, 4, 3)
+
+    app._smart_region_selected(QImage(2, 2, QImage.Format.Format_ARGB32), QRect(0, 0, 2, 2))
+
+    assert delivered == [(QRect(0, 0, 2, 2), None)]
     app.shutdown()
 
 
@@ -1165,6 +1280,23 @@ def test_smart_capture_shelves_open_settings_until_overlay_closes(qapp, config, 
     overlay.close()  # every accept/cancel path ends in close()
     qapp.sendPostedEvents(None, QEvent.DeferredDelete)  # let WA_DeleteOnClose land
     assert dialog.isVisible()  # restored, not closed: edits survive
+    app.shutdown()
+
+
+def test_smart_capture_releases_fullscreen_snapshot_when_overlay_closes(qapp, config, fakes):
+    from PySide6.QtCore import QEvent
+
+    app = _build_app(qapp, fakes)
+    app._capture_smart()
+    assert app._smart_screenshot is not None
+    assert app._smart_geometry is not None
+
+    overlay = next(w for w in app._windows if isinstance(w, app_module.SmartOverlay))
+    overlay.close()
+    qapp.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    assert app._smart_screenshot is None
+    assert app._smart_geometry is None
     app.shutdown()
 
 

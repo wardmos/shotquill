@@ -397,10 +397,38 @@ def _refuse_whole_screen_under_allowlist(kind: str, *, via: str) -> None:
     )
 
 
+def _refuse_whole_screen_under_blocklist(kind: str, *, via: str) -> None:
+    """Refuse a capture whose pixels cannot be checked against the blocklist.
+
+    Whole-screen/region/display/interactive frames may contain any app, and an
+    unresolved window id may be a blocked app. If the backend cannot enumerate
+    windows to verify and redact, continuing would violate the blocklist's
+    "never capture these apps" contract, so all front-ends fail closed.
+    """
+    from shotquill import audit
+
+    audit.record("capture_blocked", via=via, target=kind)
+    raise CaptureBlocked(
+        f"the app blocklist is active, but {kind} capture cannot be checked or "
+        "redacted on this desktop; refusing to capture"
+    )
+
+
+def _require_blocklist_enumeration(
+    capturer: ScreenCapturer, kind: str, *, via: str
+) -> list[WindowInfo]:
+    """Fail before grabbing pixels when a blocklisted whole-frame path cannot
+    enumerate windows for redaction."""
+    try:
+        return capturer.list_windows()
+    except CapabilityUnsupported:
+        _refuse_whole_screen_under_blocklist(kind, via=via)
+
+
 def perform_interactive_capture(
-    capturer: ScreenCapturer, *, allowlist=None, via: str = "cli"
+    capturer: ScreenCapturer, *, blocklist=None, allowlist=None, via: str = "cli"
 ) -> tuple[CaptureResult, str, int]:
-    """Drive an interactive (compositor-picked) capture, honouring the allowlist.
+    """Drive an interactive (compositor-picked) capture, honouring capture policy.
 
     The picker may land on any window or the whole screen, so — exactly like a
     fullscreen / region / display grab — an enforcing allowlist refuses it: its
@@ -408,14 +436,19 @@ def perform_interactive_capture(
     Keeping the gate here (not in the CLI) means every front-end and the audit
     log get the same policy the other whole-screen paths already do.
 
-    The blocklist is deliberately *not* applied: the backend hands back an
-    already-composited selection and Wayland cannot enumerate windows to redact,
-    so the compositor's own picker plus a human at the keyboard is the gate.
+    A blocklist also refuses it: the backend hands back an already-composited
+    selection and Wayland cannot enumerate windows to prove no blocked app is in
+    it. Failing closed keeps the blocklist's "never capture these apps" promise
+    consistent across GUI, CLI, and MCP.
 
     Returns ``(result, "interactive", 1)`` to match :func:`perform_capture`.
     """
+    if blocklist is None:
+        blocklist = active_blocklist()
     if allowlist is None:
         allowlist = active_allowlist()
+    if blocklist:
+        _refuse_whole_screen_under_blocklist("interactive", via=via)
     if allowlist:
         _refuse_whole_screen_under_allowlist("interactive", via=via)
     return capturer.capture_interactive(), "interactive", 1
@@ -443,8 +476,9 @@ def perform_capture(
     A window or app capture that lands on the blocklist raises
     :class:`CaptureBlocked`. An empty blocklist (the default) takes the exact
     same path as before — no extra window enumeration, no new failure modes.
-    Full-screen, display and region captures are not refused for the blocklist;
-    the sensitive window is one part of the frame and is redacted instead.
+    Full-screen, display and region captures redact blocked windows when the
+    backend can enumerate them; when it cannot, they fail closed rather than
+    returning pixels that may contain a blocked app.
 
     When the **allowlist** is enabled it inverts that default: a window/app
     capture is refused unless the target is on the list, and a whole-screen
@@ -466,14 +500,10 @@ def perform_capture(
         elif blocklist:
             # The blocklist denies by identity, so an id we cannot resolve to a
             # window (enumeration unavailable on this backend, or the id is not
-            # among the enumerable windows) cannot be checked against it. Unlike
-            # the allowlist — which permits by identity and so must fail closed —
-            # the blocklist proceeds, but the gap is logged rather than passed
-            # through silently, mirroring the full-screen ``redact_unavailable``
-            # honesty signal so a skipped protection is always auditable.
-            from shotquill import audit
-
-            audit.record("redact_unavailable", via=via, target=f"window {window_id}")
+            # among the enumerable windows) cannot be checked against it. Fail
+            # closed: a blocked app must never pass through merely because this
+            # backend cannot tell us what the id belongs to.
+            _refuse_whole_screen_under_blocklist(f"window {window_id}", via=via)
         if allowlist:
             _enforce_allowlist_window(allowlist, target, window_id, via=via)
         result = capturer.capture_window(window_id)
@@ -512,6 +542,9 @@ def perform_capture(
         picked = select_display(capturer.list_displays(), display)
         bounds = picked.bounds
         target = f"display {picked.index} ({bounds.width}x{bounds.height} at {bounds.x},{bounds.y})"
+        windows = None
+        if blocklist:
+            windows = _require_blocklist_enumeration(capturer, target, via=via)
         try:
             result = capturer.capture_region(bounds)
         except ValueError as exc:
@@ -522,15 +555,30 @@ def perform_capture(
             raise DisplayNotFound(f"{target} is no longer capturable: {exc}") from exc
         if blocklist:
             result = _redact_blocked(
-                result, capturer, blocklist, origin=(bounds.x, bounds.y), target=target, via=via
+                result,
+                capturer,
+                blocklist,
+                origin=(bounds.x, bounds.y),
+                target=target,
+                via=via,
+                windows=windows,
             )
         return result, target, 1
     if region is not None:
         target = f"region {region.x},{region.y},{region.width},{region.height}"
+        windows = None
+        if blocklist:
+            windows = _require_blocklist_enumeration(capturer, target, via=via)
         result = capturer.capture_region(region)
         if blocklist:
             result = _redact_blocked(
-                result, capturer, blocklist, origin=(region.x, region.y), target=target, via=via
+                result,
+                capturer,
+                blocklist,
+                origin=(region.x, region.y),
+                target=target,
+                via=via,
+                windows=windows,
             )
         return result, target, 1
     if not blocklist:
@@ -545,16 +593,14 @@ def _fullscreen_with_blocklist(capturer: ScreenCapturer, blocklist, *, via: str)
     they are simply absent — windows on top stay intact and nothing is painted.
     Anything the capture could not exclude (the legacy path) is then redacted by
     solid block as a fallback. Where windows cannot be enumerated at all (e.g.
-    Wayland) the frame cannot be protected, so it is captured plainly and the
-    gap is logged rather than implying coverage we did not deliver.
+    Wayland) the frame cannot be protected, so it is refused.
     """
     from shotquill import audit, redact
 
     try:
         windows = capturer.list_windows()
     except CapabilityUnsupported:
-        audit.record("redact_unavailable", via=via, target="fullscreen")
-        return capturer.capture_fullscreen()
+        _refuse_whole_screen_under_blocklist("fullscreen", via=via)
     blocked = blocklist.blocked(windows)
     if not blocked:
         return capturer.capture_fullscreen()
@@ -582,21 +628,22 @@ def _redact_blocked(
     origin: tuple[int, int],
     target: str,
     via: str,
+    windows: list[WindowInfo] | None = None,
 ) -> CaptureResult:
     """Paint solid blocks over any blocklisted window inside ``result`` (the
     region path, which cannot omit windows at capture time).
 
     Enumeration is required to find the sensitive windows; where it is
-    unavailable (e.g. Wayland) the frame cannot be protected, so we leave it
-    untouched but log the gap rather than implying coverage we did not deliver.
+    unavailable (e.g. Wayland) the frame cannot be protected, so it is refused
+    rather than returned plainly.
     """
     from shotquill import audit, redact
 
-    try:
-        windows = capturer.list_windows()
-    except CapabilityUnsupported:
-        audit.record("redact_unavailable", via=via, target=target)
-        return result
+    if windows is None:
+        try:
+            windows = capturer.list_windows()
+        except CapabilityUnsupported:
+            _refuse_whole_screen_under_blocklist(target, via=via)
     blocked = blocklist.blocked(windows)
     if not blocked:
         return result
@@ -914,13 +961,13 @@ def _check_hotkeys() -> dict:
     that a backend exists. On Wayland out-of-band key grabs are refused, so the
     hotkeys go through the xdg-desktop-portal GlobalShortcuts interface, which a
     minimal desktop may not ship; surface that as the actionable thing to fix. On
-    X11 pynput grabs keys without a grant; on macOS it needs Input Monitoring
-    (a runtime prompt, so reported best-effort)."""
+    X11 pynput grabs keys without a grant; on macOS RegisterEventHotKey registers
+    only the configured shortcuts and does not need Input Monitoring."""
     if sys.platform == "darwin":
         return {
             "capability": "hotkeys",
             "available": True,
-            "detail": "pynput (needs the Input Monitoring permission)",
+            "detail": "Carbon RegisterEventHotKey",
         }
     if sys.platform.startswith("linux"):
         if _is_wayland_session():
@@ -1017,10 +1064,9 @@ def _check_blocklist_redaction(can_enumerate: bool | None) -> dict | None:
 
     Returns ``None`` when there is nothing to report — no rules, an unreadable
     list (already flagged by :func:`_check_blocklist`), or capture unavailable.
-    Redaction needs to enumerate windows to find a blocked app's bounds, so where
-    enumeration is unsupported (Linux today) a blocked app is captured *plainly*
-    in full-screen grabs — a real privacy gap users must know about, not assume
-    the blocklist covers."""
+    Redaction needs to enumerate windows to find a blocked app's bounds, so
+    where enumeration is unsupported, blocklist-protected full-screen captures
+    are refused rather than returned plainly."""
     if can_enumerate is None:
         return None
     from shotquill import blocklist as bl
@@ -1042,8 +1088,8 @@ def _check_blocklist_redaction(can_enumerate: bool | None) -> dict | None:
         "capability": "blocklist_redaction",
         "available": False,
         "detail": (
-            "no window enumeration on this backend → blocked apps are NOT redacted "
-            "in full-screen captures (captured plainly; logged as redact_unavailable)"
+            "no window enumeration on this backend → blocklist-protected full-screen "
+            "captures are refused rather than captured plainly"
         ),
     }
 

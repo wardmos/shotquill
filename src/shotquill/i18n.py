@@ -52,6 +52,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "无法读取你的白名单，ShotQuill 不会截图"
         "（它无法判断哪些被允许）。请在设置里修复。（{error}）",
     },
+    "notify.window_policy_unavailable": {
+        "en": "ShotQuill can't inspect windows on this desktop, so it won't capture "
+        "while a blocklist or allowlist is active. ({error})",
+        "zh": "ShotQuill 无法检查此桌面上的窗口；当排除名单或白名单启用时不会截图。（{error}）",
+    },
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.open_folder_failed": {
         "en": "Couldn't open the save folder: {error}",
@@ -210,6 +215,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.include_cursor": {
         "en": "Include mouse pointer in screenshots",
         "zh": "截图包含鼠标指针",
+    },
+    "settings.debug_mode": {
+        "en": "Debug mode (write detailed logs)",
+        "zh": "Debug 模式（写入详细日志）",
     },
     "settings.flash": {"en": "Flash on capture", "zh": "截图时闪光"},
     "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},

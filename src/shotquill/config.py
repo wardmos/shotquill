@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 
+from shotquill.debug_log import DEFAULT_DEBUG_MODE
 from shotquill.i18n import DEFAULT_LANGUAGE
 
 DEFAULT_HOTKEYS: dict[str, str] = {
@@ -74,7 +75,6 @@ DEFAULT_AUTOSTART = False
 # opens the annotation editor; turn either on for the hands-free flow.
 DEFAULT_AUTO_SAVE = False
 DEFAULT_AUTO_COPY = False
-
 # How long the pointer must rest on a new target before the capture overlay
 # switches its highlighted window, in milliseconds. 0 switches the moment the
 # pointer crosses a window edge; HOVER_SWITCH_NEVER turns automatic switching
@@ -237,6 +237,12 @@ class Config:
 
     def set_auto_copy_after_capture(self, enabled: bool) -> None:
         self._settings.setValue("output/auto_copy", bool(enabled))
+
+    def debug_mode(self) -> bool:
+        return _to_bool(self._settings.value("debug/enabled"), DEFAULT_DEBUG_MODE)
+
+    def set_debug_mode(self, enabled: bool) -> None:
+        self._settings.setValue("debug/enabled", bool(enabled))
 
     def hover_switch_delay_ms(self) -> int:
         """Overlay highlight-switch delay; any negative value reads as NEVER."""
