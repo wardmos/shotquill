@@ -17,30 +17,31 @@
 
 ShotQuill lives in your menu bar and turns a screenshot into a finished, shareable
 image in one motion: press a hotkey, then let the pointer pick a window / region /
-the whole screen, and it's saved and on your clipboard — or drop into a built-in
-editor to annotate, redact, and extract text first.
+the whole screen, then annotate, redact, extract text, save, copy, or pin it from
+the built-in editor. Prefer a no-editor flow? Turn on auto-save, auto-copy, or
+both in Settings.
 
 - **macOS** — the primary, most complete platform, and the one every other is
   measured against: full menu-bar GUI, two global hotkeys, smart window / region
   / full-screen capture (real pixels even under overlap, via ScreenCaptureKit),
-  the annotation editor, hands-free save + clipboard, launch-at-login, window
+  the annotation editor, optional hands-free save + clipboard, launch-at-login, window
   enumeration, blocklist redaction, and on-device OCR (Apple Vision) — plus the
   full CLI and MCP server.
 - **Linux / X11** — full menu-bar GUI plus CLI / MCP, including window
   enumeration (smart-capture window highlight, `squill window list`, and blocklist
   redaction of full-screen grabs) and on-device OCR via Tesseract when it's
   installed.
-- **Linux / Wayland** — CLI / MCP via `xdg-desktop-portal`. Global hotkeys are
-  blocked by Wayland by design (use the tray menu, or bind a compositor-level
-  shortcut to `squill capture`); the GUI surfaces this loudly instead of failing
-  silently.
+- **Linux / Wayland** — GUI plus CLI / MCP through `xdg-desktop-portal` for
+  capture and the GlobalShortcuts portal for hotkeys when the compositor exposes
+  it. Window enumeration is still unavailable by Wayland design, so smart capture
+  degrades to screen / region selection there.
 - **Windows** — full menu-bar GUI plus CLI / MCP: capture, window enumeration
   (Win32), global hotkeys, and launch-at-login (the per-user `Run` key). On-device
   OCR runs on the Windows WinRT engine, installed with the optional `windows-ocr`
   extra (`pip install "shotquill[windows-ocr]"`).
 
-> **Status:** early development — macOS is usable day-to-day; the Linux GUI is
-> newly landed and still being smoothed out. Expect rough edges either way.
+> **Status:** early development — macOS is usable day-to-day; Linux and Windows
+> support are newer and still being smoothed out. Expect rough edges either way.
 
 **Jump to:**
 [Highlights](#highlights) ·
@@ -74,8 +75,8 @@ editor to annotate, redact, and extract text first.
     (Settings → *Highlight window after*, off by default) fully highlights a
     window first, lifting its pixels out from under any overlap.
   - **Full screen** (`⌥S`) — every display at once, instantly.
-- **Hands-free by default** — a capture is saved to your folder **and** copied to
-  the clipboard automatically, no extra keypress. Fully configurable (see below).
+- **Configurable after-capture flow** — open the annotation editor by default, or
+  make captures hands-free by auto-saving, auto-copying, or both.
 - **Annotation editor** — rectangles, ellipses, arrows, lines, freehand pen,
   highlighter, text, and **mosaic redaction** that pixelates the real pixels (not
   just an overlay, so the sensitive data never survives in the exported image).
@@ -160,14 +161,30 @@ Built on Ubuntu 22.04 → glibc 2.35 floor (Ubuntu 22.04+ / Debian 12+).
 
 **Wayland users** also need `xdg-desktop-portal` plus a portal backend for
 your desktop (`xdg-desktop-portal-gnome`, `-kde`, or `-wlr`) — `squill doctor`
-will tell you when it's missing. **X11 users** need nothing extra.
+will tell you when screenshot or GlobalShortcuts support is missing. **X11
+users** need nothing extra.
 
 > **Linux GUI notes.** ShotQuill needs a system tray to run. GNOME 42+ shipped
 > without legacy tray support — install the **AppIndicator and KStatusNotifierItem
 > Support** extension; KDE, XFCE, MATE, and Cinnamon already include a tray.
-> Global hotkeys (`Alt+A`, `Alt+S`) work on X11; on Wayland the OS blocks them
-> by design and ShotQuill surfaces the reason via a notification so you can
-> fall back to the tray menu or a compositor-level shortcut.
+> Global hotkeys (`Alt+A`, `Alt+S`) work on X11. On Wayland they use the
+> GlobalShortcuts portal when available; otherwise ShotQuill reports the missing
+> portal support so you can use the tray menu or bind a compositor-level shortcut.
+
+### Windows
+
+Download `ShotQuill-*-windows-x64.zip` from
+[Releases](https://github.com/wardmos/shotquill/releases), unzip it, and run
+`ShotQuill.exe` for the tray GUI. The same bundle includes `squill.exe` for the
+CLI and MCP server.
+
+Windows OCR uses the on-device WinRT engine, but the Python WinRT projections are
+optional and are not included in the default package / bundle. For a pip install
+that needs OCR, install:
+
+```powershell
+pip install "shotquill[windows-ocr]"
+```
 
 ---
 
@@ -188,24 +205,24 @@ on macOS, `Super+ Ctrl+ Alt+ Shift+` on Linux/Windows) plus a key. Hotkey labels
 in the tray menu and Settings render natively per platform (Apple keycap glyphs
 on macOS, text labels on Linux/Windows).
 
-> **Linux / Wayland**: global hotkeys are blocked by the compositor; ShotQuill
-> raises a notification at startup so you can fall back to the tray menu, or
-> bind a compositor-level shortcut to `squill capture` (full screen) /
-> `squill capture --interactive` (the compositor's own picker frames a window,
-> region, or screen).
+> **Linux / Wayland**: global hotkeys use the `xdg-desktop-portal`
+> GlobalShortcuts interface when your compositor supports it. If not, ShotQuill
+> raises a notification so you can use the tray menu, or bind a compositor-level
+> shortcut to `squill capture` (full screen) / `squill capture --interactive`
+> (the compositor's own picker frames a window, region, or screen).
 
 ### What happens after a capture
 
-By default ShotQuill is **hands-free**: the shot is saved to your folder and
-copied to the clipboard immediately, with a brief screen flash to confirm — no
-editor, no keypress. You can change this in Settings → *After capture*:
+By default ShotQuill opens the **annotation editor** after a capture. You can make
+captures hands-free in Settings → *After capture* by enabling auto-save,
+auto-copy, or both:
 
 | Auto-save | Auto-copy | Result                                                       |
 | :-------: | :-------: | ------------------------------------------------------------ |
-|     ✅     |     ✅     | Saved **and** copied, no editor (default).                   |
+|     ✅     |     ✅     | Saved **and** copied, no editor.                             |
 |     ✅     |     —     | Saved only.                                                  |
 |     —     |     ✅     | Copied only.                                                 |
-|     —     |     —     | Opens the **annotation editor** instead (see below).         |
+|     —     |     —     | Opens the **annotation editor** instead (default).           |
 
 ### Annotation editor
 
@@ -252,11 +269,11 @@ squill session start --agent builder        # begin a replayable session trace
 squill mcp                                 # serve the Model Context Protocol over stdio
 ```
 
-Run bare it launches the GUI; with a subcommand it stays headless and prints one
-path on stdout (warnings on stderr), with exit codes as the contract. It captures
-one image (`capture`), reads or asserts on-screen text (`ocr`), or records an
-ordered trail of frames an agent leaves behind (`session`) — and the same loop is
-exposed to MCP clients as twelve tools.
+Running it bare launches the GUI; with a subcommand it stays headless and prints
+one path on stdout (warnings on stderr), with exit codes as the contract. It
+captures one image (`capture`), reads or asserts on-screen text (`ocr`), or
+records an ordered trail of frames an agent leaves behind (`session`) — and the
+same loop is exposed to MCP clients as twelve tools.
 
 **→ Full reference: [docs/scripting.md](docs/scripting.md)** — the stdout/exit-code
 contract, capture flags (`--json` / `--max-width` / `--deterministic` / `--mask` /
@@ -420,7 +437,8 @@ Open **Settings…** from the menu-bar icon:
   never captured).
 - **Allowed apps…** — manage the [app allowlist](#app-allowlist) (when enabled,
   the only apps that *can* be captured; off by default).
-- **Launch at login** — installs a per-user `LaunchAgent`.
+- **Launch at login** — installs the platform's per-user startup entry
+  (LaunchAgent on macOS, XDG autostart on Linux, the `Run` key on Windows).
 - **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
 
 ---
@@ -436,12 +454,10 @@ processes). For the CLI/MCP, remember the permission is attributed to the
 *invoking* app — your terminal or agent host — not to ShotQuill itself;
 `squill doctor` reports exactly which grant is missing.
 
-**Hotkeys don't fire while another app is focused.** Grant **Input
-Monitoring** (same privacy pane) and restart. ShotQuill's Settings dialog
-shows the live status of both permissions, with a jump-to-pane button.
-
 **A hotkey is silently dead.** Another app may own the same combo — macOS
-gives no error; the events simply never arrive. Remap it in Settings.
+gives no error; the events simply never arrive. Remap it in Settings. ShotQuill
+uses Carbon `RegisterEventHotKey`, so global capture hotkeys do not require Input
+Monitoring.
 
 **"ShotQuill can't be opened" on first launch.** That's Gatekeeper on the
 ad-hoc-signed direct download — see [Install](#install) for the
@@ -455,12 +471,12 @@ tray support — install the **AppIndicator and KStatusNotifierItem Support**
 extension and log out / in. KDE, XFCE, MATE, and Cinnamon include a tray by
 default. The `squill` CLI and MCP server still work even without a tray.
 
-**Global hotkeys do nothing on Wayland.** Wayland blocks global key grabs by
-design (no per-app keyboard listener can see another app's input). ShotQuill
-detects this at startup and shows a notification rather than spawning a
-silent dead listener. Workarounds: use the tray menu, or bind a
-compositor-level shortcut to `squill capture` (full screen → file) in your
-desktop's keyboard settings.
+**Global hotkeys do nothing on Wayland.** ShotQuill uses the
+`xdg-desktop-portal` GlobalShortcuts interface there, because Wayland blocks
+classic out-of-band key grabs. If your compositor or portal backend does not
+implement GlobalShortcuts, ShotQuill reports that at startup. Workarounds: use
+the tray menu, or bind a compositor-level shortcut to `squill capture`
+(full screen → file) in your desktop's keyboard settings.
 
 **Captures fail with "Wayland blocks out-of-band grabs".** Install
 `xdg-desktop-portal` and a backend for your desktop:
@@ -489,9 +505,10 @@ region or click for full screen instead.
 
 **Which agent captured what?** Read the audit log:
 
-```bash
+```text
 tail -f ~/Library/Logs/shotquill/audit.log                     # macOS (also in Console.app)
 tail -f "${XDG_STATE_HOME:-$HOME/.local/state}/shotquill/audit.log"  # Linux
+Get-Content "$env:LOCALAPPDATA\shotquill\Logs\audit.log" -Wait       # Windows PowerShell
 ```
 
 Each JSONL entry records the action, target, destination, and the process
@@ -509,8 +526,9 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 
 - **No keylogging.** The global-hotkey listener only checks for your configured
   shortcut combos; it never records, stores, or forwards keystrokes.
-- **OCR is on-device.** Text recognition uses Apple's Vision framework locally —
-  nothing is uploaded, and it works with no network connection.
+- **OCR is on-device.** Text recognition uses Apple Vision on macOS, Tesseract on
+  Linux, and Windows OCR through WinRT — nothing is uploaded, and it works with
+  no network connection.
 - **Redaction is real.** The mosaic tool rewrites the underlying pixels before
   export, so blurred-out content isn't recoverable from the saved image.
 - **PII can be redacted automatically.** Programmatic captures can OCR a frame
@@ -548,7 +566,7 @@ cross-platform UI:
 | GUI / editor canvas   | PySide6 (Qt Widgets + Graphics View)                  | same                                                   | same                                                   |
 | Screen capture        | ScreenCaptureKit (macOS 14+), `CGWindowList*` fallback | X11: `QScreen.grabWindow`; Wayland: `xdg-desktop-portal` over QtDBus | `QScreen.grabWindow` (per-window via `user32`) |
 | Window enumeration    | `CGWindowList` (always available)                     | X11: EWMH over `python-xlib`; Wayland: by design refuses | `user32` `EnumWindows` (Z-order top-level windows)   |
-| Global hotkeys        | Carbon `RegisterEventHotKey` (no Input Monitoring needed) | `pynput` X11 listener (no permission needed); Wayland refuses (use compositor shortcuts) | `pynput` Win32 listener (no permission needed) |
+| Global hotkeys        | Carbon `RegisterEventHotKey` (no Input Monitoring needed) | X11: `pynput`; Wayland: `xdg-desktop-portal` GlobalShortcuts when available | `pynput` Win32 listener (no permission needed) |
 | Launch at login       | per-user `LaunchAgent`                                | XDG `~/.config/autostart/shotquill.desktop`            | per-user `Run` key (`HKCU\…\CurrentVersion\Run`)       |
 | Image processing      | Qt (`QImage`)                                          | same                                                   | same                                                   |
 | OCR                   | `pyobjc` → Apple Vision                                | `tesseract` CLI (when installed)                       | WinRT `Windows.Media.Ocr` (optional `windows-ocr` extra) |
@@ -573,13 +591,13 @@ pytest                           # tests
 
 For local packaging smoke builds, see [Packaging](docs/packaging.md).
 
-> Screen capture, global hotkeys, and the full-screen overlays rely on macOS
-> system frameworks, so they must be **run and tested on a Mac**. Pure logic and
-> Qt widgets can be developed and tested headlessly on Linux with
-> `QT_QPA_PLATFORM=offscreen` (this is what CI does). Window-activation
-> scenarios (`tests/test_activation_macos.py`) only run under a real macOS
-> window server — the macOS CI leg, or a Mac without `QT_QPA_PLATFORM` set —
-> because the offscreen platform performs no activation arbitration at all.
+> Screen capture, global hotkeys, and full-screen overlays depend on the target
+> desktop session, so platform backends need smoke testing on their OS. Pure
+> logic and Qt widgets can be developed and tested headlessly with
+> `QT_QPA_PLATFORM=offscreen` where appropriate. Window-activation scenarios
+> (`tests/test_activation_macos.py`) only run under a real macOS window server —
+> the macOS CI leg, or a Mac without `QT_QPA_PLATFORM` set — because the offscreen
+> platform performs no activation arbitration at all.
 
 ### Project layout
 
@@ -592,11 +610,11 @@ src/shotquill/
 ├── audit.py / paths.py   # audit trail for programmatic captures; platform dirs
 ├── config.py / i18n.py   # QSettings-backed prefs; EN/中文 string table
 ├── imaging.py            # raw capture pixels → QImage
-├── capture/              # base.py + macos.py (ScreenCaptureKit), qtgrab.py (X11), wayland.py (portal)
-├── hotkeys/              # base.py + macos.py (Carbon), linux.py (pynput X11, Wayland-guarded)
-├── ocr/                  # base.py interface; macos.py (Apple Vision), linux.py (Tesseract CLI)
+├── capture/              # base.py + macos.py (ScreenCaptureKit), qtgrab.py (X11), wayland.py, windows.py
+├── hotkeys/              # base.py + macos.py (Carbon), linux.py, wayland.py, windows.py
+├── ocr/                  # base.py interface; macos.py, linux.py, windows.py
 ├── output/               # saver.py (files), clipboard.py
-├── autostart/            # base.py + macos.py (LaunchAgent), linux.py (XDG .desktop)
+├── autostart/            # base.py + macos.py, linux.py, windows.py
 └── ui/                   # editor, canvas, tools, smart capture overlay, settings, pin
 ```
 
@@ -621,9 +639,9 @@ each break capture; `squill doctor` reports what's missing.
 
 **Linux / Wayland** — capture goes through `xdg-desktop-portal`: the first
 capture pops a system dialog asking which screen / window to share, and the
-choice is remembered for the session. There is no global-hotkey permission to
-grant — Wayland blocks them outright; ShotQuill surfaces this in a
-notification instead of failing silently.
+choice is remembered for the session. Global hotkeys go through the
+GlobalShortcuts portal when the compositor implements it; there is no separate
+per-app keylogging-style permission to grant.
 
 ---
 
@@ -664,13 +682,28 @@ pipx uninstall shotquill               # pipx install
 | Audit log                   | `${XDG_STATE_HOME:-~/.local/state}/shotquill/`     |
 | Your screenshots            | `~/Pictures/ShotQuill/` (or your configured folder) — yours to keep |
 
+### Windows
+
+Delete the unzipped release folder, or uninstall the Python package if you
+installed with pip.
+
+| What                        | Where                                              |
+| --------------------------- | -------------------------------------------------- |
+| Settings                    | `HKCU\Software\wardmos\ShotQuill` (QSettings registry store) |
+| Launch-at-login entry       | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (only if enabled in Settings) |
+| Blocklist                   | `%APPDATA%\shotquill\blocklist.json`              |
+| Allowlist                   | `%APPDATA%\shotquill\allowlist.json`              |
+| Audit/debug logs            | `%LOCALAPPDATA%\shotquill\Logs\`                  |
+| Recorded sessions           | `%LOCALAPPDATA%\shotquill\records\`               |
+| Your screenshots            | `Pictures\ShotQuill\` (or your configured folder) — yours to keep |
+
 ---
 
 ## Roadmap
 
 - [x] Smart (window / region / full-screen) + full-screen capture
 - [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
-- [x] On-device OCR (macOS Vision; Linux Tesseract)
+- [x] On-device OCR (macOS Vision; Linux Tesseract; Windows WinRT)
 - [x] Hands-free auto save + clipboard
 - [x] CLI for scripts & AI agents (`squill capture` / `window list` / `display list` /
       `ocr` / `diff` / `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist`)
@@ -678,14 +711,15 @@ pipx uninstall shotquill               # pipx install
 - [x] **Linux / X11 backends — GUI, CLI, and MCP**: menu-bar app via PySide6 +
       XDG autostart, full-screen / region capture via `QScreen.grabWindow`,
       global hotkeys via `pynput`
-- [x] **Linux / Wayland CLI + MCP** via `xdg-desktop-portal` (Screenshot portal)
+- [x] **Linux / Wayland GUI, CLI, and MCP** via `xdg-desktop-portal` (Screenshot
+      + GlobalShortcuts portals where available)
 - [x] **Multi-monitor selection** — `squill display list` + `capture --display N`
       (and the matching MCP `display_list` tool / `display` argument)
 - [x] **Linux OCR backend** (Tesseract) — `squill ocr` and the editor's
       extract-text action when the `tesseract` CLI is installed
-- [ ] **Linux GUI on Wayland** — global hotkeys need the GlobalShortcuts portal
-      (the OS forbids out-of-band key grabs), and the smart-capture overlay
-      needs to play nicely with compositor full-screen rules
+- [ ] **Wayland smart-window parity** — capture and hotkeys use portals, but
+      window enumeration is still unavailable by design, so window highlight /
+      direct window picking remains an X11/macOS/Windows capability
 - [x] **X11 window enumeration** — `squill window list`, smart-capture window
       highlight, and full-screen blocklist redaction, via EWMH over `python-xlib`
       (Wayland forbids enumerating other apps' windows, so it stays unsupported
@@ -701,7 +735,7 @@ pipx uninstall shotquill               # pipx install
 ## Contributing
 
 Issues and pull requests are welcome. Please run `ruff check`, `ruff format`, and
-`pytest` before submitting; CI runs the same on Linux + macOS.
+`pytest` before submitting; CI runs the same on Linux, macOS, and Windows.
 
 ---
 
