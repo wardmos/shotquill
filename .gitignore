@@ -145,6 +145,9 @@ tmp/
 # ── Markdown — ignored by default. Whitelist files to commit below with `!`.
 *.md
 !/README.md
+!/AGENTS.md
+!/CLAUDE.md
+!/.github/pull_request_template.md
 !/skills/**/*.md
 !/docs/**/*.md
 !/examples/**/*.md

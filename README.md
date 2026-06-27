@@ -54,6 +54,7 @@ editor to annotate, redact, and extract text first.
 [Privacy](#privacy) ·
 [Tech stack](#tech-stack) ·
 [Development](#development) ·
+[Packaging](docs/packaging.md) ·
 [Uninstall](#uninstall) ·
 [Roadmap](#roadmap) ·
 [Contributing](#contributing)
@@ -569,6 +570,8 @@ ruff check src tests             # lint
 ruff format --check src tests    # formatting
 pytest                           # tests
 ```
+
+For local packaging smoke builds, see [Packaging](docs/packaging.md).
 
 > Screen capture, global hotkeys, and the full-screen overlays rely on macOS
 > system frameworks, so they must be **run and tested on a Mac**. Pure logic and
