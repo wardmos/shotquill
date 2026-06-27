@@ -181,6 +181,20 @@ def test_backspace_deletes_multiple_selected_items_as_one_undo_command(qtbot):
     assert _annotation_items(canvas) == []
 
 
+def test_delete_key_falls_back_to_last_hit_annotation(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(False)
+    canvas._last_hit_item = item
+
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Delete)
+
+    assert item.scene() is None
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+
+
 def test_tiny_click_is_discarded(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.RECT)

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QImage,
     QPainter,
@@ -167,6 +168,7 @@ class AnnotationCanvas(QGraphicsView):
         self._width = 4
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
+        self._last_hit_item: QGraphicsItem | None = None
         # Positions of movable items captured at the start of a select-drag, so
         # the release can record an undoable move for whatever actually shifted.
         self._move_snapshot: dict[QGraphicsItem, QPointF] | None = None
@@ -183,6 +185,7 @@ class AnnotationCanvas(QGraphicsView):
         # as the host; a press on a viewport edge hands off to it (see the mouse
         # handlers and set_crop_host).
         self._crop_host: CropHost | None = None
+        self._scene.selectionChanged.connect(self._log_selection_changed)
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -310,19 +313,65 @@ class AnnotationCanvas(QGraphicsView):
 
     def delete_selected_items(self, *, source: str = "canvas") -> bool:
         focus_item = self._scene.focusItem()
-        selected = [
-            item
-            for item in self._scene.selectedItems()
-            if item is not self._background and item.scene() is self._scene
-        ]
+        selected = self._selected_annotation_items()
+        if not selected:
+            fallback = self._delete_fallback_item()
+            if fallback is not None:
+                annotation_log(f"delete.fallback source={source} item={self._item_label(fallback)}")
+                selected = [fallback]
         annotation_log(
             f"delete.request source={source} selected={len(selected)} "
-            f"focus_item={type(focus_item).__name__ if focus_item else None}"
+            f"focus_item={self._item_label(focus_item)} "
+            f"last_hit={self._item_label(self._last_hit_item)} "
+            f"cursor_item={self._item_label(self._item_under_cursor())} "
+            f"annotations={len(self._annotation_items())}"
         )
         if not selected:
             return False
         self._undo.push(_DeleteItemsCommand(self._scene, selected))
+        self._last_hit_item = None
         return True
+
+    def _annotation_items(self) -> list[QGraphicsItem]:
+        return [
+            item
+            for item in self._scene.items()
+            if item is not self._background and item.scene() is self._scene
+        ]
+
+    def _selected_annotation_items(self) -> list[QGraphicsItem]:
+        return [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._background and item.scene() is self._scene
+        ]
+
+    def _delete_fallback_item(self) -> QGraphicsItem | None:
+        candidates = (self._scene.focusItem(), self._last_hit_item, self._item_under_cursor())
+        for item in candidates:
+            if item in self._annotation_items() and item.flags() & QGraphicsItem.ItemIsSelectable:
+                return item
+        return None
+
+    def _item_under_cursor(self) -> QGraphicsItem | None:
+        pos = self.viewport().mapFromGlobal(QCursor.pos())
+        if not self.viewport().rect().contains(pos):
+            return None
+        item = self.itemAt(pos)
+        return item if item is not self._background else None
+
+    def _log_selection_changed(self) -> None:
+        annotation_log(
+            f"selection.changed selected={len(self._selected_annotation_items())} "
+            f"items={[self._item_label(item) for item in self._selected_annotation_items()]}"
+        )
+
+    def _item_label(self, item: QGraphicsItem | None) -> str:
+        if item is None:
+            return "None"
+        scene_state = "scene" if item.scene() is self._scene else "detached"
+        selected = item.isSelected() if item.scene() is self._scene else False
+        return f"{type(item).__name__}@{id(item):x}:{scene_state}:selected={selected}"
 
     def _next_z(self) -> float:
         self._z += 1.0
@@ -344,8 +393,11 @@ class AnnotationCanvas(QGraphicsView):
             focus_item = self._scene.focusItem()
             annotation_log(
                 f"canvas.key key={event.key()} modifiers={event.modifiers()} "
-                f"focus_item={type(focus_item).__name__ if focus_item else None} "
-                f"selected={len(self._scene.selectedItems())}"
+                f"focus_item={self._item_label(focus_item)} "
+                f"selected={len(self._selected_annotation_items())} "
+                f"last_hit={self._item_label(self._last_hit_item)} "
+                f"cursor_item={self._item_label(self._item_under_cursor())} "
+                f"annotations={len(self._annotation_items())}"
             )
         if (
             event.key() in (Qt.Key_Backspace, Qt.Key_Delete)
@@ -379,6 +431,13 @@ class AnnotationCanvas(QGraphicsView):
 
         if event.button() != Qt.LeftButton or self._tool == Tool.SELECT:
             if event.button() == Qt.LeftButton and self._tool == Tool.SELECT:
+                self._last_hit_item = self.itemAt(event.position().toPoint())
+                if self._last_hit_item is self._background:
+                    self._last_hit_item = None
+                annotation_log(
+                    f"select.press hit={self._item_label(self._last_hit_item)} "
+                    f"selected_before={len(self._selected_annotation_items())}"
+                )
                 # Snapshot movable items before Qt drags them, so the matching
                 # release can push an undoable move for any that shift.
                 self._move_snapshot = {
