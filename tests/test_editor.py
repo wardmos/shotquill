@@ -12,8 +12,10 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence  # noqa: E402
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem  # noqa: E402
 
 from shotquill.ui import editor as editor_module  # noqa: E402
+from shotquill.ui.canvas import _AddItemCommand  # noqa: E402
 from shotquill.ui.editor import EditorWindow, RegionContext  # noqa: E402
 
 
@@ -177,6 +179,23 @@ def test_disabled_finish_keys_do_nothing(qtbot, config, tmp_path):
     qtbot.keyClick(window, Qt.Key_Return)
     assert QGuiApplication.clipboard().image().isNull()
     assert list(tmp_path.glob("ShotQuill *.png")) == []
+
+
+def test_delete_key_removes_selected_annotation_when_editor_has_focus(qtbot, config):
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    item = QGraphicsRectItem(QRectF(5, 5, 20, 20))
+    item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+    window._canvas.scene().addItem(item)
+    window._canvas.undo_stack().push(_AddItemCommand(window._canvas.scene(), item))
+    item.setSelected(True)
+
+    window.setFocus()
+    qtbot.keyClick(window, Qt.Key_Delete)
+
+    assert item.scene() is None
+    window._canvas.undo_stack().undo()
+    assert item.scene() is window._canvas.scene()
 
 
 def test_editor_places_canvas_over_capture_origin(qtbot, config):

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
-from shotquill.ui._debug import crop_log
+from shotquill.ui._debug import annotation_log, crop_log
 from shotquill.ui.geometry import crop_edge_hits
 from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
@@ -131,14 +131,17 @@ class _DeleteItemsCommand(QUndoCommand):
         super().__init__("delete annotation")
         self._scene = scene
         self._items = [(item, item.isSelected()) for item in items]
+        annotation_log(f"delete.command init count={len(self._items)}")
 
     def undo(self) -> None:
+        annotation_log(f"delete.command undo count={len(self._items)}")
         for item, was_selected in self._items:
             if item.scene() is None:
                 self._scene.addItem(item)
             item.setSelected(was_selected)
 
     def redo(self) -> None:
+        annotation_log(f"delete.command redo count={len(self._items)}")
         for item, _was_selected in self._items:
             if item.scene() is self._scene:
                 self._scene.removeItem(item)
@@ -304,12 +307,17 @@ class AnnotationCanvas(QGraphicsView):
         else:
             self._set_viewport_cursor(Qt.CrossCursor)
 
-    def _delete_selected_items(self) -> bool:
+    def delete_selected_items(self, *, source: str = "canvas") -> bool:
+        focus_item = self._scene.focusItem()
         selected = [
             item
             for item in self._scene.selectedItems()
             if item is not self._background and item.scene() is self._scene
         ]
+        annotation_log(
+            f"delete.request source={source} selected={len(selected)} "
+            f"focus_item={type(focus_item).__name__ if focus_item else None}"
+        )
         if not selected:
             return False
         self._undo.push(_DeleteItemsCommand(self._scene, selected))
@@ -331,10 +339,17 @@ class AnnotationCanvas(QGraphicsView):
         return pen
 
     def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            focus_item = self._scene.focusItem()
+            annotation_log(
+                f"canvas.key key={event.key()} modifiers={event.modifiers()} "
+                f"focus_item={type(focus_item).__name__ if focus_item else None} "
+                f"selected={len(self._scene.selectedItems())}"
+            )
         if (
             event.key() in (Qt.Key_Backspace, Qt.Key_Delete)
             and self._scene.focusItem() is None
-            and self._delete_selected_items()
+            and self.delete_selected_items(source="canvas.key")
         ):
             event.accept()
             return
