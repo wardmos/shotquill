@@ -24,8 +24,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QImage
 
 # ScreenCaptureKit calls are completion-handler based; we block the calling
 # thread until the handler fires. The timeout guards against a wedged capture
@@ -58,7 +62,7 @@ class MacScreenCapturer(ScreenCapturer):
         scale = result.width / logical_w if logical_w else 1.0
         return replace(result, scale=scale, origin_x=ox, origin_y=oy)
 
-    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()) -> QImage:
         """Full-screen grab straight into a ``QImage`` for the interactive overlay.
 
         The overlay only displays the pixels; it never reads ``CaptureResult``'s
@@ -355,7 +359,9 @@ class MacScreenCapturer(ScreenCapturer):
         except Exception:
             return None  # fall back to the legacy capture path
 
-    def _sck_capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+    def _sck_capture_fullscreen_image(
+        self, exclude_window_ids: frozenset[int] = frozenset()
+    ) -> QImage | None:
         """All displays via ScreenCaptureKit composited straight into a QImage.
 
         The QImage equivalent of :meth:`_sck_capture_fullscreen`, but the pixels
@@ -442,7 +448,7 @@ class MacScreenCapturer(ScreenCapturer):
     # --- pixel plumbing -----------------------------------------------------
 
     @staticmethod
-    def _compose_image(shots):
+    def _compose_image(shots) -> QImage:
         """Stitch per-display CGImages straight into one virtual-desktop QImage.
 
         The QImage twin of :meth:`_composite_displays`: same geometry maths, but
