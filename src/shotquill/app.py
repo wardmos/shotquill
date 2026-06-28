@@ -96,7 +96,7 @@ def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
     painter.scale(size / 64, size / 64)
     if is_mac:
         painter.translate(32, 32)
-        painter.scale(1.30, 1.30)
+        painter.scale(1.60, 1.60)
         painter.translate(-32, -32)
     pen = QPen(mark_color, 4.0)
     pen.setCapStyle(Qt.RoundCap)

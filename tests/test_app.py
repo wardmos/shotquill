@@ -165,10 +165,12 @@ def test_render_tray_pixmap_macos_uses_inverted_template_mask(qapp):
     assert opaque
     left, top = min(x for x, _y in opaque), min(y for _x, y in opaque)
     right, bottom = max(x for x, _y in opaque), max(y for _x, y in opaque)
-    assert (right - left) <= 42
-    assert (bottom - top) <= 40
+    assert 4 <= left <= 8
+    assert 6 <= top <= 10
+    assert 55 <= right <= 59
+    assert 53 <= bottom <= 57
     assert image.pixelColor(32, 32).alpha() > 0
-    assert image.pixelColor(8, 8).alpha() == 0
+    assert image.pixelColor(2, 2).alpha() == 0
 
 
 def test_render_tray_pixmap_keeps_glyph_inside_tile_bounds(qapp):
