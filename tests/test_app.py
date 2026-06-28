@@ -51,8 +51,8 @@ def test_build_icon_attaches_multiple_sizes_on_linux(qapp, monkeypatch):
 def test_build_icon_marks_macos_template(qapp, monkeypatch):
     # macOS reads the tray icon as a *template* (only alpha matters; the menu
     # bar tints opaque pixels white-on-dark / dark-on-light). Without the mask
-    # flag the icon would render as a black tile that's invisible on a dark
-    # menu bar — a regression that's silent in tests but jarring on Mac.
+    # flag the icon would render as raw black pixels, which is wrong in both
+    # light and dark menu bars.
     monkeypatch.setattr(app_module.sys, "platform", "darwin")
     icon = app_module._build_icon()
     assert icon.isMask() is True
@@ -60,7 +60,7 @@ def test_build_icon_marks_macos_template(qapp, monkeypatch):
 
 def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
     # Non-Mac desktops (Linux/X11 tray) don't tint masks: marking the icon as
-    # a template here would leave a black tile with a transparent "S" — i.e.
+    # a template here would leave a black tile with transparent glyphs — i.e.
     # the very bug the multi-size Linux branch was added to avoid.
     monkeypatch.setattr(app_module.sys, "platform", "linux")
     icon = app_module._build_icon()
@@ -69,7 +69,7 @@ def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
 
 def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
     # The renderer derives padding / radius / glyph height from ``size`` so
-    # small tray panels still get a readable "S" instead of a near-empty tile.
+    # small tray panels still get a readable mark instead of a near-empty tile.
     # Check the extremes the icon factory actually asks for (16 and 64) and
     # confirm each produces a non-empty pixmap with some opaque pixels.
     from PySide6.QtCore import Qt
@@ -78,9 +78,9 @@ def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
         pixmap = app_module._render_tray_pixmap(size, is_mac=False)
         assert pixmap.size().width() == size
         assert pixmap.size().height() == size
-        # Sample the centre pixel: the "S" sits there and is painted white,
-        # so the alpha must be non-zero. (Fully transparent centre would
-        # mean either the tile or the glyph went missing.)
+        # Sample the centre pixel: the mark sits there, so the alpha must be
+        # non-zero. (Fully transparent centre would mean either the tile or the
+        # glyph went missing.)
         centre = pixmap.toImage().pixelColor(size // 2, size // 2)
         assert centre.alpha() > 0
         # And not the placeholder transparent fill.
@@ -88,7 +88,7 @@ def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
 
 
 def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
-    # The Linux/X11 tray path can't tint masks, so the "S" must be painted
+    # The Linux/X11 tray path can't tint masks, so the mark must be painted
     # directly — verify by scanning for any white-ish pixel. A regression
     # that left the glyph unpainted (or painted it black on black) would
     # leave only a featureless black tile that's invisible against a dark
@@ -107,7 +107,37 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
                 break
         if found_white:
             break
-    assert found_white, "expected the 'S' glyph to be painted white somewhere on the tile"
+    assert found_white, "expected the tray glyph to be painted white somewhere on the tile"
+
+
+def test_render_tray_pixmap_linux_keeps_mark_inside_viewfinder(qapp):
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    white_pixels = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                white_pixels.append((x, y))
+    assert white_pixels
+    _left, bottom = max(white_pixels, key=lambda point: point[1])
+    assert bottom <= 49
+
+
+def test_render_tray_pixmap_linux_keeps_central_mark_compact(qapp):
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    centre_pixels = []
+    for y in range(image.height()):
+        for x in range(31, 35):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                centre_pixels.append((x, y))
+    assert centre_pixels
+    top = min(y for _x, y in centre_pixels)
+    bottom = max(y for _x, y in centre_pixels)
+    assert top >= 25
+    assert bottom <= 47
 
 
 @pytest.mark.skipif(
@@ -115,39 +145,32 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
     reason="Qt offscreen glyph rasterization on Windows doesn't punch the template hole; "
     "the macOS template path is exercised on macOS/Linux",
 )
-def test_render_tray_pixmap_macos_knocks_glyph_out_of_mask(qapp):
-    # macOS reads the icon as a *template*: every opaque pixel is tinted by
-    # AppKit, every transparent pixel passes through. The "S" is rendered
-    # with ``CompositionMode_DestinationOut`` so the glyph carves a
-    # transparent hole through the black tile — the menu-bar colour shines
-    # through there. A regression that swapped the composition mode (e.g.
-    # painted black-on-black) would still produce a black tile but with no
-    # punched-out "S", so the icon would read as a solid square. Detect by
-    # confirming there's at least one fully-transparent pixel *inside* the
-    # tile boundary: only the knock-out path produces that.
+def test_render_tray_pixmap_macos_uses_inverted_template_mask(qapp):
+    # macOS reads the icon as a template: opaque pixels become the status-bar
+    # glyph, transparent pixels disappear. The macOS path should therefore draw
+    # the capture/pen mark itself, not an opaque rounded tile with the mark cut
+    # out of it.
     pixmap = app_module._render_tray_pixmap(64, is_mac=True)
     image = pixmap.toImage()
-    # Scan the middle band where the glyph sits (avoid the rounded corners,
-    # which are also transparent regardless of the composition mode).
-    found_hole = False
-    for y in range(16, 48):
-        for x in range(16, 48):
-            if image.pixelColor(x, y).alpha() == 0:
-                found_hole = True
-                break
-        if found_hole:
-            break
-    assert found_hole, "macOS template must punch the 'S' out of the black tile"
-    # The macOS path never paints white — only black with knock-outs — so any
-    # white pixel anywhere means the wrong branch ran.
+    opaque = []
     for y in range(image.height()):
         for x in range(image.width()):
             pixel = image.pixelColor(x, y)
             if pixel.alpha() > 0:
+                opaque.append((x, y))
                 assert (pixel.red(), pixel.green(), pixel.blue()) == (0, 0, 0), (
                     "macOS template path must paint only black; found "
                     f"({pixel.red()},{pixel.green()},{pixel.blue()}) at ({x},{y})"
                 )
+    assert opaque
+    left, top = min(x for x, _y in opaque), min(y for _x, y in opaque)
+    right, bottom = max(x for x, _y in opaque), max(y for _x, y in opaque)
+    assert 4 <= left <= 8
+    assert 6 <= top <= 10
+    assert 55 <= right <= 59
+    assert 53 <= bottom <= 57
+    assert image.pixelColor(32, 32).alpha() > 0
+    assert image.pixelColor(2, 2).alpha() == 0
 
 
 def test_render_tray_pixmap_keeps_glyph_inside_tile_bounds(qapp):

@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from shotquill import __version__, debug_log, permissions, redact
@@ -46,12 +46,11 @@ def _build_icon() -> QIcon:
 
     On macOS we render a *template* image: monochrome, only the alpha channel
     matters, and macOS tints the opaque pixels to match the menu bar (white on
-    dark, dark on light) like its own status items — so the tile is solid black
-    with the "S" knocked out and flagged as a mask. Other desktops (Linux/X11
-    tray) don't tint a mask, which would leave a black tile with a transparent
-    glyph — invisible on dark panels — so there we draw a self-contained icon:
-    a black tile with the "S" painted in white. The colored Launchpad icon is a
-    separate ``.icns`` and is unaffected.
+    dark, dark on light) like its own status items — so only the capture/pen mark
+    is opaque and the surrounding tile is transparent. Other desktops (Linux/X11
+    tray) don't tint a mask, so there we draw a self-contained icon: a blue tile
+    with the mark painted in white. The colored Launchpad icon is a separate
+    ``.icns`` and is unaffected.
 
     For non-macOS tray icons we attach multiple pixel sizes (16/22/24/32/48/64)
     so Qt can pick the right one for a HiDPI panel; a single 64px pixmap would
@@ -72,37 +71,78 @@ def _build_icon() -> QIcon:
 
 
 def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
-    """Render the rounded-square "S" tray glyph at ``size``×``size`` pixels.
+    """Render the rounded-square capture/pen tray glyph at ``size``×``size`` pixels.
 
     The proportions (corner radius, tile padding, glyph height) are all derived
-    from ``size`` so smaller pixmaps stay legible — at 16px the glyph dominates
-    the tile, at 64px there is breathing room. macOS gets the "S" knocked out of
-    a black mask; everywhere else the glyph is painted white so the tile reads
-    on dark panels without relying on the desktop to tint it.
+    from ``size`` so smaller pixmaps stay legible. macOS gets an inverted
+    template mask: the mark is opaque and the tile is transparent. Everywhere
+    else the mark is painted white over a blue tile so it reads on dark panels
+    without relying on the desktop to tint it.
     """
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor("black"))
-    padding = max(1, round(size * 6 / 64))
-    radius = max(2, round(size * 14 / 64))
-    tile = size - 2 * padding
-    painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
+    tile_color = QColor("black") if is_mac else QColor("#087cf3")
+    mark_color = QColor("black") if is_mac else QColor("white")
+    if not is_mac:
+        painter.setBrush(tile_color)
+        padding = max(1, round(size * 6 / 64))
+        radius = max(2, round(size * 14 / 64))
+        tile = size - 2 * padding
+        painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
+
+    painter.scale(size / 64, size / 64)
+    if is_mac:
+        painter.translate(32, 32)
+        painter.scale(1.60, 1.60)
+        painter.translate(-32, -32)
+    pen = QPen(mark_color, 4.0)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+    _draw_tray_corners(painter)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(mark_color)
+    _draw_tray_nib(painter)
     if is_mac:
         painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
-        glyph_color = QColor("black")
+        painter.setBrush(QColor("black"))
     else:
-        glyph_color = QColor("white")
-    font = QFont()
-    font.setBold(True)
-    font.setPixelSize(max(8, round(size * 46 / 64)))
-    painter.setFont(font)
-    painter.setPen(glyph_color)
-    painter.drawText(pixmap.rect(), Qt.AlignCenter, "S")
+        painter.setBrush(tile_color)
+    painter.drawEllipse(31, 35, 3, 3)
+    painter.drawRect(32, 38, 1, 6)
     painter.end()
     return pixmap
+
+
+def _draw_tray_corners(painter: QPainter) -> None:
+    """Draw the four viewfinder corners on a 64×64 design grid."""
+    painter.drawLine(18, 19, 26, 19)
+    painter.drawLine(18, 19, 18, 27)
+    painter.drawLine(46, 19, 38, 19)
+    painter.drawLine(46, 19, 46, 27)
+    painter.drawLine(18, 45, 26, 45)
+    painter.drawLine(18, 45, 18, 37)
+    painter.drawLine(46, 45, 38, 45)
+    painter.drawLine(46, 45, 46, 37)
+
+
+def _draw_tray_nib(painter: QPainter) -> None:
+    """Draw the central pen nib on a 64×64 design grid."""
+    nib = QPainterPath()
+    nib.moveTo(29.3, 44.8)
+    nib.cubicTo(28.5, 40.0, 27.1, 37.2, 25.1, 34.8)
+    nib.cubicTo(27.1, 28.4, 31.7, 24.8, 39.5, 23.0)
+    nib.cubicTo(38.5, 28.4, 35.1, 31.6, 30.1, 33.6)
+    nib.cubicTo(32.9, 33.6, 35.9, 33.0, 38.1, 32.0)
+    nib.cubicTo(36.3, 35.4, 36.1, 38.6, 37.7, 41.6)
+    nib.cubicTo(35.3, 43.6, 34.1, 44.8, 33.3, 44.8)
+    nib.closeSubpath()
+    painter.drawPath(nib)
+    painter.drawRoundedRect(30, 44, 6, 2, 1, 1)
 
 
 class _HotkeyBridge(QObject):
