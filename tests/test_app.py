@@ -854,9 +854,7 @@ def test_wayland_smart_capture_uses_portal_picker(qapp, config, fakes, monkeypat
     app.shutdown()
 
 
-def test_wayland_smart_capture_refuses_blocklist_before_picker(
-    qapp, config, fakes, monkeypatch
-):
+def test_wayland_smart_capture_refuses_blocklist_before_picker(qapp, config, fakes, monkeypatch):
     from shotquill import blocklist as bl
 
     bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
@@ -874,9 +872,7 @@ def test_wayland_smart_capture_refuses_blocklist_before_picker(
     app.shutdown()
 
 
-def test_wayland_smart_capture_refuses_allowlist_before_picker(
-    qapp, config, fakes, monkeypatch
-):
+def test_wayland_smart_capture_refuses_allowlist_before_picker(qapp, config, fakes, monkeypatch):
     from shotquill import allowlist as al
     from shotquill import blocklist as bl
 
