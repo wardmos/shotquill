@@ -552,9 +552,7 @@ class ShotquillApp(QObject):
             _LOG.debug("op=%s smart_region refused allowlist_enabled=true", self._smart_debug_id)
             return
         _LOG.debug("op=%s smart_region deliver rect=%s", self._smart_debug_id, rect)
-        region = None
-        if self._config.region_adjust():
-            region = RegionContext(self._smart_screenshot, self._smart_geometry)
+        region = self._smart_backdrop_context(adjustable=self._config.region_adjust())
         self._deliver_capture(image, rect, region=region)
 
     def _smart_fullscreen_selected(self) -> None:
@@ -613,9 +611,18 @@ class ShotquillApp(QObject):
                 result.width,
                 result.height,
             )
-            self._deliver_capture(result_to_qimage(result), origin)
+            self._deliver_capture(
+                result_to_qimage(result),
+                origin,
+                region=self._smart_backdrop_context(adjustable=False),
+            )
         finally:
             self._current_debug_id = previous
+
+    def _smart_backdrop_context(self, *, adjustable: bool) -> RegionContext | None:
+        if self._smart_screenshot is None or self._smart_geometry is None:
+            return None
+        return RegionContext(self._smart_screenshot, self._smart_geometry, adjustable=adjustable)
 
     def _redact_window_overlaps(self, result, target: QRect):
         """Hide windows stacked over the target whose pixels must not leak, when
@@ -827,8 +834,8 @@ class ShotquillApp(QObject):
         origin: QRect | None = None,
         region: RegionContext | None = None,
     ) -> None:
-        if not self._config.region_adjust():
-            region = None  # the user turned crop adjustment off in Settings
+        if region is not None and not self._config.region_adjust():
+            region = region._replace(adjustable=False)
         operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
         _LOG.debug(
             "op=%s open_editor size=%sx%s origin=%s region=%s",

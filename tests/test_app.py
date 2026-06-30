@@ -568,7 +568,9 @@ def test_capture_window_image_delivers_capture(qapp, config, fakes, monkeypatch)
     app = _build_app(qapp, fakes)
     delivered = []
     monkeypatch.setattr(
-        app, "_deliver_capture", lambda image, origin=None: delivered.append((image, origin))
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((image, origin)),
     )
     origin = QRect(10, 20, 4, 3)
     app._capture_window_image(42, origin)
@@ -576,6 +578,35 @@ def test_capture_window_image_delivers_capture(qapp, config, fakes, monkeypatch)
     image, got_origin = delivered[0]
     assert (image.width(), image.height()) == (4, 3)
     assert got_origin == origin
+    app.shutdown()
+
+
+def test_capture_window_image_delivers_non_adjustable_backdrop_context(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._smart_screenshot = QImage(40, 30, QImage.Format.Format_ARGB32)
+    app._smart_geometry = QRect(0, 0, 40, 30)
+    delivered = []
+    monkeypatch.setattr(
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((origin, region)),
+    )
+
+    origin = QRect(10, 20, 4, 3)
+    app._capture_window_image(42, origin)
+
+    assert len(delivered) == 1
+    got_origin, region = delivered[0]
+    assert got_origin == origin
+    assert region is not None
+    assert region.screenshot is app._smart_screenshot
+    assert region.geometry == app._smart_geometry
+    assert region.adjustable is False
     app.shutdown()
 
 
@@ -591,7 +622,9 @@ def test_capture_window_image_notifies_on_failure(qapp, config, fakes, monkeypat
     capturer.fail = True
     delivered = []
     notified = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     monkeypatch.setattr(app, "_notify", notified.append)
     app._capture_window_image(42, QRect(0, 0, 4, 3))
     assert delivered == []
@@ -711,7 +744,9 @@ def test_capture_window_image_redacts_blocked_overlap_on_framebuffer_backend(
         99: WindowInfo(99, "1Password", "", Rect(10, 20, 4, 3), bundle_id="com.1password.1password")
     }
     delivered = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     app._capture_window_image(42, QRect(10, 20, 4, 3))  # allowed target, blocked overlap
     assert len(delivered) == 1
     assert delivered[0].pixelColor(0, 0).red() == 0  # redacted to black
@@ -730,7 +765,9 @@ def test_capture_window_image_keeps_capture_on_surface_backend(qapp, config, fak
         99: WindowInfo(99, "1Password", "", Rect(10, 20, 4, 3), bundle_id="com.1password.1password")
     }
     delivered = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     app._capture_window_image(42, QRect(10, 20, 4, 3))
     assert len(delivered) == 1
     assert delivered[0].pixelColor(0, 0).red() == 255  # untouched
@@ -1038,7 +1075,9 @@ def test_smart_region_delivers_when_allowlist_disabled(qapp, config, fakes, monk
     app.shutdown()
 
 
-def test_smart_region_skips_region_context_when_adjust_disabled(qapp, config, fakes, monkeypatch):
+def test_smart_region_marks_context_not_adjustable_when_adjust_disabled(
+    qapp, config, fakes, monkeypatch
+):
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
 
@@ -1058,7 +1097,12 @@ def test_smart_region_skips_region_context_when_adjust_disabled(qapp, config, fa
 
     app._smart_region_selected(QImage(2, 2, QImage.Format.Format_ARGB32), QRect(0, 0, 2, 2))
 
-    assert delivered == [(QRect(0, 0, 2, 2), None)]
+    assert len(delivered) == 1
+    origin, region = delivered[0]
+    assert origin == QRect(0, 0, 2, 2)
+    assert region is not None
+    assert region.geometry == QRect(0, 0, 4, 3)
+    assert region.adjustable is False
     app.shutdown()
 
 
@@ -1141,7 +1185,9 @@ def test_capture_window_image_redacts_not_allowed_overlap_on_framebuffer_backend
     # 42 (the allowed target) is captured; 99 is not on the allowlist and overlaps.
     app._not_allowed_windows = {99: WindowInfo(99, "Safari", "", Rect(10, 20, 4, 3))}
     delivered = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     app._capture_window_image(42, QRect(10, 20, 4, 3))
     assert len(delivered) == 1
     assert delivered[0].pixelColor(0, 0).red() == 0  # the non-allowed overlap is redacted
@@ -1245,12 +1291,13 @@ def test_region_capture_hands_the_editor_a_region_context(qapp, config, fakes, m
     assert region is not None
     assert (region.screenshot.width(), region.screenshot.height()) == (4, 3)
     assert region.geometry == qapp.primaryScreen().virtualGeometry()
+    assert region.adjustable is True
     app.shutdown()
 
 
 def test_open_editor_honours_region_adjust_setting(qapp, config, fakes):
-    # Turning the Settings toggle off must strip the region context, so the
-    # editor opens with a frozen crop (no arrow-key adjustment).
+    # Turning the Settings toggle off must keep the spotlight backdrop context
+    # but freeze the crop (no arrow-key adjustment).
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
 
@@ -1264,11 +1311,14 @@ def test_open_editor_honours_region_adjust_setting(qapp, config, fakes):
     app._open_editor(image, QRect(0, 0, 4, 3), region)
     adjustable = [w for w in app._windows if isinstance(w, EditorCoreMixin)][-1]
     assert adjustable._region is not None
+    assert adjustable.crop_adjustable() is True
 
     config.set_region_adjust(False)
     app._open_editor(image, QRect(0, 0, 4, 3), region)
     frozen = [w for w in app._windows if isinstance(w, EditorCoreMixin)][-1]
-    assert frozen._region is None
+    assert frozen._region is not None
+    assert frozen._region.adjustable is False
+    assert frozen.crop_adjustable() is False
 
     adjustable.close()
     frozen.close()
