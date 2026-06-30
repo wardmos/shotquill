@@ -101,6 +101,9 @@ class _FakeCapturer:
     def capture_window(self, window_id):
         return self.capture_fullscreen()
 
+    def capture_interactive(self):
+        return self.capture_fullscreen()
+
     def list_windows(self):
         return []
 
