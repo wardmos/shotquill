@@ -20,7 +20,7 @@ from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from shotquill import __version__, debug_log, permissions, redact
+from shotquill import __version__, debug_log, headless, permissions, redact
 from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
@@ -405,6 +405,14 @@ class ShotquillApp(QObject):
             self._current_debug_id = None
             return
         self._allowlist = allowlist
+        if self._is_wayland_platform():
+            try:
+                self._capture_wayland_interactive(blocklist, allowlist)
+            finally:
+                self._unshelve_settings_dialog()
+                self._clear_smart_debug_id(operation_id)
+                self._current_debug_id = None
+            return
         # Snapshot the window list *before* showing the overlay so our own
         # window isn't a target. An empty/failed list is fine only when no
         # privacy policy needs window identity. If a blocklist/allowlist is in
@@ -463,10 +471,10 @@ class ShotquillApp(QObject):
         overlay.destroyed.connect(self._clear_smart_capture_state)
         overlay.destroyed.connect(lambda: self._clear_smart_debug_id(operation_id))
         # present_overlay shows the overlay the way the platform needs: one
-        # stay-on-top window spanning the virtual desktop (X11), Wayland
-        # fullscreen, or — on macOS, where a single window sits under the menu
-        # bar and only covers one display — one menu-bar-level window per screen
-        # sharing this overlay as their brain.
+        # stay-on-top window spanning the virtual desktop (X11), or — on macOS,
+        # where a single window sits under the menu bar and only covers one
+        # display — one menu-bar-level window per screen sharing this overlay as
+        # their brain. Wayland returned above and uses the portal picker instead.
         present_overlay(overlay, self._app)
         _LOG.debug(
             "op=%s capture_smart overlay shown blocked=%s not_allowed=%s",
@@ -475,6 +483,46 @@ class ShotquillApp(QObject):
             len(self._not_allowed_windows),
         )
         self._current_debug_id = None
+
+    def _is_wayland_platform(self) -> bool:
+        return self._app.platformName().lower().startswith("wayland")
+
+    def _capture_wayland_interactive(
+        self, blocklist: bl.Blocklist, allowlist: al.Allowlist
+    ) -> None:
+        """Use the compositor's portal picker for Wayland smart capture.
+
+        Wayland does not expose other apps' window geometry to clients, so the
+        in-process smart overlay cannot provide window highlight/direct picking
+        there. The portal can: the compositor owns the UI and returns the user's
+        chosen window, region, or screen as a still image.
+        """
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug("op=%s capture_smart wayland_interactive start", operation_id)
+        try:
+            result, _target, _matched = headless.perform_interactive_capture(
+                self._capturer, blocklist=blocklist, allowlist=allowlist, via="gui"
+            )
+        except headless.CaptureBlocked as exc:
+            self._notify(str(exc))
+            _LOG.debug("op=%s capture_smart wayland_interactive refused=%s", operation_id, exc)
+            return
+        except Exception as exc:
+            self._notify(t("notify.capture_failed").format(error=exc))
+            _LOG.exception("op=%s capture_smart wayland_interactive failed", operation_id)
+            return
+        image = result_to_qimage(result)
+        _LOG.debug(
+            "op=%s capture_smart wayland_interactive deliver size=%sx%s",
+            operation_id,
+            image.width(),
+            image.height(),
+        )
+        # The Screenshot portal returns the selected pixels but not their
+        # desktop rect. Passing a guessed origin would place the editor over the
+        # wrong spot for window/region picks, so let the framed editor size
+        # itself normally.
+        self._deliver_capture(image)
 
     def _window_preview_image(self, window_id: int) -> QImage | None:
         """One window's un-occluded pixels for the overlay's hover preview.

@@ -34,7 +34,7 @@ both in Settings.
 - **Linux / Wayland** — GUI plus CLI / MCP through `xdg-desktop-portal` for
   capture and the GlobalShortcuts portal for hotkeys when the compositor exposes
   it. Window enumeration is still unavailable by Wayland design, so smart capture
-  degrades to screen / region selection there.
+  uses the compositor's own screen / window / region picker there.
 - **Windows** — full menu-bar GUI plus CLI / MCP: capture, window enumeration
   (Win32), global hotkeys, and launch-at-login (the per-user `Run` key). On-device
   OCR runs on the Windows WinRT engine, installed with the optional `windows-ocr`
@@ -494,12 +494,16 @@ needs no extra install.
 manager's EWMH properties, so it needs a running, EWMH-compliant WM (virtually
 all modern ones are) and a reachable display. Under Wayland it stays
 unsupported by design — the compositor refuses to let an app enumerate other
-apps' windows. Full-screen and region capture work regardless; smart-capture
-degrades to those modes.
+apps' windows. Full-screen and region capture work regardless; on Wayland,
+smart capture uses the compositor's portal picker instead of ShotQuill's own
+window-highlighting overlay.
 
-**Smart capture's window highlight never appears.** Same reason as above —
-without window enumeration the overlay can't outline a window. Drag for a
-region or click for full screen instead.
+**Smart capture's window highlight never appears under Wayland.** Same reason
+as above — without window enumeration ShotQuill cannot outline a window itself.
+The Wayland smart-capture action opens the compositor's picker instead; on
+X11/macOS/Windows, ShotQuill keeps its own hover highlight/direct window picking.
+Because the portal returns pixels but not the selection's desktop coordinates,
+the editor opens as a normal window after a Wayland smart capture.
 
 ### Audit log
 
@@ -717,9 +721,10 @@ installed with pip.
       (and the matching MCP `display_list` tool / `display` argument)
 - [x] **Linux OCR backend** (Tesseract) — `squill ocr` and the editor's
       extract-text action when the `tesseract` CLI is installed
-- [ ] **Wayland smart-window parity** — capture and hotkeys use portals, but
-      window enumeration is still unavailable by design, so window highlight /
-      direct window picking remains an X11/macOS/Windows capability
+- [x] **Wayland smart-window parity** — smart capture uses the compositor's
+      portal picker there; app-side window enumeration is still unavailable by
+      design, so ShotQuill's own window highlight remains an X11/macOS/Windows
+      capability
 - [x] **X11 window enumeration** — `squill window list`, smart-capture window
       highlight, and full-screen blocklist redaction, via EWMH over `python-xlib`
       (Wayland forbids enumerating other apps' windows, so it stays unsupported

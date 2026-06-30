@@ -815,6 +815,86 @@ def test_smart_capture_survives_list_windows_unsupported(qapp, config, fakes, mo
     app.shutdown()
 
 
+def test_wayland_smart_capture_uses_portal_picker(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    monkeypatch.setattr(
+        capturer,
+        "list_windows",
+        lambda: (_ for _ in ()).throw(AssertionError("should not enumerate windows")),
+    )
+    picked = []
+
+    def _interactive():
+        picked.append(True)
+        return CaptureResult(
+            width=8,
+            height=6,
+            scale=2.0,
+            pixels=bytes([255] * 8 * 6 * 4),
+            origin_x=100,
+            origin_y=50,
+        )
+
+    monkeypatch.setattr(capturer, "capture_interactive", _interactive)
+    app = _build_app(qapp, fakes)
+    delivered = []
+
+    def _deliver(image, origin=None, **_kwargs):
+        delivered.append((image, origin))
+
+    monkeypatch.setattr(app, "_deliver_capture", _deliver)
+
+    app._capture_smart()
+
+    assert picked == [True]
+    assert delivered and delivered[0][0].size().width() == 8
+    assert delivered[0][1] is None
+    assert not any(isinstance(window, app_module.SmartOverlay) for window in app._windows)
+    app.shutdown()
+
+
+def test_wayland_smart_capture_refuses_blocklist_before_picker(
+    qapp, config, fakes, monkeypatch
+):
+    from shotquill import blocklist as bl
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    picked, notified = [], []
+    monkeypatch.setattr(capturer, "capture_interactive", lambda: picked.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._capture_smart()
+
+    assert picked == []
+    assert notified and "blocklist" in notified[-1].lower()
+    app.shutdown()
+
+
+def test_wayland_smart_capture_refuses_allowlist_before_picker(
+    qapp, config, fakes, monkeypatch
+):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    al.save(al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),)))
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    picked, notified = [], []
+    monkeypatch.setattr(capturer, "capture_interactive", lambda: picked.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._capture_smart()
+
+    assert picked == []
+    assert notified and "allowlist" in notified[-1].lower()
+    app.shutdown()
+
+
 def test_fullscreen_capture_refuses_blocklist_when_windows_unavailable(
     qapp, config, fakes, monkeypatch
 ):
