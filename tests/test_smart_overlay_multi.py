@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, QPointF, QRect, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QMouseEvent  # noqa: E402
 
 from shotquill.ui import smart_overlay  # noqa: E402
@@ -94,6 +94,22 @@ def test_brain_change_repaints_every_view(qtbot):
 
     brain._refresh()
     assert len(painted) == len(controller._views)
+
+
+def test_brain_dirty_repaint_maps_to_view_coords(qtbot):
+    brain = _brain(qtbot, geometry=QRect(0, 0, 400, 400))
+    controller = SmartOverlayController(brain)
+    view = controller._views[0]
+    qtbot.addWidget(view)
+    view._offset = QPointF(100, 200)
+    painted = []
+    view.update = lambda rect=None: painted.append(rect)  # type: ignore[method-assign]
+
+    brain._refresh(QRectF(110, 220, 20, 10))
+
+    assert len(painted) == 1
+    assert painted[0].boundingRect() == QRect(2, 12, 36, 26)
+    assert painted[0].rectCount() == 1
 
 
 def test_outcome_hides_views_then_destruction_clears_them(qtbot):

@@ -313,6 +313,22 @@ def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     assert canvas.undo_stack().count() == 1
 
 
+def test_freehand_skips_redundant_move_points(qtbot):
+    from PySide6.QtWidgets import QGraphicsPathItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.PEN)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(40, 35))
+    for _ in range(5):
+        qtbot.mouseMove(viewport, pos=QPoint(40, 35))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(40, 35))
+
+    item = next(i for i in canvas.scene().items() if isinstance(i, QGraphicsPathItem))
+    assert item.path().elementCount() == 2
+
+
 def test_undo_then_redo_toggles_scene_membership(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_tool(Tool.RECT)
