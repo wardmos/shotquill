@@ -51,11 +51,13 @@ class RegionContext(NamedTuple):
 
     ``screenshot`` is the frozen full-desktop shot (native pixels) the region
     was cropped from; ``geometry`` is the virtual desktop's rect in logical,
-    global points — together they let the editor re-crop any selection.
+    global points — together they let the spotlight editor paint the dimmed
+    desktop context, and let adjustable region captures re-crop any selection.
     """
 
     screenshot: QImage
     geometry: QRect
+    adjustable: bool = True
 
 
 def _toolbar_placement(cursor: QPoint | None, origin: QRect | None) -> tuple[Qt.ToolBarArea, bool]:
@@ -226,7 +228,7 @@ class EditorCoreMixin:
     # --- crop adjustment (region captures, until the first annotation) ----
 
     def _can_adjust(self) -> bool:
-        return self._region is not None and self._canvas.is_pristine()
+        return self._region is not None and self._region.adjustable and self._canvas.is_pristine()
 
     def crop_adjustable(self) -> bool:
         return self._can_adjust()
