@@ -61,6 +61,7 @@ _CROP_EDGE_MARGIN = 10.0
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
 _MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
+_FREEHAND_MIN_VIEW_DELTA = 0.75
 _SELECTION_OUTLINE_COLOR = "#2d7ff9"
 _SELECTION_OUTLINE_VIEW_PADDING = 4.0
 _SELECTION_HANDLE_VIEW_SIZE = 8.0
@@ -177,6 +178,7 @@ class AnnotationCanvas(QGraphicsView):
         # the release can record an undoable move for whatever actually shifted.
         self._move_snapshot: dict[QGraphicsItem, QPointF] | None = None
         self._path: QPainterPath | None = None
+        self._last_path_pos: QPointF | None = None
         self._start = QPointF()
         self._mosaic_rect = None  # latest drag rect; release renders it exactly
         self._mosaic_last = 0.0  # monotonic time of the last live mosaic render
@@ -512,6 +514,7 @@ class AnnotationCanvas(QGraphicsView):
         item: QGraphicsItem | None = None
         if tool in (Tool.PEN, Tool.HIGHLIGHTER):
             self._path = QPainterPath(self._start)
+            self._last_path_pos = QPointF(self._start)
             path_item = QGraphicsPathItem(self._path)
             path_item.setPen(self._pen(highlighter=tool == Tool.HIGHLIGHTER))
             item = path_item
@@ -554,7 +557,10 @@ class AnnotationCanvas(QGraphicsView):
         pos = self.mapToScene(event.position().toPoint())
         tool = self._tool
         if tool in (Tool.PEN, Tool.HIGHLIGHTER) and self._path is not None:
+            if not self._freehand_point_moved_enough(pos):
+                return
             self._path.lineTo(pos)
+            self._last_path_pos = QPointF(pos)
             self._temp_item.setPath(self._path)
         elif tool in (Tool.RECT, Tool.ELLIPSE):
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
@@ -595,6 +601,7 @@ class AnnotationCanvas(QGraphicsView):
         item = self._temp_item
         self._temp_item = None
         self._path = None
+        self._last_path_pos = None
 
         if isinstance(item, MosaicItem) and self._mosaic_rect is not None:
             # The live preview is throttled; render the final drag rect exactly.
@@ -625,6 +632,14 @@ class AnnotationCanvas(QGraphicsView):
         item.setZValue(self._next_z())
         self._scene.addItem(item)
         item.setFocus()
+
+    def _freehand_point_moved_enough(self, pos: QPointF) -> bool:
+        if self._last_path_pos is None:
+            return True
+        min_delta = self._scene_units_for_view_pixels(_FREEHAND_MIN_VIEW_DELTA)
+        dx = pos.x() - self._last_path_pos.x()
+        dy = pos.y() - self._last_path_pos.y()
+        return dx * dx + dy * dy >= min_delta * min_delta
 
     def begin_teardown(self) -> None:
         """Stop committing text on focus-out — the window is closing.

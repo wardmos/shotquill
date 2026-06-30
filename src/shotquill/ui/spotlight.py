@@ -34,6 +34,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPen,
+    QRegion,
     QShortcut,
 )
 from PySide6.QtWidgets import QFrame, QLabel, QWidget
@@ -47,14 +48,15 @@ from shotquill.ui.editor_core import (
     RegionContext,
     _toolbar_placement,
 )
-from shotquill.ui.geometry import crop_edge_hits, resize_selection, scale_rect_edges
-from shotquill.ui.loupe import paint_loupe
+from shotquill.ui.geometry import crop_edge_hits, loupe_anchor, resize_selection, scale_rect_edges
+from shotquill.ui.loupe import LOUPE_H, LOUPE_LABEL_H, LOUPE_OFFSET, LOUPE_W, paint_loupe
 from shotquill.ui.smart_overlay import _ACCENT, _HANDLE_GRAB, _HANDLE_SIZE
 
 if TYPE_CHECKING:
     from shotquill.config import Config
 
 _TOOLBAR_GAP = 8  # logical points between the selection and the floating toolbar
+_DIRTY_PAD = 8.0
 
 
 class _DimScreen(QWidget):
@@ -382,6 +384,58 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
             font=self.font(),
         )
 
+    @staticmethod
+    def _region_from_rect(rect: QRectF | QRect, *, pad: float = _DIRTY_PAD) -> QRegion:
+        qrect = QRectF(rect).adjusted(-pad, -pad, pad, pad).toAlignedRect()
+        return QRegion(qrect) if not qrect.isEmpty() else QRegion()
+
+    @staticmethod
+    def _union_regions(*regions: QRegion | None) -> QRegion | None:
+        out = QRegion()
+        for region in regions:
+            if region is None or region.isEmpty():
+                continue
+            out = out.united(region)
+        return out if not out.isEmpty() else None
+
+    def _selection_dirty_region(self, sel: QRectF | None) -> QRegion | None:
+        if sel is None:
+            return None
+        return self._region_from_rect(sel.adjusted(0, -28, 0, 0))
+
+    def _loupe_dirty_region(self, cursor: QPointF | None) -> QRegion | None:
+        if cursor is None:
+            return None
+        ax, ay = loupe_anchor(
+            cursor.x(),
+            cursor.y(),
+            LOUPE_W,
+            LOUPE_H + LOUPE_LABEL_H,
+            self.width(),
+            self.height(),
+            LOUPE_OFFSET,
+        )
+        return self._region_from_rect(QRectF(ax, ay, LOUPE_W, LOUPE_H + LOUPE_LABEL_H))
+
+    def _update_drag_region(
+        self,
+        old_sel: QRectF | None,
+        new_sel: QRectF | None,
+        old_cursor: QPointF | None,
+        new_cursor: QPointF | None,
+    ) -> None:
+        dirty = self._union_regions(
+            self._selection_dirty_region(old_sel),
+            self._selection_dirty_region(new_sel),
+            self._loupe_dirty_region(old_cursor),
+            self._loupe_dirty_region(new_cursor),
+        )
+        if dirty is None:
+            return
+        clipped = dirty.intersected(QRegion(self.rect()))
+        if not clipped.isEmpty():
+            self.update(clipped)
+
     # --- mouse: handle drags (eventFilter on the canvas + bare-area presses) ---
 
     def eventFilter(self, obj, event) -> bool:
@@ -445,10 +499,12 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._live_sel = self._sel_local()
         self._canvas.hide()  # paint the live lit slice ourselves while dragging
         self.grabMouse()
-        self.update()
+        self._update_drag_region(None, self._live_sel, None, self._cursor)
         return True
 
     def _update_handle_drag(self, surface_pos: QPointF) -> None:
+        old_sel = QRectF(self._live_sel) if self._live_sel is not None else None
+        old_cursor = QPointF(self._cursor) if self._cursor is not None else None
         sel = self._sel_local()  # committed base; active edge tracks the pointer
         bounds = (0.0, 0.0, float(self.width()), float(self.height()))
         new = resize_selection(
@@ -461,7 +517,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         )
         self._live_sel = QRectF(*new)
         self._cursor = QPointF(surface_pos)  # the loupe magnifies around the dragged edge
-        self.update()
+        self._update_drag_region(old_sel, self._live_sel, old_cursor, self._cursor)
 
     def _end_handle_drag(self, surface_pos: QPointF) -> None:
         self._update_handle_drag(surface_pos)

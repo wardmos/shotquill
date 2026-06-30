@@ -193,6 +193,19 @@ def test_drag_tracks_the_cursor_for_the_loupe(qtbot, config, monkeypatch):
     assert surface._cursor is None  # drag over -> loupe gone
 
 
+def test_drag_updates_only_dirty_regions(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch)
+    updates = []
+    monkeypatch.setattr(surface, "update", lambda region=None: updates.append(region))
+
+    surface._try_begin_handle_drag(QPointF(300, 140))
+    surface._update_handle_drag(QPointF(340, 150))
+
+    assert updates
+    assert all(region is not None for region in updates)
+    assert all(region.boundingRect() != surface.rect() for region in updates)
+
+
 def test_paint_loupe_mid_drag_does_not_crash(qtbot, config, monkeypatch):
     from PySide6.QtGui import QPainter, QPixmap
 
