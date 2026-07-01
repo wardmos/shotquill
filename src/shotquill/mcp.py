@@ -447,7 +447,8 @@ def _tool_capture(args: dict):
             raise ValueError("max_width must be positive")
         image = headless.downscale_to_width(image, max_width)
 
-    data = headless.encode_qimage(image, fmt, deterministic=bool(args.get("deterministic")))
+    deterministic = bool(args.get("deterministic"))
+    data = headless.encode_qimage(image, fmt, deterministic=deterministic)
     meta = {"target": target, "width": image.width(), "height": image.height()}
     if matched > 1:
         meta["matched_windows"] = matched
@@ -468,8 +469,13 @@ def _tool_capture(args: dict):
     # archived copy goes through the record path.
     session_handle = args.get("session")
     if session_handle:
+        observation_bytes = data if fmt == "png" and deterministic else None
         meta["recorded"] = _mirror_observation(
-            session_handle, image, target, dedup=bool(args.get("dedup"))
+            session_handle,
+            image,
+            target,
+            dedup=bool(args.get("dedup")),
+            image_bytes=observation_bytes,
         )
 
     audit.record("capture", via="mcp", target=target, dest=dest)
@@ -480,7 +486,14 @@ def _tool_capture(args: dict):
     ], meta
 
 
-def _mirror_observation(session_handle: str, image, target: str, *, dedup: bool = False) -> dict:
+def _mirror_observation(
+    session_handle: str,
+    image,
+    target: str,
+    *,
+    dedup: bool = False,
+    image_bytes: bytes | None = None,
+) -> dict:
     """File an ``observation`` frame into the named session; returns its meta.
 
     Two failure modes, deliberately split: an **unresolvable handle** is the
@@ -494,7 +507,8 @@ def _mirror_observation(session_handle: str, image, target: str, *, dedup: bool 
     blocklist = headless.active_blocklist()
     # Deterministic so a repeated glance archives byte-identically and `dedup`
     # can reference the previous frame instead of duplicating it.
-    image_bytes = headless.encode_qimage(image, "png", deterministic=True)
+    if image_bytes is None:
+        image_bytes = headless.encode_qimage(image, "png", deterministic=True)
     try:
         frame = record.record_frame(
             session,

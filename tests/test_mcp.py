@@ -710,6 +710,26 @@ def test_capture_dedup_mirrors_observation_without_a_duplicate(fake_capturer, re
     assert manifest["frames"][1]["deduped"] is True
 
 
+def test_capture_reuses_deterministic_png_for_observation_mirror(
+    fake_capturer, record_root, monkeypatch
+):
+    real_encode = headless.encode_qimage
+    calls = []
+
+    def _encode(image, image_format="png", *, deterministic=False):
+        calls.append((image_format, deterministic))
+        return real_encode(image, image_format, deterministic=deterministic)
+
+    monkeypatch.setattr(headless, "encode_qimage", _encode)
+    call("session_start", {"id": "conv-obs-reuse"})
+    result = call("capture", {"session": "conv-obs-reuse", "deterministic": True})["result"]
+
+    inline_png = base64.b64decode(result["content"][0]["data"])
+    stored_png = (record_root / "conv-obs-reuse" / "frames" / "0001.png").read_bytes()
+    assert stored_png == inline_png
+    assert calls == [("png", True)]
+
+
 def test_record_list_and_prune(fake_capturer, record_root):
     for sid in ("conv-1", "conv-2"):
         call("session_start", {"id": sid})
