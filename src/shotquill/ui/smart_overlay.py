@@ -568,11 +568,22 @@ class SmartOverlay(QWidget):
         self._cursor = pos
         if self._origin is not None:
             self._current = pos
+            started_drag = False
             if not self._dragging:
                 dx = pos.x() - self._origin.x()
                 dy = pos.y() - self._origin.y()
                 if (dx * dx + dy * dy) ** 0.5 > _DRAG_THRESHOLD:
                     self._dragging = True
+                    started_drag = True
+            if started_drag:
+                # Crossing the drag threshold changes the whole overlay from a
+                # full-screen/window highlight to a dim backdrop with only the
+                # selection lit. A dirty-region repaint would leave the old
+                # highlight in the untouched area, producing bright/dark trails
+                # around the selection on backing stores that honour partial
+                # updates (notably the per-screen macOS overlay windows).
+                self._refresh()
+                return
             dirty = self._union_regions(
                 self._selection_dirty_region(old_selection),
                 self._selection_dirty_region(self._selection()),
