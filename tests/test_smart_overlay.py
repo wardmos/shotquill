@@ -155,6 +155,25 @@ def test_tiny_move_counts_as_click_not_drag(qtbot):
     assert windows == [42]
 
 
+def test_crossing_drag_threshold_repaints_the_whole_overlay(qtbot, monkeypatch):
+    overlay = _overlay(qtbot, windows=_windows())
+    refreshes = []
+    monkeypatch.setattr(overlay, "_refresh", lambda dirty=None: refreshes.append(dirty))
+
+    _press(overlay, 10, 10)
+    refreshes.clear()  # Ignore the full repaint requested by the initial press.
+
+    _move(overlay, 20, 20, buttons=Qt.LeftButton)
+
+    assert overlay._dragging is True
+    # Entering region mode changes the backdrop outside the selection too, so
+    # the transition cannot be safely limited to the old/new selection bounds.
+    assert refreshes == [None]
+
+    _move(overlay, 21, 21, buttons=Qt.LeftButton)
+    assert refreshes[-1] is not None  # Subsequent moves keep the fast dirty path.
+
+
 def test_highlight_switch_waits_for_pointer_rest(qtbot):
     overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=3000)
 
