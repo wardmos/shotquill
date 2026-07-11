@@ -80,24 +80,28 @@ def changed_bbox(
     the frames down first. Returns ``None`` when either buffer is too small for the
     given size or nothing changed. Rows are compared whole first, so an unchanged
     row is skipped without touching its pixels (the common case is a small change).
-    No Qt: callers scale to a small working buffer so this stays cheap.
+    The row check uses memory views, avoiding a temporary ``bytes`` allocation
+    per row. No Qt: callers scale to a small working buffer so this stays cheap.
     """
     span = width * height * 4
     if width <= 0 or height <= 0 or len(before) < span or len(after) < span:
         return None
+    before_view = memoryview(before)
+    after_view = memoryview(after)
     row_bytes = width * 4
     x0, y0, x1, y1 = width, height, -1, -1
     for y in range(height):
         base = y * row_bytes
-        if before[base : base + row_bytes] == after[base : base + row_bytes]:
+        row_end = base + row_bytes
+        if before_view[base:row_end] == after_view[base:row_end]:
             continue  # identical row — skip the per-pixel scan
         for x in range(width):
             i = base + x * 4
             if (
-                abs(before[i] - after[i]) > threshold
-                or abs(before[i + 1] - after[i + 1]) > threshold
-                or abs(before[i + 2] - after[i + 2]) > threshold
-                or abs(before[i + 3] - after[i + 3]) > threshold
+                abs(before_view[i] - after_view[i]) > threshold
+                or abs(before_view[i + 1] - after_view[i + 1]) > threshold
+                or abs(before_view[i + 2] - after_view[i + 2]) > threshold
+                or abs(before_view[i + 3] - after_view[i + 3]) > threshold
             ):
                 x0, x1 = min(x0, x), max(x1, x)
                 y0, y1 = min(y0, y), max(y1, y)
