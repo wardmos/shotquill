@@ -155,7 +155,7 @@ def test_toolbar_floats_as_a_child_near_the_selection(qtbot, config, monkeypatch
 
 
 def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
-    # A window/fullscreen capture has no RegionContext: no handles, pure dim.
+    # A capture with no desktop context falls back to the plain dim layer.
     monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
     monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
     monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
@@ -166,6 +166,30 @@ def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
     qtbot.waitExposed(surface)
     assert surface.crop_adjustable() is False
     assert surface._screen_pixmap is None
+
+
+def test_non_adjustable_surface_keeps_dimmed_desktop_context(qtbot, config, monkeypatch):
+    # Window captures are not crop-adjustable, but their spotlight backdrop still
+    # needs the frozen desktop slice so the area outside the window stays visible.
+    monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
+    shot = _image(_SCREEN.width(), _SCREEN.height(), "red")
+    region = RegionContext(shot, QRect(_SCREEN), adjustable=False)
+    surface = SpotlightSurface(_image(200, 120), config, QRect(1100, 580, 200, 120), region)
+    surface.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(surface)
+    surface.show()
+    qtbot.waitExposed(surface)
+
+    assert surface.crop_adjustable() is False
+    assert surface._screen_pixmap is not None
+    image = surface.grab().toImage()
+    outside = image.pixelColor(20, 20)
+    assert outside.red() > 0
+    assert outside.green() == 0
+    assert outside.blue() == 0
+    assert outside.red() < QColor("red").red()
 
 
 def test_paint_smoke_adjustable_and_dragging(qtbot, config, monkeypatch):
@@ -191,6 +215,19 @@ def test_drag_tracks_the_cursor_for_the_loupe(qtbot, config, monkeypatch):
     assert (surface._cursor.x(), surface._cursor.y()) == (340, 150)
     surface._end_handle_drag(QPointF(340, 150))
     assert surface._cursor is None  # drag over -> loupe gone
+
+
+def test_drag_updates_only_dirty_regions(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch)
+    updates = []
+    monkeypatch.setattr(surface, "update", lambda region=None: updates.append(region))
+
+    surface._try_begin_handle_drag(QPointF(300, 140))
+    surface._update_handle_drag(QPointF(340, 150))
+
+    assert updates
+    assert all(region is not None for region in updates)
+    assert all(region.boundingRect() != surface.rect() for region in updates)
 
 
 def test_paint_loupe_mid_drag_does_not_crash(qtbot, config, monkeypatch):
