@@ -24,6 +24,7 @@ from PySide6.QtGui import QImage, QKeySequence, QPixmap
 
 from shotquill.i18n import adjust_hint_key, key_display_name, t
 from shotquill.ui.canvas import AnnotationCanvas
+from shotquill.ui.capture_escape import CaptureEscapeGuard
 from shotquill.ui.geometry import scale_rect_edges
 from shotquill.ui.toolbar import create_toolbar
 
@@ -138,6 +139,7 @@ class EditorCoreMixin:
         create_toolbar); the shell must then place that bar too.
         """
         self._config = config
+        self._escape_guard = CaptureEscapeGuard(self, self.close)
         self._origin = origin
         # Crop adjustment (region captures only): the live selection in logical
         # global points, kept as floats so native-pixel steps survive fractional

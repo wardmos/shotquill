@@ -197,6 +197,7 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         self._wire_adjust_hint()
 
     def showEvent(self, event) -> None:
+        self._escape_guard.enable()
         super().showEvent(event)
         if self._backdrop is not None:
             # Shown without activating, so the editor keeps keyboard focus;
@@ -227,6 +228,7 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         super().changeEvent(event)
 
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # Before teardown fires a focus-out on any active text item, tell the
         # canvas to stop committing it onto the dying undo stack.
         self._canvas.begin_teardown()

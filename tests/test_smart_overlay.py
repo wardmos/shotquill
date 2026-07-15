@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
+from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
 from shotquill.ui.smart_overlay import SmartOverlay  # noqa: E402
@@ -292,6 +293,22 @@ def test_escape_cancels(qtbot):
     overlay.cancelled.connect(lambda: cancelled.append(True))
     overlay.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
     assert cancelled == [True]
+
+
+def test_escape_cancels_when_an_overlay_child_dialog_has_focus(qtbot):
+    # Application-level filtering must see Escape before a child dialog consumes
+    # it for reject(), otherwise the dialog closes but screenshot mode survives.
+    overlay = _overlay(qtbot)
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    overlay.show()
+    dialog = QDialog(overlay)
+    dialog.show()
+
+    qtbot.keyClick(dialog, Qt.Key_Escape)
+
+    assert cancelled == [True]
+    assert not overlay.isVisible()
 
 
 def test_paint_before_interaction_does_not_crash(qtbot):
@@ -792,6 +809,7 @@ def test_present_overlay_uses_fullscreen_controller_on_multi_output_wayland(qtbo
     monkeypatch.setattr(overlay, "present", lambda: calls.append(("single",)))
     smart_overlay.present_overlay(overlay, _App())
     assert calls == [("controller", True, True), ("present",)]
+    assert overlay._escape_guard._installed is True
 
 
 # --- CropAdjustOverlay: drag edges/corners to fine-tune an existing crop -----

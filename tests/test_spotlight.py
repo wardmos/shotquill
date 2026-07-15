@@ -61,6 +61,20 @@ def test_surface_covers_the_selections_screen(qtbot, config, monkeypatch):
     assert surface.geometry() == _SCREEN
 
 
+def test_escape_in_color_dialog_closes_the_entire_surface(qtbot, config, monkeypatch):
+    # The full-screen shell needs the same session-level Escape behaviour as the
+    # framed editor even while a child top-level owns keyboard focus.
+    surface = _surface(qtbot, config, monkeypatch)
+    dialog = surface._toolbar.color_dialog
+    dialog.show()
+    assert surface.isVisible() and dialog.isVisible()
+
+    qtbot.keyClick(dialog, Qt.Key_Escape)
+
+    assert not surface.isVisible()
+    assert not dialog.isVisible()
+
+
 def test_canvas_is_placed_over_the_selection_in_local_coords(qtbot, config, monkeypatch):
     surface = _surface(qtbot, config, monkeypatch)
     # origin (1100,580,200,120) on a screen at (1000,500) → local (100,80,200,120).
