@@ -168,7 +168,7 @@ class AnnotationCanvas(QGraphicsView):
         self._undo = QUndoStack(self)
         self._tool = Tool.SELECT
         self._color = QColor(_DEFAULT_COLOR)
-        self._width = 4
+        self._width = 9
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
         self._last_hit_item: QGraphicsItem | None = None

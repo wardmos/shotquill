@@ -69,6 +69,7 @@ def test_tool_action_switches_canvas_tool(qtbot):
 
 def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     canvas, toolbar = _toolbar(qtbot)
+    assert toolbar.width_spin.value() == 9
     toolbar.width_spin.setValue(13)
     assert canvas.width() == 13
 

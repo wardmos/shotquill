@@ -353,6 +353,11 @@ def test_color_and_width_setters_round_trip(qtbot):
     assert canvas.width() == 7
 
 
+def test_default_width_is_nine(qtbot):
+    canvas = _canvas(qtbot)
+    assert canvas.width() == 9
+
+
 def test_width_is_clamped_to_minimum_one(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_width(0)
