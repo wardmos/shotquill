@@ -858,11 +858,10 @@ def test_editor_toolbar_style_follows_config(qtbot, config):
 def test_width_spinbox_never_takes_keyboard_focus(qtbot, config):
     # The window's keyboard surface (arrow-key crop adjustment, Space/Enter
     # finish keys) must survive a click on the width spin box — a focusable
-    # spin box would silently swallow the arrows for stepping the width.
-    from PySide6.QtWidgets import QSpinBox
-
+    # spin box would silently swallow the arrows for stepping the width.  Use
+    # the toolbar's explicit handle: QColorDialog also owns internal spin boxes.
     window = _editor(qtbot, config)
-    spinbox = window.findChild(QSpinBox)
+    spinbox = window._toolbar.width_spin
     assert spinbox.focusPolicy() == Qt.NoFocus
     assert spinbox.lineEdit().focusPolicy() == Qt.NoFocus
 

@@ -108,12 +108,6 @@ class _NoCollapseToolBar(QToolBar):
         return self.sizeHint()
 
 
-def _pick_color(canvas: AnnotationCanvas) -> None:
-    color = QColorDialog.getColor(canvas.color(), None, t("dialog.pick_color"))
-    if color.isValid():
-        canvas.set_color(color)
-
-
 def create_toolbar(
     canvas: AnnotationCanvas,
     on_copy: Callable[[], None],
@@ -159,9 +153,27 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
+    # The macOS native colour panel can remain behind the frameless always-on-top
+    # editor.  Never combine that panel with window modality: an invisible modal
+    # panel blocks every editor key and makes the capture surface look frozen.
+    # The parented Qt widget dialog has predictable transient-window behaviour,
+    # and show() keeps it non-modal even if a window manager fails to front it.
+    color_dialog = QColorDialog(canvas.color(), canvas)
+    color_dialog.setOption(QColorDialog.DontUseNativeDialog)
+    color_dialog.setWindowModality(Qt.NonModal)
+    color_dialog.setWindowTitle(t("dialog.pick_color"))
+    color_dialog.colorSelected.connect(canvas.set_color)
+
+    def show_color_dialog() -> None:
+        color_dialog.setCurrentColor(canvas.color())
+        color_dialog.show()
+        color_dialog.raise_()
+        color_dialog.activateWindow()
+
     color_action = QAction(sized_icon("color"), t("toolbar.color"), toolbar)
-    color_action.triggered.connect(lambda: _pick_color(canvas))
+    color_action.triggered.connect(show_color_dialog)
     toolbar.addAction(color_action)
+    toolbar.color_dialog = color_dialog
 
     width = QSpinBox()
     width.setRange(1, 40)
