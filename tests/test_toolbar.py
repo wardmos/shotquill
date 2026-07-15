@@ -73,21 +73,22 @@ def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     assert canvas.width() == 13
 
 
-def test_color_dialog_is_owned_by_the_editor_and_opens_asynchronously(qtbot):
-    # The editor can be a frameless always-on-top window.  An unowned blocking
-    # native panel can therefore hide behind it (notably on macOS) while its
-    # nested event loop makes the editor look frozen.  Keep one child dialog and
-    # open it asynchronously instead.
+def test_color_dialog_is_owned_non_native_and_non_modal(qtbot):
+    # The macOS native panel can fail to front over the always-on-top editor.
+    # Window modality would then block every editor key behind an invisible
+    # panel.  Use the parented Qt widget picker and never enter a modal state.
     canvas, toolbar = _toolbar(qtbot)
     dialog = toolbar.color_dialog
     assert isinstance(dialog, QColorDialog)
     assert dialog.parentWidget() is canvas
+    assert dialog.testOption(QColorDialog.DontUseNativeDialog)
 
     color_action = next(action for action in toolbar.actions() if action.text() == "Color")
     color_action.trigger()
 
     assert dialog.isVisible()
-    assert dialog.windowModality() == Qt.WindowModal
+    assert dialog.isModal() is False
+    assert dialog.windowModality() == Qt.NonModal
 
 
 def test_color_dialog_applies_only_an_accepted_color(qtbot):

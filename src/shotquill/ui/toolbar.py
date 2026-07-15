@@ -153,22 +153,25 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
-    # Keep the dialog parented to the canvas so its lifetime and transient
-    # window relationship follow either editor shell.  A persistent instance
-    # also lets open() return immediately instead of the static getColor()
-    # helper spinning a nested event loop; on macOS this gives Cocoa's native
-    # panel its queued opportunity to come to the front rather than leaving a
-    # hidden panel that makes the editor look frozen.
+    # The macOS native colour panel can remain behind the frameless always-on-top
+    # editor.  Never combine that panel with window modality: an invisible modal
+    # panel blocks every editor key and makes the capture surface look frozen.
+    # The parented Qt widget dialog has predictable transient-window behaviour,
+    # and show() keeps it non-modal even if a window manager fails to front it.
     color_dialog = QColorDialog(canvas.color(), canvas)
+    color_dialog.setOption(QColorDialog.DontUseNativeDialog)
+    color_dialog.setWindowModality(Qt.NonModal)
     color_dialog.setWindowTitle(t("dialog.pick_color"))
     color_dialog.colorSelected.connect(canvas.set_color)
 
-    def open_color_dialog() -> None:
+    def show_color_dialog() -> None:
         color_dialog.setCurrentColor(canvas.color())
-        color_dialog.open()
+        color_dialog.show()
+        color_dialog.raise_()
+        color_dialog.activateWindow()
 
     color_action = QAction(sized_icon("color"), t("toolbar.color"), toolbar)
-    color_action.triggered.connect(open_color_dialog)
+    color_action.triggered.connect(show_color_dialog)
     toolbar.addAction(color_action)
     toolbar.color_dialog = color_dialog
 
