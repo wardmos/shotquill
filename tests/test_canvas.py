@@ -353,9 +353,19 @@ def test_color_and_width_setters_round_trip(qtbot):
     assert canvas.width() == 7
 
 
-def test_default_width_is_nine(qtbot):
+def test_default_width_is_four(qtbot):
     canvas = _canvas(qtbot)
-    assert canvas.width() == 9
+    assert canvas.width() == 4
+
+
+def test_font_size_defaults_to_nine_and_is_independent(qtbot):
+    canvas = _canvas(qtbot)
+    assert canvas.font_size() == 9
+
+    canvas.set_font_size(18)
+
+    assert canvas.font_size() == 18
+    assert canvas.width() == 4
 
 
 def test_width_is_clamped_to_minimum_one(qtbot):
@@ -454,6 +464,14 @@ def test_text_tool_creates_item_on_single_click(qtbot):
     # The undo entry is deferred until editing finishes (focus-out): an item
     # that may yet be discarded as empty must not be undoable.
     assert canvas.undo_stack().count() == 0
+
+
+def test_text_tool_uses_configured_font_size(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_font_size(21)
+    _click_text_tool(qtbot, canvas)
+
+    assert _text_items(canvas)[0].font().pointSize() == 21
 
 
 def test_text_tool_focuses_new_item_for_keyboard_input(qtbot):

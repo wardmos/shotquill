@@ -149,6 +149,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Toolbar controls
     "toolbar.color": {"en": "Color", "zh": "颜色"},
     "toolbar.width": {"en": "Width ", "zh": "粗细 "},
+    "toolbar.font_size": {"en": "Font size ", "zh": "字号 "},
     "toolbar.undo": {"en": "Undo", "zh": "撤销"},
     "toolbar.redo": {"en": "Redo", "zh": "重做"},
     "toolbar.ocr": {"en": "Copy Text", "zh": "取字"},

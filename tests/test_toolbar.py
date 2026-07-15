@@ -69,9 +69,32 @@ def test_tool_action_switches_canvas_tool(qtbot):
 
 def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     canvas, toolbar = _toolbar(qtbot)
-    assert toolbar.width_spin.value() == 9
+    assert toolbar.width_spin.value() == 4
     toolbar.width_spin.setValue(13)
     assert canvas.width() == 13
+
+
+def test_size_control_switches_between_independent_width_and_font_size(qtbot):
+    canvas, toolbar = _toolbar(qtbot, style="both")
+    text_action = next(action for action in toolbar.actions() if action.text() == "Text")
+    rect_action = next(action for action in toolbar.actions() if action.text() == "Rectangle")
+    spin = toolbar.width_spin
+    caption = spin.parentWidget().findChild(QLabel)
+
+    text_action.trigger()
+    assert (spin.value(), spin.maximum(), caption.text()) == (9, 160, "Font size")
+    spin.setValue(14)
+    assert canvas.font_size() == 14
+    assert canvas.width() == 4
+
+    rect_action.trigger()
+    assert (spin.value(), spin.maximum(), caption.text()) == (4, 40, "Width")
+    spin.setValue(7)
+    assert canvas.width() == 7
+    assert canvas.font_size() == 14
+
+    text_action.trigger()
+    assert spin.value() == 14
 
 
 def test_color_dialog_is_owned_non_native_and_non_modal(qtbot):
@@ -125,21 +148,27 @@ def test_width_control_is_a_captioned_two_row_widget(qtbot):
 def test_width_caption_is_dropped_in_icon_only_mode(qtbot):
     # Icon-only strips every button's label, so the width control must not show a
     # lone "Width" caption among them; it keeps its name through a tooltip.
-    _canvas_, toolbar = _toolbar(qtbot, style="icon")
+    canvas, toolbar = _toolbar(qtbot, style="icon")
     spin = toolbar.width_spin
     container = spin.parentWidget()
     assert container.findChildren(QLabel) == []
     assert spin.toolTip() == "Width"
+    canvas.set_tool(Tool.TEXT)
+    assert spin.toolTip() == "Font size"
+    assert spin.maximum() == 160
 
 
 def test_width_shows_inline_label_in_text_mode(qtbot):
     # Text-only buttons are single-row labels, so the width field shows its name
     # inline as a prefix ("Width 12") rather than a stacked caption that would be
     # clipped against the shorter single-row button height.
-    _canvas_, toolbar = _toolbar(qtbot, style="text")
+    canvas, toolbar = _toolbar(qtbot, style="text")
     spin = toolbar.width_spin
     assert spin.prefix() == "Width "
     assert spin.parentWidget().findChildren(QLabel) == []
+    canvas.set_tool(Tool.TEXT)
+    assert spin.prefix() == "Font size "
+    assert spin.value() == 9
 
 
 def test_toolbar_exposes_copy_and_save_actions(qtbot):

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Builds the editor toolbar: tool picker, color, width, undo/redo, OCR, copy/save."""
+"""Builds the editor toolbar: tool picker, color, size, undo/redo, OCR, copy/save."""
 
 from __future__ import annotations
 
@@ -83,14 +83,16 @@ _TIGHT_STYLE = (
     "QToolBar { spacing: 0px; padding: 0px; margin: 0px; }"
     "QToolBar::separator { width: 1px; margin: 0px 3px; }"
     "QToolButton { padding: 1px 0px; font-size: 11px; }"
-    # The width control's caption (the only QLabel in the bar) sits on the same
+    # The size control's caption (the only QLabel in the bar) sits on the same
     # line as the buttons' under-icon labels, so it matches their font size.
     "QLabel { font-size: 11px; }"
 )
-# Extra width, on top of the two-digit value text, reserved for the spin box's
+# Extra width, on top of the numeric value text, reserved for the spin box's
 # up/down button column and inner margins. Capping the field to this keeps it
 # from reserving the spin box's generous default width.
-_WIDTH_FIELD_PADDING = 22
+_SIZE_FIELD_PADDING = 22
+_MAX_STROKE_WIDTH = 40
+_MAX_FONT_SIZE = 160
 
 
 class _NoCollapseToolBar(QToolBar):
@@ -175,67 +177,94 @@ def create_toolbar(
     toolbar.addAction(color_action)
     toolbar.color_dialog = color_dialog
 
-    width = QSpinBox()
-    width.setRange(1, 40)
-    width.setValue(canvas.width())
-    width.setAlignment(Qt.AlignHCenter)
+    size = QSpinBox()
+    size.setAlignment(Qt.AlignHCenter)
     # Frameless lets the field shrink to about the icons' height: a normal spin
     # box is taller than the icons, which would make the stacked control taller
     # than the buttons and push its caption off their label line.
     # Removing the box border slims it so the whole control matches a button's
     # height (pinned below) and the rows line up.
-    width.setFrame(False)
+    size.setFrame(False)
     # The editor's keyboard surface lives on the canvas/window: arrows adjust
     # a region capture's crop, Space/Enter finish the shot. A focusable spin
     # box would keep those keys after a click — arrows would silently step the
-    # stroke width instead of the crop — so it stays mouse-only (the up/down
+    # active size instead of the crop — so it stays mouse-only (the up/down
     # buttons and the scroll wheel still adjust it). The inner line edit holds
     # its own focus policy and is the spin box's focus proxy, so clear both.
-    width.setFocusPolicy(Qt.NoFocus)
-    width.lineEdit().setFocusPolicy(Qt.NoFocus)
-    width.valueChanged.connect(canvas.set_width)
+    size.setFocusPolicy(Qt.NoFocus)
+    size.lineEdit().setFocusPolicy(Qt.NoFocus)
 
-    # The width field carries its "Width" name differently per style, so the
-    # control always matches the buttons' row count:
+    def _set_active_size(value: int) -> None:
+        if canvas.tool() == Tool.TEXT:
+            canvas.set_font_size(value)
+        else:
+            canvas.set_width(value)
+
+    size.valueChanged.connect(_set_active_size)
+
+    # The field carries its dynamic name differently per style, so the control
+    # always matches the buttons' row count:
     #   both  — number over a caption (two rows), like the icon-over-label
     #           buttons; the caption lands on their label line.
     #   icon  — number only, name via tooltip (one row), like the label-less
     #           icon buttons.
     #   text  — single-row labels, so the name goes inline as a prefix
-    #           ("Width 12"); a stacked caption would be clipped against the
-    #           shorter single-row button height.
+    #           ("Width 12" / "Font size 9"); a stacked caption would be
+    #           clipped against the shorter single-row button height.
     # Unknown styles fall back to the two-row layout, matching the button-style
     # fallback above.
     width_label = t("toolbar.width").strip()
+    font_size_label = t("toolbar.font_size").strip()
 
-    def _cap_to_two_digits() -> None:
-        # Cap the field to its two-digit value plus the up/down button column,
-        # so it doesn't reserve the spin box's (much wider) default size.
-        width.setMaximumWidth(width.fontMetrics().horizontalAdvance("40") + _WIDTH_FIELD_PADDING)
+    def _cap_numeric_field(maximum: int) -> None:
+        # Cap the field to its largest value plus the up/down button column, so
+        # it doesn't reserve the spin box's (much wider) default size.
+        value_width = size.fontMetrics().horizontalAdvance(str(maximum))
+        size.setMaximumWidth(value_width + _SIZE_FIELD_PADDING)
 
-    width_control = QWidget()
-    width_box = QVBoxLayout(width_control)
-    width_box.setContentsMargins(0, 0, 0, 0)
-    width_box.setSpacing(0)
-    width_box.addWidget(width)
-    if style == "icon":
-        _cap_to_two_digits()
-        width.setToolTip(width_label)
-    elif style == "text":
-        # No narrow cap here: the inline prefix needs the room.
-        width.setPrefix(f"{width_label} ")
-        width.setToolTip(width_label)
-    else:
-        _cap_to_two_digits()
-        width_caption = QLabel(width_label)
-        width_caption.setAlignment(Qt.AlignHCenter)
-        width_box.addWidget(width_caption)
-        width_caption.setFixedHeight(width_caption.sizeHint().height())
+    size_control = QWidget()
+    size_box = QVBoxLayout(size_control)
+    size_box.setContentsMargins(0, 0, 0, 0)
+    size_box.setSpacing(0)
+    size_box.addWidget(size)
+    size_caption: QLabel | None = None
+    if style not in ("icon", "text"):
+        size_caption = QLabel(width_label)
+        size_caption.setAlignment(Qt.AlignHCenter)
+        size_box.addWidget(size_caption)
+        size_caption.setFixedHeight(size_caption.sizeHint().height())
     sample_button = toolbar.widgetForAction(toolbar.actions()[0])
-    width_control.setFixedHeight(sample_button.sizeHint().height())
-    toolbar.addWidget(width_control)
-    # Exposed so tests (and any later sync) can reach the nested spin box.
-    toolbar.width_spin = width
+    size_control.setFixedHeight(sample_button.sizeHint().height())
+    toolbar.addWidget(size_control)
+
+    def _sync_size_control(tool: Tool) -> None:
+        is_text = tool == Tool.TEXT
+        maximum = _MAX_FONT_SIZE if is_text else _MAX_STROKE_WIDTH
+        value = canvas.font_size() if is_text else canvas.width()
+        label = font_size_label if is_text else width_label
+
+        signals_were_blocked = size.blockSignals(True)
+        try:
+            size.setRange(1, maximum)
+            size.setValue(value)
+            size.setToolTip(label)
+            if style == "text":
+                size.setPrefix(f"{label} ")
+            else:
+                _cap_numeric_field(maximum)
+                if size_caption is not None:
+                    size_caption.setText(label)
+        finally:
+            size.blockSignals(signals_were_blocked)
+
+    canvas.tool_changed.connect(_sync_size_control)
+    _sync_size_control(canvas.tool())
+
+    # Exposed so tests (and any later sync) can reach the nested spin box. Keep
+    # the old width_spin name as a compatibility alias while it becomes a
+    # width-or-font-size control.
+    toolbar.size_spin = size
+    toolbar.width_spin = size
 
     toolbar.addSeparator()
 

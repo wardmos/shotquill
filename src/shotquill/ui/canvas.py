@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -49,6 +49,8 @@ if TYPE_CHECKING:
     from shotquill.ui.editor import CropHost
 
 _DEFAULT_COLOR = "#ff3b30"
+_DEFAULT_WIDTH = 4
+_DEFAULT_FONT_SIZE = 9
 _NEGLIGIBLE = 3.0
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
@@ -153,6 +155,8 @@ class _DeleteItemsCommand(QUndoCommand):
 
 
 class AnnotationCanvas(QGraphicsView):
+    tool_changed = Signal(object)
+
     def __init__(self, background: QPixmap) -> None:
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -168,7 +172,8 @@ class AnnotationCanvas(QGraphicsView):
         self._undo = QUndoStack(self)
         self._tool = Tool.SELECT
         self._color = QColor(_DEFAULT_COLOR)
-        self._width = 9
+        self._width = _DEFAULT_WIDTH
+        self._font_size = _DEFAULT_FONT_SIZE
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
         self._last_hit_item: QGraphicsItem | None = None
@@ -234,16 +239,26 @@ class AnnotationCanvas(QGraphicsView):
     def width(self) -> int:
         return self._width
 
+    def tool(self) -> Tool:
+        return self._tool
+
     def set_tool(self, tool: Tool) -> None:
         self._tool = tool
         self._apply_drag_mode()
         self._update_idle_cursor()
+        self.tool_changed.emit(tool)
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
 
     def set_width(self, width: int) -> None:
         self._width = max(1, int(width))
+
+    def font_size(self) -> int:
+        return self._font_size
+
+    def set_font_size(self, size: int) -> None:
+        self._font_size = max(1, int(size))
 
     def export_image(self) -> QImage:
         self._scene.clearSelection()
@@ -624,7 +639,7 @@ class AnnotationCanvas(QGraphicsView):
         item = _TextItem(self._finish_text)
         item.setDefaultTextColor(self._color)
         font = QFont()
-        font.setPointSize(max(self._width * 4, 16))
+        font.setPointSize(self._font_size)
         item.setFont(font)
         item.setPos(pos)
         item.setTextInteractionFlags(Qt.TextEditorInteraction)
