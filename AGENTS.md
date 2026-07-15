@@ -41,6 +41,11 @@ annotation, CLI, and MCP workflows.
 - Use Conventional Commit style, such as `feat(capture): add display selection`.
 - Keep messages focused on the code change and avoid local environment details.
 
+## Branch Names
+
+- Name release preparation branches `release/v<version>`, for example
+  `release/v0.0.15`.
+
 ## Pull Requests
 
 - Use `.github/pull_request_template.md` for PR descriptions.
