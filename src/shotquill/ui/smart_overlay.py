@@ -58,6 +58,7 @@ from PySide6.QtWidgets import QWidget
 
 from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
 from shotquill.i18n import t
+from shotquill.ui.capture_escape import CaptureEscapeGuard
 from shotquill.ui.geometry import (
     crop_edge_hits,
     loupe_anchor,
@@ -227,6 +228,7 @@ class SmartOverlay(QWidget):
         self._previews: dict[int, QPixmap | None] = {}
         self._preview_busy = False
         self._closed = False
+        self._escape_guard = CaptureEscapeGuard(self, self._cancel)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(_PREVIEW_DELAY_MS)
@@ -692,6 +694,7 @@ class SmartOverlay(QWidget):
                 self._previews.pop(next(iter(self._previews)), None)
 
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # No new preview fetches once the overlay is going away; an in-flight
         # worker may still finish, but its result is dropped above.
         self._closed = True

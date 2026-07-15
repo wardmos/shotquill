@@ -243,6 +243,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self.setFocus()
 
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # Stop a late text focus-out from committing onto the dying undo stack.
         self._canvas.begin_teardown()
         for dim in self._dim_screens:

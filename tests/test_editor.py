@@ -108,6 +108,23 @@ def test_enter_saves_to_folder_and_closes(qtbot, config, tmp_path):
     assert not window.isVisible()
 
 
+def test_escape_in_color_dialog_closes_the_entire_editor(qtbot, config):
+    # Escape is a capture-session emergency exit, not merely a window shortcut.
+    # A focused child dialog must not consume it and leave the screenshot editor
+    # behind (the failure mode that made the macOS surface appear frozen).
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    dialog = window._toolbar.color_dialog
+    dialog.show()
+    assert window.isVisible() and dialog.isVisible()
+
+    qtbot.keyClick(dialog, Qt.Key_Escape)
+
+    assert not window.isVisible()
+    assert not dialog.isVisible()
+
+
 def test_custom_finish_keys_are_honoured(qtbot, config, tmp_path):
     config.set_save_dir(str(tmp_path))
     config.set_editor_hotkey("editor_save", "Ctrl+D")
@@ -732,6 +749,23 @@ def test_enter_crop_adjust_opens_overlay_seeded_with_current_crop(qtbot, config)
         assert overlay._sel == QRectF(10, 10, 30, 20)
     finally:
         overlay.close()
+
+
+def test_two_escapes_close_crop_adjust_then_editor(qtbot, config):
+    # Crop adjustment is a deliberately nested screenshot state: the first
+    # Escape cancels that temporary layer, and the next exits screenshot mode.
+    window = _region_editor(qtbot, config)
+    window.show()
+    window.enter_crop_adjust((False, False, True, False))
+    overlay = window._crop_overlay
+    assert overlay is not None and overlay.isVisible()
+
+    qtbot.keyClick(overlay, Qt.Key_Escape)
+    assert not overlay.isVisible()
+    assert window.isVisible()
+
+    qtbot.keyClick(window, Qt.Key_Escape)
+    assert not window.isVisible()
 
 
 def test_crop_adjusted_recrops_from_the_full_screenshot(qtbot, config):

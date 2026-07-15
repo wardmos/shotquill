@@ -227,6 +227,7 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         super().changeEvent(event)
 
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # Before teardown fires a focus-out on any active text item, tell the
         # canvas to stop committing it onto the dying undo stack.
         self._canvas.begin_teardown()
