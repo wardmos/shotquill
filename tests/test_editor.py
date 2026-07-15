@@ -125,7 +125,13 @@ def test_escape_in_color_dialog_closes_the_entire_editor(qtbot, config):
     assert not dialog.isVisible()
 
 
-def test_unshown_editor_does_not_steal_escape_from_other_windows(qtbot, config):
+def test_unshown_editor_does_not_enable_session_escape_guard(qtbot, config):
+    editor = _editor(qtbot, config)
+    assert not editor.isVisible()
+    assert editor._escape_guard._installed is False
+
+
+def test_visible_editor_does_not_steal_escape_from_other_windows(qtbot, config):
     from PySide6.QtCore import QEvent
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtWidgets import QApplication
@@ -134,7 +140,8 @@ def test_unshown_editor_does_not_steal_escape_from_other_windows(qtbot, config):
 
     editor = _editor(qtbot, config)
     editor.setAttribute(Qt.WA_DeleteOnClose, False)
-    assert not editor.isVisible()
+    editor.show()
+    assert editor._escape_guard._installed is True
     pin = PinnedWindow(_image())
     pin.setAttribute(Qt.WA_DeleteOnClose, False)
     qtbot.addWidget(pin)
@@ -143,6 +150,7 @@ def test_unshown_editor_does_not_steal_escape_from_other_windows(qtbot, config):
     QApplication.sendEvent(pin, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
 
     assert not pin.isVisible()
+    assert editor.isVisible()
 
 
 def test_custom_finish_keys_are_honoured(qtbot, config, tmp_path):
@@ -778,10 +786,14 @@ def test_two_escapes_close_crop_adjust_then_editor(qtbot, config):
     window.show()
     window.enter_crop_adjust((False, False, True, False))
     overlay = window._crop_overlay
-    assert overlay is not None and overlay.isVisible()
+    assert overlay is not None
+    overlay.setAttribute(Qt.WA_DeleteOnClose, False)
+    controller = getattr(overlay, "_controller", None)
+    target = controller._views[0] if controller is not None else overlay
+    assert target.isVisible()
 
-    qtbot.keyClick(overlay, Qt.Key_Escape)
-    assert not overlay.isVisible()
+    qtbot.keyClick(target, Qt.Key_Escape)
+    assert overlay._closed is True
     assert window.isVisible()
 
     qtbot.keyClick(window, Qt.Key_Escape)

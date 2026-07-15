@@ -44,7 +44,12 @@ class CaptureEscapeGuard(QObject):
 
     def eventFilter(self, watched, event) -> bool:
         cancel = self._cancel
-        if cancel is not None and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+        if (
+            cancel is not None
+            and event.type() == QEvent.KeyPress
+            and event.key() == Qt.Key_Escape
+            and self._owns_event_target(watched)
+        ):
             # Accept before closing: a child QDialog must not also process the
             # same press as reject() while its owner is tearing down. Explicitly
             # close owned top-levels first; hiding a parent widget alone does not
@@ -54,6 +59,16 @@ class CaptureEscapeGuard(QObject):
             cancel()
             return True
         return super().eventFilter(watched, event)
+
+    def _owns_event_target(self, watched: QObject) -> bool:
+        """Whether a key target belongs to this screenshot session."""
+        owner = self._owner
+        current: QObject | None = watched
+        while owner is not None and current is not None:
+            if current is owner or getattr(current, "_brain", None) is owner:
+                return True
+            current = current.parent()
+        return False
 
     def _close_owned_windows(self) -> None:
         owner = self._owner
