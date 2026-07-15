@@ -628,7 +628,11 @@ class AnnotationCanvas(QGraphicsView):
         item.setFont(font)
         item.setPos(pos)
         item.setTextInteractionFlags(Qt.TextEditorInteraction)
-        item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+        item.setFlags(
+            QGraphicsItem.ItemIsSelectable
+            | QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemIsFocusable
+        )
         item.setZValue(self._next_z())
         self._scene.addItem(item)
         item.setFocus()

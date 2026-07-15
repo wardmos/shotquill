@@ -451,6 +451,20 @@ def test_text_tool_creates_item_on_single_click(qtbot):
     assert canvas.undo_stack().count() == 0
 
 
+def test_text_tool_focuses_new_item_for_keyboard_input(qtbot):
+    from PySide6.QtWidgets import QGraphicsItem
+
+    canvas = _canvas(qtbot)
+    canvas.setFocus()
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+
+    assert item.flags() & QGraphicsItem.ItemIsFocusable
+    assert canvas.scene().focusItem() is item
+    qtbot.keyClicks(canvas, "note")
+    assert item.toPlainText() == "note"
+
+
 def test_empty_text_item_is_discarded_on_focus_out(qtbot):
     # A stray click with the text tool must not leave an invisible, selectable,
     # undoable item behind.
