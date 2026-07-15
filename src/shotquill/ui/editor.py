@@ -197,6 +197,7 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         self._wire_adjust_hint()
 
     def showEvent(self, event) -> None:
+        self._escape_guard.enable()
         super().showEvent(event)
         if self._backdrop is not None:
             # Shown without activating, so the editor keeps keyboard focus;

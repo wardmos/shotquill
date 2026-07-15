@@ -125,6 +125,26 @@ def test_escape_in_color_dialog_closes_the_entire_editor(qtbot, config):
     assert not dialog.isVisible()
 
 
+def test_unshown_editor_does_not_steal_escape_from_other_windows(qtbot, config):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    from shotquill.ui.pinned import PinnedWindow
+
+    editor = _editor(qtbot, config)
+    editor.setAttribute(Qt.WA_DeleteOnClose, False)
+    assert not editor.isVisible()
+    pin = PinnedWindow(_image())
+    pin.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(pin)
+    pin.show()
+
+    QApplication.sendEvent(pin, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+
+    assert not pin.isVisible()
+
+
 def test_custom_finish_keys_are_honoured(qtbot, config, tmp_path):
     config.set_save_dir(str(tmp_path))
     config.set_editor_hotkey("editor_save", "Ctrl+D")

@@ -268,6 +268,10 @@ class SmartOverlay(QWidget):
         self.activateWindow()
         self.setFocus()
 
+    def showEvent(self, event) -> None:
+        self._escape_guard.enable()
+        super().showEvent(event)
+
     def changeEvent(self, event) -> None:
         # If something steals focus while the overlay is up — a hot corner firing
         # Mission Control / App Exposé, Cmd-Tab, a click elsewhere — cancel
@@ -1259,10 +1263,14 @@ def present_overlay(overlay: SmartOverlay, app) -> None:
     if sys.platform == "darwin":
         controller = SmartOverlayController(overlay)
         overlay._controller = controller  # share the brain's lifetime
+        # The controller presents view windows while its shared brain stays
+        # hidden, so showEvent cannot enable the session guard for this path.
+        overlay._escape_guard.enable()
         controller.present()
     elif _compositor_prefers_fullscreen() and len(app.screens()) > 1:
         controller = SmartOverlayController(overlay, fullscreen=True)
         overlay._controller = controller  # share the brain's lifetime
+        overlay._escape_guard.enable()
         controller.present()
     else:
         overlay.present()

@@ -809,6 +809,7 @@ def test_present_overlay_uses_fullscreen_controller_on_multi_output_wayland(qtbo
     monkeypatch.setattr(overlay, "present", lambda: calls.append(("single",)))
     smart_overlay.present_overlay(overlay, _App())
     assert calls == [("controller", True, True), ("present",)]
+    assert overlay._escape_guard._installed is True
 
 
 # --- CropAdjustOverlay: drag edges/corners to fine-tune an existing crop -----

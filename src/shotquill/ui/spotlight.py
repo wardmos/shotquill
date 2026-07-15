@@ -197,6 +197,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     # --- window lifecycle -------------------------------------------------
 
     def showEvent(self, event) -> None:
+        self._escape_guard.enable()
         super().showEvent(event)
         self._cover_menubar()
         self._show_dim_screens()

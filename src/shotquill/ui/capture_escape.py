@@ -15,7 +15,7 @@ class CaptureEscapeGuard(QObject):
 
     Screenshot mode moves focus through graphics text items, colour dialogs,
     and sometimes a separate crop-adjust window. A window-scoped ``QShortcut``
-    cannot see all of those states. Installing this object on the application
+    cannot see all of those states. Enabling this object on the application
     puts the emergency exit ahead of the focused widget's own key handler while
     keeping the hook strictly bounded to the owning screenshot session.
     """
@@ -25,16 +25,22 @@ class CaptureEscapeGuard(QObject):
         self._owner: QWidget | None = owner
         self._app = QApplication.instance()
         self._cancel: Callable[[], None] | None = cancel
-        if self._app is not None:
+        self._installed = False
+
+    def enable(self) -> None:
+        """Start intercepting keys when the screenshot surface is presented."""
+        if self._app is not None and self._cancel is not None and not self._installed:
             self._app.installEventFilter(self)
+            self._installed = True
 
     def disable(self) -> None:
         """Stop intercepting keys as soon as the screenshot session closes."""
         self._owner = None
         app, self._app = self._app, None
         self._cancel = None
-        if app is not None:
+        if app is not None and self._installed:
             app.removeEventFilter(self)
+        self._installed = False
 
     def eventFilter(self, watched, event) -> bool:
         cancel = self._cancel
