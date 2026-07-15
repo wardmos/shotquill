@@ -8,7 +8,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPixmap  # noqa: E402
-from PySide6.QtWidgets import QLabel, QToolButton  # noqa: E402
+from PySide6.QtWidgets import QColorDialog, QLabel, QToolButton  # noqa: E402
 
 from shotquill.ui.canvas import AnnotationCanvas  # noqa: E402
 from shotquill.ui.toolbar import _TOOLS, create_toolbar  # noqa: E402
@@ -71,6 +71,37 @@ def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     canvas, toolbar = _toolbar(qtbot)
     toolbar.width_spin.setValue(13)
     assert canvas.width() == 13
+
+
+def test_color_dialog_is_owned_by_the_editor_and_opens_asynchronously(qtbot):
+    # The editor can be a frameless always-on-top window.  An unowned blocking
+    # native panel can therefore hide behind it (notably on macOS) while its
+    # nested event loop makes the editor look frozen.  Keep one child dialog and
+    # open it asynchronously instead.
+    canvas, toolbar = _toolbar(qtbot)
+    dialog = toolbar.color_dialog
+    assert isinstance(dialog, QColorDialog)
+    assert dialog.parentWidget() is canvas
+
+    color_action = next(action for action in toolbar.actions() if action.text() == "Color")
+    color_action.trigger()
+
+    assert dialog.isVisible()
+    assert dialog.windowModality() == Qt.WindowModal
+
+
+def test_color_dialog_applies_only_an_accepted_color(qtbot):
+    canvas, toolbar = _toolbar(qtbot)
+    dialog = toolbar.color_dialog
+    original = canvas.color()
+
+    dialog.setCurrentColor(QColor("blue"))
+    dialog.reject()
+    assert canvas.color() == original
+
+    dialog.setCurrentColor(QColor("green"))
+    dialog.accept()
+    assert canvas.color() == QColor("green")
 
 
 def test_width_control_is_a_captioned_two_row_widget(qtbot):

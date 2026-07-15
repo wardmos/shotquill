@@ -108,12 +108,6 @@ class _NoCollapseToolBar(QToolBar):
         return self.sizeHint()
 
 
-def _pick_color(canvas: AnnotationCanvas) -> None:
-    color = QColorDialog.getColor(canvas.color(), None, t("dialog.pick_color"))
-    if color.isValid():
-        canvas.set_color(color)
-
-
 def create_toolbar(
     canvas: AnnotationCanvas,
     on_copy: Callable[[], None],
@@ -159,9 +153,24 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
+    # Keep the dialog parented to the canvas so its lifetime and transient
+    # window relationship follow either editor shell.  A persistent instance
+    # also lets open() return immediately instead of the static getColor()
+    # helper spinning a nested event loop; on macOS this gives Cocoa's native
+    # panel its queued opportunity to come to the front rather than leaving a
+    # hidden panel that makes the editor look frozen.
+    color_dialog = QColorDialog(canvas.color(), canvas)
+    color_dialog.setWindowTitle(t("dialog.pick_color"))
+    color_dialog.colorSelected.connect(canvas.set_color)
+
+    def open_color_dialog() -> None:
+        color_dialog.setCurrentColor(canvas.color())
+        color_dialog.open()
+
     color_action = QAction(sized_icon("color"), t("toolbar.color"), toolbar)
-    color_action.triggered.connect(lambda: _pick_color(canvas))
+    color_action.triggered.connect(open_color_dialog)
     toolbar.addAction(color_action)
+    toolbar.color_dialog = color_dialog
 
     width = QSpinBox()
     width.setRange(1, 40)
