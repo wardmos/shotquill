@@ -209,17 +209,17 @@ def create_toolbar(
     #   icon  — number only, name via tooltip (one row), like the label-less
     #           icon buttons.
     #   text  — single-row labels, so the name goes inline as a prefix
-    #           ("Width 12" / "Font size 9"); a stacked caption would be
+    #           ("Width 4 px" / "Font size 32 pt"); a stacked caption would be
     #           clipped against the shorter single-row button height.
     # Unknown styles fall back to the two-row layout, matching the button-style
     # fallback above.
     width_label = t("toolbar.width").strip()
     font_size_label = t("toolbar.font_size").strip()
 
-    def _cap_numeric_field(maximum: int) -> None:
+    def _cap_numeric_field(maximum: int, suffix: str) -> None:
         # Cap the field to its largest value plus the up/down button column, so
         # it doesn't reserve the spin box's (much wider) default size.
-        value_width = size.fontMetrics().horizontalAdvance(str(maximum))
+        value_width = size.fontMetrics().horizontalAdvance(f"{maximum}{suffix}")
         size.setMaximumWidth(value_width + _SIZE_FIELD_PADDING)
 
     size_control = QWidget()
@@ -242,16 +242,18 @@ def create_toolbar(
         maximum = _MAX_FONT_SIZE if is_text else _MAX_STROKE_WIDTH
         value = canvas.font_size() if is_text else canvas.width()
         label = font_size_label if is_text else width_label
+        suffix = " pt" if is_text else " px"
 
         signals_were_blocked = size.blockSignals(True)
         try:
             size.setRange(1, maximum)
             size.setValue(value)
+            size.setSuffix(suffix)
             size.setToolTip(label)
             if style == "text":
                 size.setPrefix(f"{label} ")
             else:
-                _cap_numeric_field(maximum)
+                _cap_numeric_field(maximum, suffix)
                 if size_caption is not None:
                     size_caption.setText(label)
         finally:

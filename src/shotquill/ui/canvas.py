@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 _DEFAULT_COLOR = "#ff3b30"
 _DEFAULT_WIDTH = 4
-_DEFAULT_FONT_SIZE = 9
+_DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).

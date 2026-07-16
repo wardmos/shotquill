@@ -358,9 +358,9 @@ def test_default_width_is_four(qtbot):
     assert canvas.width() == 4
 
 
-def test_font_size_defaults_to_nine_and_is_independent(qtbot):
+def test_font_size_defaults_to_thirty_two_and_is_independent(qtbot):
     canvas = _canvas(qtbot)
-    assert canvas.font_size() == 9
+    assert canvas.font_size() == 32
 
     canvas.set_font_size(18)
 
