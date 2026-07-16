@@ -69,6 +69,10 @@ _SELECTION_OUTLINE_VIEW_PADDING = 4.0
 _SELECTION_HANDLE_VIEW_SIZE = 8.0
 _SELECTION_HIT_VIEW_TOLERANCE = 8.0
 _SELECTION_CLICK_VIEW_TOLERANCE = 4
+_TRANSIENT_TEXT_FOCUS_REASONS = (
+    Qt.ActiveWindowFocusReason,
+    Qt.PopupFocusReason,
+)
 
 
 class _TextItem(QGraphicsTextItem):
@@ -88,6 +92,12 @@ class _TextItem(QGraphicsTextItem):
 
     def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().focusOutEvent(event)
+        # Window activation changes and transient popups (including input-method
+        # UI) are not an editing decision. The scene restores its focus item when
+        # the window becomes active again; committing here would interrupt
+        # non-empty text and discard an empty editor before the user can type.
+        if event.reason() in _TRANSIENT_TEXT_FOCUS_REASONS:
+            return
         self._on_editing_finished(self)
 
 

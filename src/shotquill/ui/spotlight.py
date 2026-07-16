@@ -214,7 +214,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # whatever the user switches to.
         if event.type() == QEvent.ActivationChange:
             if self.isActiveWindow():
-                self._cover_menubar()
+                # Re-level the native window without moving keyboard focus away
+                # from an active graphics text editor in the canvas.
+                self._cover_menubar(take_focus=False)
                 self._show_dim_screens()
             else:
                 self._hide_dim_screens()
@@ -230,18 +232,19 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         for dim in self._dim_screens:
             dim.hide()
 
-    def _cover_menubar(self) -> None:
+    def _cover_menubar(self, *, take_focus: bool = True) -> None:
         # Match the capture overlay's proven sequence: set the resizable style
         # mask FIRST (it must not run after the level change and reset it), then
-        # raise the NSWindow above the menu bar, then take focus — covering the
-        # menu bar so the spotlight (and edge dragging) reaches the screen top.
+        # raise the NSWindow above the menu bar, then optionally take focus on
+        # initial presentation. Re-activation only needs the native re-leveling.
         macos_window.set_resizable(self, False)
         self.raise_()
         if sys.platform == "darwin":
             macos_window.raise_above_menubar(self)
         self.raise_()
-        self.activateWindow()
-        self.setFocus()
+        if take_focus:
+            self.activateWindow()
+            self.setFocus()
 
     def closeEvent(self, event) -> None:
         self._escape_guard.disable()

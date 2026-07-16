@@ -444,7 +444,7 @@ def _click_text_tool(qtbot, canvas):
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(30, 30))
 
 
-def _finish_editing(item):
+def _finish_editing(item, reason=Qt.OtherFocusReason):
     """Deliver the focus-out that ends text editing.
 
     Offscreen the scene is never active, so items never truly gain focus and
@@ -454,7 +454,7 @@ def _finish_editing(item):
     from PySide6.QtCore import QEvent
     from PySide6.QtGui import QFocusEvent
 
-    item.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+    item.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut, reason))
 
 
 def test_text_tool_creates_item_on_single_click(qtbot):
@@ -496,6 +496,30 @@ def test_empty_text_item_is_discarded_on_focus_out(qtbot):
     _finish_editing(_text_items(canvas)[0])
     assert _text_items(canvas) == []
     assert canvas.undo_stack().count() == 0
+
+
+@pytest.mark.parametrize("reason", [Qt.ActiveWindowFocusReason, Qt.PopupFocusReason])
+@pytest.mark.parametrize("text", ["", "note"])
+def test_transient_focus_loss_does_not_finish_or_discard_text(qtbot, reason, text):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText(text)
+
+    _finish_editing(item, reason)
+
+    assert item in _text_items(canvas)
+    assert item.committed is False
+    assert canvas.undo_stack().count() == 0
+
+    _finish_editing(item)
+    if text:
+        assert item in _text_items(canvas)
+        assert item.committed is True
+        assert canvas.undo_stack().count() == 1
+    else:
+        assert _text_items(canvas) == []
+        assert canvas.undo_stack().count() == 0
 
 
 def test_starting_a_text_edit_freezes_crop_even_if_discarded(qtbot):

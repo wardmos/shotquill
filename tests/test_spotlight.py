@@ -324,6 +324,29 @@ def test_reactivation_re_covers_the_menu_bar(qtbot, config, monkeypatch):
     assert calls == [surface]
 
 
+def test_reactivation_does_not_interrupt_active_text_edit(qtbot, config, monkeypatch):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QGraphicsTextItem
+
+    surface = _surface(qtbot, config, monkeypatch)
+    surface._canvas.setFocus()
+    surface._canvas._create_text(QPointF(20, 20))
+    item = next(
+        entry for entry in surface._canvas.scene().items() if isinstance(entry, QGraphicsTextItem)
+    )
+    assert surface._canvas.scene().focusItem() is item
+    monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
+    focus_calls = []
+    monkeypatch.setattr(surface, "setFocus", lambda: focus_calls.append(True))
+
+    surface.changeEvent(QEvent(QEvent.ActivationChange))
+
+    assert focus_calls == []
+    assert item.scene() is surface._canvas.scene()
+    assert item.committed is False
+    assert surface._canvas.scene().focusItem() is item
+
+
 def test_handles_sit_outside_the_selection(qtbot, config, monkeypatch):
     # The eight handles must sit just outside the selection so the canvas child
     # (which fills the selection exactly) can't cover them — fully visible.
