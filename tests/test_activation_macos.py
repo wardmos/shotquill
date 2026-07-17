@@ -32,6 +32,7 @@ pytestmark = pytest.mark.skipif(
 # Real-loop settle time: long enough for the window server to deliver
 # activation changes, short enough to keep the CI leg quick.
 _SETTLE_MS = 800
+_TEXT_SETTLE_MS = 2000
 
 
 def _build_app(qapp):
@@ -128,3 +129,60 @@ def test_overlay_still_cancels_when_activation_is_genuinely_stolen(qapp, qtbot, 
     thief.activateWindow()
     qtbot.waitUntil(lambda: _smart_overlay(app) is None, timeout=3000)
     app.shutdown()
+
+
+def test_spotlight_text_edit_survives_the_real_event_loop(qapp, qtbot, config):
+    from PySide6.QtCore import QPoint, QRect, Qt
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QGraphicsTextItem
+    from pytestqt.exceptions import TimeoutError as QtBotTimeoutError
+
+    from shotquill.i18n import t
+    from shotquill.ui.spotlight import SpotlightSurface
+
+    screen = qapp.primaryScreen().geometry()
+    origin = QRect(screen.center() - QPoint(120, 80), screen.center() + QPoint(119, 79))
+    image = QImage(origin.size(), QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    surface = SpotlightSurface(image, config, origin, None)
+    surface.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(surface)
+    surface.show()
+    surface.raise_()
+    surface.activateWindow()
+    try:
+        qtbot.waitUntil(surface.isActiveWindow, timeout=3000)
+    except QtBotTimeoutError:
+        surface.close()
+        pytest.skip("window server never activated the editor; text focus not exercisable")
+
+    text_action = next(a for a in surface._toolbar.actions() if a.text() == t("tool.text"))
+    text_button = surface._toolbar.widgetForAction(text_action)
+    qtbot.mouseClick(text_button, Qt.LeftButton)
+    qtbot.mouseClick(surface._canvas.viewport(), Qt.LeftButton, pos=QPoint(60, 60))
+    item = next(
+        entry for entry in surface._canvas.scene().items() if isinstance(entry, QGraphicsTextItem)
+    )
+
+    expected = ""
+    for char in "stable text":
+        # Exercise the native window-server path repeatedly: re-leveling or
+        # activating the full-screen parent must never commit/delete the editor,
+        # regardless of which FocusReason Cocoa happens to report this time.
+        surface.setFocus()
+        surface.raise_()
+        surface.activateWindow()
+        qtbot.wait(50)
+        assert item.scene() is surface._canvas.scene()
+        assert item.committed is False
+        assert surface._canvas.scene().focusItem() is item
+        qtbot.keyClicks(surface._canvas, char)
+        expected += char
+
+    qtbot.wait(_TEXT_SETTLE_MS)
+
+    assert item.scene() is surface._canvas.scene()
+    assert item.committed is False
+    assert surface._canvas.scene().focusItem() is item
+    assert item.toPlainText() == expected
+    surface.close()

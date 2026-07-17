@@ -464,6 +464,20 @@ def test_editor_backdrop_hides_while_deactivated(qtbot, config, monkeypatch):
     assert window._backdrop.isVisible()
 
 
+def test_editor_reactivation_restores_pending_text_focus(qtbot, config, monkeypatch):
+    from PySide6.QtCore import QEvent
+
+    window = _editor(qtbot, config)
+    window.show()
+    calls = []
+    monkeypatch.setattr(window._canvas, "restore_text_focus", lambda: calls.append(True))
+    monkeypatch.setattr(window, "isActiveWindow", lambda: True)
+
+    window.changeEvent(QEvent(QEvent.ActivationChange))
+
+    assert calls == [True]
+
+
 def test_editor_backdrop_off_restores_titled_window(qtbot, config):
     config.set_editor_backdrop(False)
     window = _editor(qtbot, config)

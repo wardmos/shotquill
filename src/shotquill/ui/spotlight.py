@@ -37,7 +37,7 @@ from PySide6.QtGui import (
     QRegion,
     QShortcut,
 )
-from PySide6.QtWidgets import QFrame, QLabel, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from shotquill.ocr import get_recognizer
 from shotquill.ui import macos_window
@@ -116,7 +116,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self.setGeometry(self._screen_geo)
         self.setMouseTracking(True)
 
-        toolbar = self._init_editor_core(image, config, origin, region, get_recognizer())
+        toolbar = self._init_editor_core(
+            image, config, origin, region, get_recognizer(), split_outputs=True
+        )
 
         # The lit selection IS the canvas, parented as a positioned child (placed
         # in showEvent / on every crop change), not a central widget. Drop the
@@ -130,9 +132,19 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._status_badge = QLabel(self._canvas.viewport())
         self._status_badge.setStyleSheet(_BADGE_STYLE)
         self._status_badge.hide()
-        # The toolbar floats as a child near the selection (positioned on show).
+        # Keep one continuous floating row: annotation tools take the flexible
+        # leading section, while copy/save occupy a fixed trailing section. This
+        # preserves their order and lets only the annotation section fold.
         self._toolbar = toolbar
-        toolbar.setParent(self)
+        outputs = toolbar.outputs_toolbar
+        self._toolbar_row = QWidget(self)
+        toolbar_layout = QHBoxLayout(self._toolbar_row)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(0)
+        toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        outputs.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        toolbar_layout.addWidget(toolbar, 1)
+        toolbar_layout.addWidget(outputs)
 
         # This screen's slice of the frozen desktop shot, painted dimmed as
         # context (None for non-region captures — then the surface is pure dim).
@@ -214,8 +226,11 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # whatever the user switches to.
         if event.type() == QEvent.ActivationChange:
             if self.isActiveWindow():
-                self._cover_menubar()
+                # Re-level the native window without moving keyboard focus away
+                # from an active graphics text editor in the canvas.
+                self._cover_menubar(take_focus=False)
                 self._show_dim_screens()
+                self._canvas.restore_text_focus()
             else:
                 self._hide_dim_screens()
         super().changeEvent(event)
@@ -230,18 +245,19 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         for dim in self._dim_screens:
             dim.hide()
 
-    def _cover_menubar(self) -> None:
+    def _cover_menubar(self, *, take_focus: bool = True) -> None:
         # Match the capture overlay's proven sequence: set the resizable style
         # mask FIRST (it must not run after the level change and reset it), then
-        # raise the NSWindow above the menu bar, then take focus — covering the
-        # menu bar so the spotlight (and edge dragging) reaches the screen top.
+        # raise the NSWindow above the menu bar, then optionally take focus on
+        # initial presentation. Re-activation only needs the native re-leveling.
         macos_window.set_resizable(self, False)
         self.raise_()
         if sys.platform == "darwin":
             macos_window.raise_above_menubar(self)
         self.raise_()
-        self.activateWindow()
-        self.setFocus()
+        if take_focus:
+            self.activateWindow()
+            self.setFocus()
 
     def closeEvent(self, event) -> None:
         self._escape_guard.disable()
@@ -275,9 +291,16 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         from PySide6.QtGui import QCursor
 
         self._toolbar.adjustSize()
+        self._toolbar.outputs_toolbar.adjustSize()
+        self._toolbar_row.adjustSize()
+        preferred = self._toolbar_row.sizeHint()
+        # The fixed trailing output section keeps its preferred width; the
+        # leading annotation bar absorbs the constraint and exposes overflow.
+        self._toolbar_row.resize(min(preferred.width(), self.width()), preferred.height())
+        self._toolbar_row.layout().activate()
         sel = self._to_local(self._origin)
         area, align_right = _toolbar_placement(QCursor.pos(), self._origin)
-        tb = self._toolbar.size()
+        tb = self._toolbar_row.size()
         x = sel.right() - tb.width() if align_right else sel.left()
         if area == Qt.BottomToolBarArea:
             y = sel.bottom() + _TOOLBAR_GAP
@@ -286,9 +309,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # Clamp inside the surface so the toolbar is always reachable.
         x = min(max(x, 0), max(self.width() - tb.width(), 0))
         y = min(max(y, 0), max(self.height() - tb.height(), 0))
-        self._toolbar.move(int(x), int(y))
-        self._toolbar.show()
-        self._toolbar.raise_()
+        self._toolbar_row.move(int(x), int(y))
+        self._toolbar_row.show()
+        self._toolbar_row.raise_()
 
     # --- painting ---------------------------------------------------------
 

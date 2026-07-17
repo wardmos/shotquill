@@ -53,6 +53,7 @@ def test_translate_switches_language():
     assert i18n.t("menu.smart") == "Capture"
     i18n.set_language("zh")
     assert i18n.t("menu.smart") == "截图"
+    assert i18n.t("toolbar.font_size").strip() == "字号"
 
 
 def test_unknown_key_returns_key():

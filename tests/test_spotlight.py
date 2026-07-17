@@ -161,11 +161,34 @@ def test_copy_exports_and_closes(qtbot, config, monkeypatch):
 
 def test_toolbar_floats_as_a_child_near_the_selection(qtbot, config, monkeypatch):
     surface = _surface(qtbot, config, monkeypatch)
-    assert surface._toolbar.parent() is surface
-    assert surface._toolbar.isVisible()
+    assert surface._toolbar_row.parent() is surface
+    assert surface._toolbar.parent() is surface._toolbar_row
+    assert surface._toolbar.outputs_toolbar.parent() is surface._toolbar_row
+    assert surface._toolbar_row.isVisible()
     # Positioned inside the surface.
-    tb = surface._toolbar.geometry()
-    assert surface.rect().contains(tb.topLeft())
+    row = surface._toolbar_row.geometry()
+    assert surface.rect().contains(row.topLeft())
+
+
+def test_copy_and_save_stay_in_the_floating_toolbar_when_it_overflows(qtbot, config, monkeypatch):
+    # The full row is wider than this surface. Copy/save must remain at its
+    # trailing end and visible while the annotation section folds.
+    surface = _surface(qtbot, config, monkeypatch)
+    toolbar = surface._toolbar
+    outputs = toolbar.outputs_toolbar
+    row = surface._toolbar_row
+
+    surface.resize(200, surface.height())
+    surface._reposition_toolbar()
+    assert toolbar.sizeHint().width() + outputs.sizeHint().width() > surface.width()
+    assert row.width() == surface.width()
+    assert row.layout().indexOf(toolbar) < row.layout().indexOf(outputs)
+    assert toolbar.geometry().right() + 1 == outputs.geometry().left()
+    assert toolbar.geometry().top() == outputs.geometry().top()
+    assert outputs.actions() == [surface._copy_action, surface._save_action]
+    assert not toolbar.widgetForAction(toolbar.actions()[-1]).isVisible()
+    assert outputs.widgetForAction(surface._copy_action).isVisible()
+    assert outputs.widgetForAction(surface._save_action).isVisible()
 
 
 def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
@@ -322,6 +345,29 @@ def test_reactivation_re_covers_the_menu_bar(qtbot, config, monkeypatch):
     monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
     surface.changeEvent(QEvent(QEvent.ActivationChange))
     assert calls == [surface]
+
+
+def test_reactivation_does_not_interrupt_active_text_edit(qtbot, config, monkeypatch):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QGraphicsTextItem
+
+    surface = _surface(qtbot, config, monkeypatch)
+    surface._canvas.setFocus()
+    surface._canvas._create_text(QPointF(20, 20))
+    item = next(
+        entry for entry in surface._canvas.scene().items() if isinstance(entry, QGraphicsTextItem)
+    )
+    assert surface._canvas.scene().focusItem() is item
+    monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
+    focus_calls = []
+    monkeypatch.setattr(surface, "setFocus", lambda: focus_calls.append(True))
+
+    surface.changeEvent(QEvent(QEvent.ActivationChange))
+
+    assert focus_calls == []
+    assert item.scene() is surface._canvas.scene()
+    assert item.committed is False
+    assert surface._canvas.scene().focusItem() is item
 
 
 def test_handles_sit_outside_the_selection(qtbot, config, monkeypatch):

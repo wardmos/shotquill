@@ -225,6 +225,8 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
                 self.raise_()
             else:
                 self._backdrop.hide()
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._canvas.restore_text_focus()
         super().changeEvent(event)
 
     def closeEvent(self, event) -> None:

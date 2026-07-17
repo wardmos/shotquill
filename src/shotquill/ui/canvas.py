@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -49,6 +49,8 @@ if TYPE_CHECKING:
     from shotquill.ui.editor import CropHost
 
 _DEFAULT_COLOR = "#ff3b30"
+_DEFAULT_WIDTH = 4
+_DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
@@ -67,26 +69,29 @@ _SELECTION_OUTLINE_VIEW_PADDING = 4.0
 _SELECTION_HANDLE_VIEW_SIZE = 8.0
 _SELECTION_HIT_VIEW_TOLERANCE = 8.0
 _SELECTION_CLICK_VIEW_TOLERANCE = 4
+# Cocoa can settle one mouse/window transition through several focus owners.
+# Retry briefly instead of trusting the platform-specific FocusReason label;
+# each callback is guarded by the active edit identity and window activation.
+_TEXT_FOCUS_RESTORE_DELAYS_MS = (0, 50, 250, 1000)
 
 
 class _TextItem(QGraphicsTextItem):
     """A text annotation that defers its undo entry until editing finishes.
 
-    Created empty and focused for typing; when focus leaves, the canvas decides
-    its fate — discard if still empty (a stray click must not leave an
-    invisible, undoable item behind), otherwise push it onto the undo stack.
-    ``committed`` flips once that decision is made so re-entrant focus-out
-    events (e.g. from the removal itself) do nothing.
+    Created empty and focused for typing; the canvas distinguishes an intentional
+    editing exit from transient window/input-method focus churn. Once editing
+    genuinely finishes, empty items are discarded and non-empty items enter the
+    undo stack. ``committed`` keeps that decision idempotent.
     """
 
-    def __init__(self, on_editing_finished: Callable[[_TextItem], None]) -> None:
+    def __init__(self, on_focus_lost: Callable[[_TextItem, Qt.FocusReason], None]) -> None:
         super().__init__()
         self.committed = False
-        self._on_editing_finished = on_editing_finished
+        self._on_focus_lost = on_focus_lost
 
     def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().focusOutEvent(event)
-        self._on_editing_finished(self)
+        self._on_focus_lost(self, event.reason())
 
 
 class _AddItemCommand(QUndoCommand):
@@ -153,6 +158,8 @@ class _DeleteItemsCommand(QUndoCommand):
 
 
 class AnnotationCanvas(QGraphicsView):
+    tool_changed = Signal(object)
+
     def __init__(self, background: QPixmap) -> None:
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -168,7 +175,8 @@ class AnnotationCanvas(QGraphicsView):
         self._undo = QUndoStack(self)
         self._tool = Tool.SELECT
         self._color = QColor(_DEFAULT_COLOR)
-        self._width = 4
+        self._width = _DEFAULT_WIDTH
+        self._font_size = _DEFAULT_FONT_SIZE
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
         self._last_hit_item: QGraphicsItem | None = None
@@ -186,6 +194,7 @@ class AnnotationCanvas(QGraphicsView):
         # text is later discarded as empty, so the crop can't become adjustable
         # again under a half-finished annotation. See ``is_pristine``.
         self._text_started = False
+        self._active_text_item: _TextItem | None = None
         self._closing = False  # set on teardown; stops late focus-out commits
         # Crop edge-adjust (region captures only): the editor registers itself
         # as the host; a press on a viewport edge hands off to it (see the mouse
@@ -234,16 +243,28 @@ class AnnotationCanvas(QGraphicsView):
     def width(self) -> int:
         return self._width
 
+    def tool(self) -> Tool:
+        return self._tool
+
     def set_tool(self, tool: Tool) -> None:
+        if tool != self._tool:
+            self._finish_active_text()
         self._tool = tool
         self._apply_drag_mode()
         self._update_idle_cursor()
+        self.tool_changed.emit(tool)
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
 
     def set_width(self, width: int) -> None:
         self._width = max(1, int(width))
+
+    def font_size(self) -> int:
+        return self._font_size
+
+    def set_font_size(self, size: int) -> None:
+        self._font_size = max(1, int(size))
 
     def export_image(self) -> QImage:
         self._scene.clearSelection()
@@ -618,19 +639,25 @@ class AnnotationCanvas(QGraphicsView):
         self._undo.push(_AddItemCommand(self._scene, item))
 
     def _create_text(self, pos: QPointF) -> None:
-        # The undo entry is deferred to _finish_text: only text that survives
-        # its first focus-out (i.e. is non-empty) becomes part of the document.
+        # The undo entry is deferred to _finish_text: only text that survives an
+        # intentional editing exit becomes part of the document.
+        self._finish_active_text()
         self._text_started = True  # latch: never re-enable crop adjustment
-        item = _TextItem(self._finish_text)
+        item = _TextItem(self._text_focus_lost)
         item.setDefaultTextColor(self._color)
         font = QFont()
-        font.setPointSize(max(self._width * 4, 16))
+        font.setPointSize(self._font_size)
         item.setFont(font)
         item.setPos(pos)
         item.setTextInteractionFlags(Qt.TextEditorInteraction)
-        item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+        item.setFlags(
+            QGraphicsItem.ItemIsSelectable
+            | QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemIsFocusable
+        )
         item.setZValue(self._next_z())
         self._scene.addItem(item)
+        self._active_text_item = item
         item.setFocus()
 
     def _freehand_point_moved_enough(self, pos: QPointF) -> bool:
@@ -650,11 +677,52 @@ class AnnotationCanvas(QGraphicsView):
         the deferred commit is moot at this point."""
         self._closing = True
 
+    def restore_text_focus(self) -> None:
+        """Resume a pending text edit after the editor window re-activates."""
+        item = self._active_text_item
+        if item is not None:
+            self._restore_text_focus(item)
+
+    def _text_focus_lost(self, item: _TextItem, _reason: Qt.FocusReason) -> None:
+        if item.committed or self._closing:
+            return
+        # A focus event alone is never an editing decision: macOS can label the
+        # same asynchronous window transition as Mouse, Other, ActiveWindow, or
+        # NoFocus across runs. Explicit user actions (tool switch / next text
+        # placement) call _finish_active_text instead. While this edit remains
+        # active, re-assert its focus after the current event and during the
+        # short window-server settling period.
+        for delay in _TEXT_FOCUS_RESTORE_DELAYS_MS:
+            QTimer.singleShot(
+                delay,
+                self,
+                lambda item=item: self._restore_text_focus(item),
+            )
+
+    def _restore_text_focus(self, item: _TextItem) -> None:
+        if (
+            self._closing
+            or self._active_text_item is not item
+            or item.committed
+            or item.scene() is not self._scene
+            or not self.window().isActiveWindow()
+        ):
+            return
+        self.setFocus(Qt.OtherFocusReason)
+        item.setFocus(Qt.OtherFocusReason)
+
+    def _finish_active_text(self) -> None:
+        item = self._active_text_item
+        if item is not None:
+            self._finish_text(item)
+
     def _finish_text(self, item: _TextItem) -> None:
-        """First focus-out commits a text item: empty → discarded, else undoable."""
+        """Commit a finished text item: empty → discarded, else undoable."""
         if item.committed or self._closing:
             return
         item.committed = True
+        if self._active_text_item is item:
+            self._active_text_item = None
         if not item.toPlainText().strip():
             self._scene.removeItem(item)
             return
