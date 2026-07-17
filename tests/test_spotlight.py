@@ -168,6 +168,25 @@ def test_toolbar_floats_as_a_child_near_the_selection(qtbot, config, monkeypatch
     assert surface.rect().contains(tb.topLeft())
 
 
+def test_copy_and_save_stay_visible_when_the_floating_tool_row_overflows(
+    qtbot, config, monkeypatch
+):
+    # The full annotation row is wider than this screen. Copy/save must live on
+    # their own no-collapse bar instead of trailing the row and folding first.
+    surface = _surface(qtbot, config, monkeypatch)
+    toolbar = surface._toolbar
+    outputs = toolbar.outputs_toolbar
+
+    surface.resize(200, surface.height())
+    surface._reposition_toolbar()
+    assert toolbar.width() > surface.width()
+    assert outputs.parent() is surface
+    assert outputs.isVisible()
+    assert surface.rect().contains(outputs.geometry().topLeft())
+    assert outputs.widgetForAction(surface._copy_action).isVisible()
+    assert outputs.widgetForAction(surface._save_action).isVisible()
+
+
 def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
     # A capture with no desktop context falls back to the plain dim layer.
     monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())

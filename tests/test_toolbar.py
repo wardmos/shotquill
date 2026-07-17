@@ -207,8 +207,8 @@ def test_copy_and_save_callbacks_are_wired(qtbot):
 
 
 def test_outputs_stay_on_the_main_bar_by_default(qtbot):
-    # The single-bar layout (used by the floating spotlight toolbar, which is
-    # sized to its contents and never folds) keeps copy/save inline.
+    # Hosts that do not opt into independently positioned output actions keep
+    # copy/save inline in the single-bar layout.
     _canvas_, toolbar = _toolbar(qtbot)
     assert toolbar.outputs_toolbar is None
     assert toolbar.copy_action in toolbar.actions()
