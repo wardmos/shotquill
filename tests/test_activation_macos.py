@@ -164,11 +164,25 @@ def test_spotlight_text_edit_survives_the_real_event_loop(qapp, qtbot, config):
         entry for entry in surface._canvas.scene().items() if isinstance(entry, QGraphicsTextItem)
     )
 
+    expected = ""
+    for char in "stable text":
+        # Exercise the native window-server path repeatedly: re-leveling or
+        # activating the full-screen parent must never commit/delete the editor,
+        # regardless of which FocusReason Cocoa happens to report this time.
+        surface.setFocus()
+        surface.raise_()
+        surface.activateWindow()
+        qtbot.wait(50)
+        assert item.scene() is surface._canvas.scene()
+        assert item.committed is False
+        assert surface._canvas.scene().focusItem() is item
+        qtbot.keyClicks(surface._canvas, char)
+        expected += char
+
     qtbot.wait(_TEXT_SETTLE_MS)
 
     assert item.scene() is surface._canvas.scene()
     assert item.committed is False
     assert surface._canvas.scene().focusItem() is item
-    qtbot.keyClicks(surface._canvas, "note")
-    assert item.toPlainText() == "note"
+    assert item.toPlainText() == expected
     surface.close()

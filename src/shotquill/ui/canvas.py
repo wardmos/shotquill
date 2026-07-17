@@ -69,11 +69,10 @@ _SELECTION_OUTLINE_VIEW_PADDING = 4.0
 _SELECTION_HANDLE_VIEW_SIZE = 8.0
 _SELECTION_HIT_VIEW_TOLERANCE = 8.0
 _SELECTION_CLICK_VIEW_TOLERANCE = 4
-_TRANSIENT_TEXT_FOCUS_REASONS = (
-    Qt.ActiveWindowFocusReason,
-    Qt.PopupFocusReason,
-    Qt.OtherFocusReason,
-)
+# Cocoa can settle one mouse/window transition through several focus owners.
+# Retry briefly instead of trusting the platform-specific FocusReason label;
+# each callback is guarded by the active edit identity and window activation.
+_TEXT_FOCUS_RESTORE_DELAYS_MS = (0, 50, 250, 1000)
 
 
 class _TextItem(QGraphicsTextItem):
@@ -684,19 +683,21 @@ class AnnotationCanvas(QGraphicsView):
         if item is not None:
             self._restore_text_focus(item)
 
-    def _text_focus_lost(self, item: _TextItem, reason: Qt.FocusReason) -> None:
+    def _text_focus_lost(self, item: _TextItem, _reason: Qt.FocusReason) -> None:
         if item.committed or self._closing:
             return
-        # Window activation, input-method popups, and programmatic focus moves
-        # are not proof that the user finished typing. In particular Cocoa can
-        # report ordinary window-level churn as OtherFocusReason. Re-assert the
-        # active editor on the next event-loop turn when our window stayed active;
-        # a true app switch is restored by the shell on re-activation instead.
-        if reason in _TRANSIENT_TEXT_FOCUS_REASONS:
-            if reason == Qt.OtherFocusReason:
-                QTimer.singleShot(0, lambda: self._restore_text_focus(item))
-            return
-        self._finish_text(item)
+        # A focus event alone is never an editing decision: macOS can label the
+        # same asynchronous window transition as Mouse, Other, ActiveWindow, or
+        # NoFocus across runs. Explicit user actions (tool switch / next text
+        # placement) call _finish_active_text instead. While this edit remains
+        # active, re-assert its focus after the current event and during the
+        # short window-server settling period.
+        for delay in _TEXT_FOCUS_RESTORE_DELAYS_MS:
+            QTimer.singleShot(
+                delay,
+                self,
+                lambda item=item: self._restore_text_focus(item),
+            )
 
     def _restore_text_focus(self, item: _TextItem) -> None:
         if (

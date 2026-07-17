@@ -488,22 +488,36 @@ def test_text_tool_focuses_new_item_for_keyboard_input(qtbot):
     assert item.toPlainText() == "note"
 
 
-def test_empty_text_item_is_discarded_on_focus_out(qtbot):
-    # A stray click with the text tool must not leave an invisible, selectable,
-    # undoable item behind.
+def test_empty_text_item_is_discarded_before_starting_another_text(qtbot):
+    # Repeated stray clicks with the Text tool must not accumulate invisible,
+    # selectable, undoable items.
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
-    _finish_editing(_text_items(canvas)[0])
-    assert _text_items(canvas) == []
+    first = _text_items(canvas)[0]
+
+    _click_text_tool(qtbot, canvas)
+
+    assert len(_text_items(canvas)) == 1
+    assert first not in _text_items(canvas)
     assert canvas.undo_stack().count() == 0
 
 
 @pytest.mark.parametrize(
     "reason",
-    [Qt.ActiveWindowFocusReason, Qt.PopupFocusReason, Qt.OtherFocusReason],
+    [
+        Qt.MouseFocusReason,
+        Qt.TabFocusReason,
+        Qt.BacktabFocusReason,
+        Qt.ActiveWindowFocusReason,
+        Qt.PopupFocusReason,
+        Qt.ShortcutFocusReason,
+        Qt.MenuBarFocusReason,
+        Qt.OtherFocusReason,
+        Qt.NoFocusReason,
+    ],
 )
 @pytest.mark.parametrize("text", ["", "note"])
-def test_transient_focus_loss_does_not_finish_or_discard_text(qtbot, reason, text):
+def test_focus_loss_never_finishes_or_discards_text(qtbot, reason, text):
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
@@ -515,7 +529,7 @@ def test_transient_focus_loss_does_not_finish_or_discard_text(qtbot, reason, tex
     assert item.committed is False
     assert canvas.undo_stack().count() == 0
 
-    _finish_editing(item)
+    canvas.set_tool(Tool.RECT)
     if text:
         assert item in _text_items(canvas)
         assert item.committed is True
@@ -525,7 +539,7 @@ def test_transient_focus_loss_does_not_finish_or_discard_text(qtbot, reason, tex
         assert canvas.undo_stack().count() == 0
 
 
-def test_other_focus_loss_refocuses_active_text_on_next_event_tick(qtbot, monkeypatch):
+def test_focus_loss_refocuses_active_text_on_next_event_tick(qtbot, monkeypatch):
     canvas = _canvas(qtbot)
     canvas.setFocus()
     _click_text_tool(qtbot, canvas)
@@ -540,13 +554,38 @@ def test_other_focus_loss_refocuses_active_text_on_next_event_tick(qtbot, monkey
     )
     monkeypatch.setattr(canvas, "isActiveWindow", lambda: True)
 
-    _finish_editing(item, Qt.OtherFocusReason)
+    _finish_editing(item, Qt.MouseFocusReason)
 
     qtbot.waitUntil(lambda: bool(focus_calls))
     assert item.scene() is canvas.scene()
     assert item.committed is False
     qtbot.keyClicks(canvas, "note")
     assert item.toPlainText() == "note"
+
+
+def test_focus_restore_retries_while_window_activation_settles(qtbot, monkeypatch):
+    canvas = _canvas(qtbot)
+    canvas.setFocus()
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    focus_calls = []
+    real_set_focus = item.setFocus
+    monkeypatch.setattr(
+        item,
+        "setFocus",
+        lambda *args: focus_calls.append(args) or real_set_focus(*args),
+    )
+    active = {"value": False}
+    monkeypatch.setattr(canvas, "isActiveWindow", lambda: active["value"])
+
+    _finish_editing(item, Qt.NoFocusReason)
+    qtbot.wait(10)
+    assert focus_calls == []
+
+    active["value"] = True
+    qtbot.waitUntil(lambda: bool(focus_calls), timeout=500)
+    assert item.committed is False
+    assert canvas.scene().focusItem() is item
 
 
 @pytest.mark.parametrize("text", ["", "note"])
@@ -589,43 +628,44 @@ def test_starting_a_text_edit_freezes_crop_even_if_discarded(qtbot):
     assert canvas.is_pristine()
     _click_text_tool(qtbot, canvas)
     assert not canvas.is_pristine()
-    _finish_editing(_text_items(canvas)[0])  # discarded as empty
+    canvas.set_tool(Tool.RECT)  # explicitly finishes and discards the empty edit
     assert _text_items(canvas) == []
     assert canvas.undo_stack().count() == 0
     assert not canvas.is_pristine()  # stays frozen
 
 
-def test_text_item_with_content_becomes_undoable_on_focus_out(qtbot):
+def test_text_item_with_content_becomes_undoable_when_editing_explicitly_finishes(qtbot):
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
     item.setPlainText("note")
-    _finish_editing(item)
+    canvas.set_tool(Tool.RECT)
     assert len(_text_items(canvas)) == 1
     assert canvas.undo_stack().count() == 1
     canvas.undo_stack().undo()
     assert _text_items(canvas) == []
 
 
-def test_whitespace_only_text_item_is_discarded_on_focus_out(qtbot):
+def test_whitespace_only_text_item_is_discarded_when_editing_explicitly_finishes(qtbot):
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
     item.setPlainText("   ")
-    _finish_editing(item)
+    canvas.set_tool(Tool.RECT)
     assert _text_items(canvas) == []
     assert canvas.undo_stack().count() == 0
 
 
-def test_repeated_focus_out_after_commit_is_idempotent(qtbot):
+def test_repeated_focus_out_after_explicit_commit_is_idempotent(qtbot):
     # Qt can deliver more focus-out events later (e.g. when the scene clears
     # focus during removal); they must not double-push or discard the item.
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
     item.setPlainText("note")
+    canvas.set_tool(Tool.RECT)
     _finish_editing(item)
-    _finish_editing(item)
+    _finish_editing(item, Qt.OtherFocusReason)
     assert len(_text_items(canvas)) == 1
     assert canvas.undo_stack().count() == 1
 
