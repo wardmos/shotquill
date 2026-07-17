@@ -444,7 +444,7 @@ def _click_text_tool(qtbot, canvas):
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(30, 30))
 
 
-def _finish_editing(item, reason=Qt.OtherFocusReason):
+def _finish_editing(item, reason=Qt.MouseFocusReason):
     """Deliver the focus-out that ends text editing.
 
     Offscreen the scene is never active, so items never truly gain focus and
@@ -498,7 +498,10 @@ def test_empty_text_item_is_discarded_on_focus_out(qtbot):
     assert canvas.undo_stack().count() == 0
 
 
-@pytest.mark.parametrize("reason", [Qt.ActiveWindowFocusReason, Qt.PopupFocusReason])
+@pytest.mark.parametrize(
+    "reason",
+    [Qt.ActiveWindowFocusReason, Qt.PopupFocusReason, Qt.OtherFocusReason],
+)
 @pytest.mark.parametrize("text", ["", "note"])
 def test_transient_focus_loss_does_not_finish_or_discard_text(qtbot, reason, text):
     canvas = _canvas(qtbot)
@@ -520,6 +523,62 @@ def test_transient_focus_loss_does_not_finish_or_discard_text(qtbot, reason, tex
     else:
         assert _text_items(canvas) == []
         assert canvas.undo_stack().count() == 0
+
+
+def test_other_focus_loss_refocuses_active_text_on_next_event_tick(qtbot, monkeypatch):
+    canvas = _canvas(qtbot)
+    canvas.setFocus()
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    assert canvas.scene().focusItem() is item
+    focus_calls = []
+    real_set_focus = item.setFocus
+    monkeypatch.setattr(
+        item,
+        "setFocus",
+        lambda *args: focus_calls.append(args) or real_set_focus(*args),
+    )
+    monkeypatch.setattr(canvas, "isActiveWindow", lambda: True)
+
+    _finish_editing(item, Qt.OtherFocusReason)
+
+    qtbot.waitUntil(lambda: bool(focus_calls))
+    assert item.scene() is canvas.scene()
+    assert item.committed is False
+    qtbot.keyClicks(canvas, "note")
+    assert item.toPlainText() == "note"
+
+
+@pytest.mark.parametrize("text", ["", "note"])
+def test_switching_tools_explicitly_finishes_active_text(qtbot, text):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText(text)
+
+    canvas.set_tool(Tool.RECT)
+
+    if text:
+        assert item in _text_items(canvas)
+        assert item.committed is True
+        assert canvas.undo_stack().count() == 1
+    else:
+        assert _text_items(canvas) == []
+        assert canvas.undo_stack().count() == 0
+
+
+def test_starting_another_text_explicitly_commits_the_previous_one(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    first = _text_items(canvas)[0]
+    first.setPlainText("first")
+
+    _click_text_tool(qtbot, canvas)
+
+    items = _text_items(canvas)
+    assert len(items) == 2
+    assert first.committed is True
+    assert canvas.undo_stack().count() == 1
 
 
 def test_starting_a_text_edit_freezes_crop_even_if_discarded(qtbot):

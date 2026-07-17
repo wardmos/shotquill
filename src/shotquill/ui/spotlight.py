@@ -218,6 +218,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
                 # from an active graphics text editor in the canvas.
                 self._cover_menubar(take_focus=False)
                 self._show_dim_screens()
+                self._canvas.restore_text_focus()
             else:
                 self._hide_dim_screens()
         super().changeEvent(event)
