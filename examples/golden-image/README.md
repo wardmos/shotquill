@@ -10,11 +10,11 @@ There is **no new code here**. The integration is two CLI commands —
 supplies the *recipe* (when `--deterministic` matters, how to pin the surface,
 how to read the verdict); this file shows the wiring and one concrete run.
 
-## Why the CLI (and why this is the *pixel* check)
+## CLI or MCP (and why this is the *pixel* check)
 
-`diff` is a **CLI command**, not an MCP tool — there is no `diff` tool to call
-over MCP — so a golden-image check is a small shell pipeline, not an agent
-tool-loop. That makes it the natural shape for a CI step or a pre-commit guard.
+`diff` is available through both the CLI and MCP. The shell form shown here is
+the natural shape for a CI step or pre-commit guard; an agent tool-loop can call
+the MCP `diff` tool with the same two image paths and optional threshold.
 
 It also answers a different question from the recording recipes. The
 [`flight-recorder`](../../skills/flight-recorder/SKILL.md) and

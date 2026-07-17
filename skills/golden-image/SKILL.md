@@ -24,10 +24,10 @@ an OCR assertion — use [`visual-checkpoints`](../visual-checkpoints/SKILL.md)
 (coding agent) or [`flight-recorder`](../flight-recorder/SKILL.md) (driving a
 GUI). Golden-image answers a different question: did anything change at all.
 
-> `diff` is a **CLI command**, not an MCP tool — there is no `diff` tool to call
-> over MCP. Shell out to `squill diff`. You can still grab the live frame with
-> the `capture` MCP tool (or the CLI); just write it to a file and diff the two
-> files.
+`diff` is available through both the CLI and MCP. Use `squill diff` in a shell
+or CI job; in an MCP tool loop, call `diff` with the two image paths and an
+optional `threshold`. Capture through either surface, save the live frame, then
+compare it with the baseline.
 
 ## The loop
 

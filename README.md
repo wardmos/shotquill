@@ -1,18 +1,19 @@
 <p align="center">
-  <img src="packaging/macos/icon.png" alt="ShotQuill icon" width="128" height="128">
+  <img src="https://raw.githubusercontent.com/wardmos/shotquill/main/packaging/macos/icon.png" alt="ShotQuill icon" width="128" height="128">
 </p>
 
 <h1 align="center">ShotQuill</h1>
 
 <p align="center">
-  A fast, privacy-respecting screenshot &amp; annotation tool for macOS &mdash; with Linux/X11 and Windows GUI plus cross-platform CLI/MCP support.
+  A fast, privacy-respecting screenshot &amp; annotation tool for macOS &mdash; with Linux and Windows GUI plus cross-platform CLI/MCP support.
 </p>
 
 <p align="center">
   <a href="https://github.com/wardmos/shotquill/actions/workflows/ci.yml"><img src="https://github.com/wardmos/shotquill/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/shotquill/"><img src="https://img.shields.io/pypi/v/shotquill.svg" alt="PyPI version"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platform: macOS | Linux | Windows">
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache 2.0"></a>
+  <a href="https://github.com/wardmos/shotquill/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache 2.0"></a>
 </p>
 
 ShotQuill lives in your menu bar and turns a screenshot into a finished, shareable
@@ -40,14 +41,11 @@ both in Settings.
   OCR runs on the Windows WinRT engine, installed with the optional `windows-ocr`
   extra (`pip install "shotquill[windows-ocr]"`).
 
-> **Status:** early development — macOS is usable day-to-day; Linux and Windows
-> support are newer and still being smoothed out. Expect rough edges either way.
-
 **Jump to:**
 [Highlights](#highlights) ·
 [Install](#install) ·
 [Usage](#usage) ·
-[Scripting & agents (CLI · MCP)](docs/scripting.md) ·
+[Scripting & agents (CLI · MCP)](#scripting--agents) ·
 [App blocklist](#app-blocklist) ·
 [App allowlist](#app-allowlist) ·
 [Configuration](#configuration) ·
@@ -55,7 +53,7 @@ both in Settings.
 [Privacy](#privacy) ·
 [Tech stack](#tech-stack) ·
 [Development](#development) ·
-[Packaging](docs/packaging.md) ·
+[Packaging](https://github.com/wardmos/shotquill/blob/main/docs/packaging.md) ·
 [Uninstall](#uninstall) ·
 [Roadmap](#roadmap) ·
 [Contributing](#contributing)
@@ -88,8 +86,8 @@ both in Settings.
   (`squill capture` / `window list` / `display list` / `ocr` / `diff` /
   `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist` — one path on
   stdout, exit codes as the contract) and a built-in MCP server that gives AI
-  agents eyes on your screen. Every programmatic capture is audit-logged.
-  See [Scripting & agents](docs/scripting.md).
+  agents eyes on your screen. Programmatic captures are audit-logged on a best-effort basis.
+  See [Scripting & agents](https://github.com/wardmos/shotquill/blob/main/docs/scripting.md).
 - **Pin to screen** — float an annotated shot on top of the desktop for reference;
   drag to move, double-click or `Esc` to dismiss.
 - **Bilingual UI** — English / 中文, switchable in Settings (defaults to English).
@@ -107,7 +105,8 @@ both in Settings.
 brew install --cask wardmos/tap/shotquill
 ```
 
-`brew upgrade` keeps it current.
+`brew upgrade --cask shotquill` keeps it current. The cask also puts both
+`shotquill` and `squill` on `PATH` for CLI / MCP use.
 
 **Direct download:** grab the `.dmg` from
 [Releases](https://github.com/wardmos/shotquill/releases) — `arm64` for Apple
@@ -129,6 +128,10 @@ shasum -a 256 -c ShotQuill-*.dmg.sha256
 >
 > The Homebrew cask strips quarantine automatically, so this only applies to the
 > direct download.
+
+The direct `.app` does not install shell commands. If you want `shotquill` and
+`squill` on `PATH` without Homebrew, install the Python package with
+`pipx install shotquill`.
 
 ### Linux
 
@@ -159,6 +162,12 @@ It bundles Python + Qt headless bits (no QtWidgets, no GUI) so the binary
 stays small and the CLI/MCP work even where the GUI's dependencies wouldn't.
 Built on Ubuntu 22.04 → glibc 2.35 floor (Ubuntu 22.04+ / Debian 12+).
 
+Download the matching `.sha256` sidecar and verify it before running:
+
+```bash
+sha256sum -c ShotQuill-*.AppImage.sha256
+```
+
 **Wayland users** also need `xdg-desktop-portal` plus a portal backend for
 your desktop (`xdg-desktop-portal-gnome`, `-kde`, or `-wlr`) — `squill doctor`
 will tell you when screenshot or GlobalShortcuts support is missing. **X11
@@ -177,6 +186,14 @@ Download `ShotQuill-*-windows-x64.zip` from
 [Releases](https://github.com/wardmos/shotquill/releases), unzip it, and run
 `ShotQuill.exe` for the tray GUI. The same bundle includes `squill.exe` for the
 CLI and MCP server.
+
+Download the matching `.sha256` sidecar and compare the two values before
+extracting the ZIP:
+
+```powershell
+Get-FileHash .\ShotQuill-*-windows-x64.zip -Algorithm SHA256
+Get-Content .\ShotQuill-*-windows-x64.zip.sha256
+```
 
 Windows OCR uses the on-device WinRT engine, but the Python WinRT projections are
 optional and are not included in the default package / bundle. For a pip install
@@ -240,7 +257,7 @@ Keyboard:
 | -------------- | --------------------------------------- |
 | `Space`        | Copy to the clipboard, then close       |
 | `Enter`        | Save to your folder, then close         |
-| `⌘Z` / `⌘⇧Z`   | Undo / redo                             |
+| `⌘Z` / `⌘⇧Z` (macOS); `Ctrl+Z` / `Ctrl+Shift+Z` (Linux / Windows) | Undo / redo |
 | `Esc`          | Close without saving                    |
 
 The copy and save keys are configurable in Settings, and each can be
@@ -275,7 +292,20 @@ captures one image (`capture`), reads or asserts on-screen text (`ocr`), or
 records an ordered trail of frames an agent leaves behind (`session`) — and the
 same loop is exposed to MCP clients as twelve tools.
 
-**→ Full reference: [docs/scripting.md](docs/scripting.md)** — the stdout/exit-code
+A typical JSON-style MCP host configuration is:
+
+```json
+{
+  "mcpServers": {
+    "shotquill": { "command": "squill", "args": ["mcp"] }
+  }
+}
+```
+
+Some hosts use TOML or their own settings UI, but the command and argument stay
+the same.
+
+**→ Full reference: [docs/scripting.md](https://github.com/wardmos/shotquill/blob/main/docs/scripting.md)** — the stdout/exit-code
 contract, capture flags (`--json` / `--max-width` / `--deterministic` / `--mask` /
 `--reveal`),
 OCR assertions, **best-effort PII redaction** (`capture --redact-pii`,
@@ -326,7 +356,7 @@ app's identifier exactly (case-insensitive — the robust default, since bundle
 ids are stable and unspoofable), or `name` matches its app name as a
 case-insensitive substring (handy for a quick edit). `squill doctor` prints
 the active rules; a blocked capture exits `6` (the MCP `capture` tool returns
-error `type: "blocked"`); every refusal and redaction is audit-logged.
+error `type: "blocked"`); refusals and redactions are audit-logged on a best-effort basis.
 
 **Know the boundary — this is privacy hygiene, not a security control.**
 Anything running as you can capture the screen by other means, so the
@@ -376,7 +406,7 @@ When the allowlist is **enabled**:
   everything, so the caller must target a specific window (`--window-id`) or app
   (`--app`);
 - a refused capture exits `6` (the MCP `capture` tool returns error
-  `type: "blocked"`), and every refusal is audit-logged as `capture_not_allowed`.
+  `type: "blocked"`), and refusals are audit-logged as `capture_not_allowed` on a best-effort basis.
 
 It stacks with the blocklist: a window must be **both** off the blocklist **and**
 on the allowlist to be captured. The rule shape is identical to the blocklist
@@ -429,7 +459,7 @@ Open **Settings…** from the menu-bar icon:
   editor until the first annotation lands.
 - **Edit in place** (on) — open the editor frameless over the dimmed screen,
   rather than as a normal titled window.
-- **Toolbar buttons** — icon and text, icon only, or text only (icon and text by
+- **Toolbar buttons** — icon and text, icon only, or text only (icon only by
   default).
 - **After capture** — auto-save and/or auto-copy toggles (above).
 - **Include mouse pointer** (off) — composite the cursor into captures.
@@ -437,6 +467,7 @@ Open **Settings…** from the menu-bar icon:
   never captured).
 - **Allowed apps…** — manage the [app allowlist](#app-allowlist) (when enabled,
   the only apps that *can* be captured; off by default).
+- **Debug mode** (off) — write detailed local logs for troubleshooting.
 - **Launch at login** — installs the platform's per-user startup entry
   (LaunchAgent on macOS, XDG autostart on Linux, the `Run` key on Windows).
 - **Flash on capture** (on) and **Sound on capture** (off) — capture feedback.
@@ -516,8 +547,10 @@ Get-Content "$env:LOCALAPPDATA\shotquill\Logs\audit.log" -Wait       # Windows P
 ```
 
 Each JSONL entry records the action, target, destination, and the process
-chain that drove it (`via: "cli"` or `"mcp"`); the same line is mirrored to
-the unified log / journald, which user-space processes can't rewrite.
+chain that drove it (`via: "cli"` or `"mcp"`). On macOS and Linux, the same
+line is also mirrored to the unified log / journald, which user-space processes
+can't rewrite; Windows currently keeps the JSONL log only. Audit logging is
+best-effort so a failing log sink never blocks a capture.
 
 **Still stuck?** Run `squill doctor` and attach its output to a
 [GitHub issue](https://github.com/wardmos/shotquill/issues).
@@ -540,7 +573,7 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
   leaves ShotQuill (`squill capture --redact-pii`, `session frame --scan-pii` /
   `--redact-pii`, `session export --fail-on-pii`). It is best-effort, not a
   guarantee, and runs fully on-device. See
-  [Scripting & agents](docs/scripting.md).
+  [Scripting & agents](https://github.com/wardmos/shotquill/blob/main/docs/scripting.md).
 - **Sensitive apps can be blocklisted.** Name a password manager (or any app)
   and ShotQuill refuses to capture its windows and paints it out of full-screen
   shots — for the GUI, CLI, and agents alike. See [App blocklist](#app-blocklist).
@@ -552,11 +585,13 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 - **Programmatic captures are accountable.** Scripts and AI agents using the
   CLI or the MCP server go through the same OS consent as any app — macOS
   attributes Screen Recording to the invoking app, so the permission dialog
-  names the real controller — and every programmatic capture leaves an audit
-  entry (metadata only, never pixels) in a local JSONL file plus the
-  tamper-resistant OS log store. The MCP server is strictly opt-in and, by
-  design, returns captures to the agent's model — see
-  [Scripting & agents](docs/scripting.md#mcp-server) for what that means.
+  names the real controller — and programmatic captures are audit-logged on a
+  best-effort basis (metadata only, never pixels) in a local JSONL file. macOS
+  and Linux also mirror entries to the OS-managed log store; Windows currently
+  keeps the JSONL log only. The MCP server is strictly opt-in and, by design,
+  returns captures to the agent's model — see
+  [Scripting & agents](https://github.com/wardmos/shotquill/blob/main/docs/scripting.md#mcp-server)
+  for what that means.
 
 ---
 
@@ -587,13 +622,14 @@ new OS means implementing those interfaces rather than touching the UI.
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-python -m shotquill              # launch the menu-bar app (macOS)
+python -m shotquill              # launch the menu-bar app
 ruff check src tests             # lint
 ruff format --check src tests    # formatting
 pytest                           # tests
 ```
 
-For local packaging smoke builds, see [Packaging](docs/packaging.md).
+For local packaging smoke builds, see
+[Packaging](https://github.com/wardmos/shotquill/blob/main/docs/packaging.md).
 
 > Screen capture, global hotkeys, and full-screen overlays depend on the target
 > desktop session, so platform backends need smoke testing on their OS. Pure
@@ -609,12 +645,15 @@ For local packaging smoke builds, see [Packaging](docs/packaging.md).
 src/shotquill/
 ├── app.py                # menu-bar app: tray icon, hotkey → capture → output wiring
 ├── cli.py                # `squill` argument parsing & exit-code contract
+├── command_spec.py       # single source for CLI commands and MCP tool schemas
 ├── headless.py           # shared no-GUI capture/OCR core used by cli.py and mcp.py
 ├── mcp.py                # `squill mcp` — zero-dependency MCP stdio server
 ├── audit.py / paths.py   # audit trail for programmatic captures; platform dirs
+├── record.py / otlp.py   # replayable sessions, filmstrips, archives, and traces
+├── pii.py / redact.py    # best-effort PII masks and app-window redaction
 ├── config.py / i18n.py   # QSettings-backed prefs; EN/中文 string table
 ├── imaging.py            # raw capture pixels → QImage
-├── capture/              # base.py + macos.py (ScreenCaptureKit), qtgrab.py (X11), wayland.py, windows.py
+├── capture/              # base.py + macos.py, x11.py/qtgrab.py, wayland.py, windows.py
 ├── hotkeys/              # base.py + macos.py (Carbon), linux.py, wayland.py, windows.py
 ├── ocr/                  # base.py interface; macos.py, linux.py, windows.py
 ├── output/               # saver.py (files), clipboard.py
@@ -622,8 +661,8 @@ src/shotquill/
 └── ui/                   # editor, canvas, tools, smart capture overlay, settings, pin
 ```
 
-Each `tests/test_*.py` mirrors a module above; platform-independent logic is
-tested headlessly, and `capture/hotkeys/ocr/autostart` backends hide behind
+Platform-independent logic is tested headlessly, and the
+`capture/hotkeys/ocr/autostart` backends hide behind
 `base.py` interfaces so a new OS is a new backend, not a UI rewrite.
 
 ### Platform permissions
@@ -659,7 +698,9 @@ brew uninstall --cask shotquill        # Homebrew install
 ```
 
 ShotQuill keeps no hidden state beyond these per-user files — remove them for
-a clean slate:
+a clean slate. Headless captures without an explicit output path use a private
+`shotquill/` subdirectory under the OS temporary directory; remove it too for
+immediate cleanup instead of waiting for the OS to reclaim temporary files.
 
 | What                        | Where                                              |
 | --------------------------- | -------------------------------------------------- |
@@ -668,6 +709,8 @@ a clean slate:
 | Blocklist                   | `~/Library/Application Support/shotquill/blocklist.json` |
 | Allowlist                   | `~/Library/Application Support/shotquill/allowlist.json` |
 | Audit log                   | `~/Library/Logs/shotquill/`                        |
+| Recorded sessions           | `~/Library/Application Support/shotquill/records/` |
+| Temporary CLI/MCP captures  | `$TMPDIR/shotquill/` (normally OS-managed)         |
 | Your screenshots            | `~/Pictures/ShotQuill/` (or your configured folder) — yours to keep |
 
 ### Linux
@@ -684,6 +727,10 @@ pipx uninstall shotquill               # pipx install
 | Blocklist                   | `${XDG_CONFIG_HOME:-~/.config}/shotquill/blocklist.json` |
 | Allowlist                   | `${XDG_CONFIG_HOME:-~/.config}/shotquill/allowlist.json` |
 | Audit log                   | `${XDG_STATE_HOME:-~/.local/state}/shotquill/`     |
+| Recorded sessions           | `${XDG_DATA_HOME:-~/.local/share}/shotquill/records/` |
+| pipx desktop launcher       | `${XDG_DATA_HOME:-~/.local/share}/applications/shotquill.desktop` (if `squill desktop install` was run) |
+| pipx desktop icon           | `${XDG_DATA_HOME:-~/.local/share}/icons/hicolor/scalable/apps/shotquill.svg` (if `squill desktop install` was run) |
+| Temporary CLI/MCP captures  | `${TMPDIR:-/tmp}/shotquill/` (normally OS-managed) |
 | Your screenshots            | `~/Pictures/ShotQuill/` (or your configured folder) — yours to keep |
 
 ### Windows
@@ -699,41 +746,18 @@ installed with pip.
 | Allowlist                   | `%APPDATA%\shotquill\allowlist.json`              |
 | Audit/debug logs            | `%LOCALAPPDATA%\shotquill\Logs\`                  |
 | Recorded sessions           | `%LOCALAPPDATA%\shotquill\records\`               |
+| Temporary CLI/MCP captures  | `%TEMP%\shotquill\` (normally OS-managed)          |
 | Your screenshots            | `Pictures\ShotQuill\` (or your configured folder) — yours to keep |
 
 ---
 
 ## Roadmap
 
-- [x] Smart (window / region / full-screen) + full-screen capture
-- [x] Annotation editor (shapes, text, highlighter, mosaic) + pin-to-screen
-- [x] On-device OCR (macOS Vision; Linux Tesseract; Windows WinRT)
-- [x] Hands-free auto save + clipboard
-- [x] CLI for scripts & AI agents (`squill capture` / `window list` / `display list` /
-      `ocr` / `diff` / `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist`)
-- [x] MCP server, so agents can capture and read the screen over Model Context Protocol
-- [x] **Linux / X11 backends — GUI, CLI, and MCP**: menu-bar app via PySide6 +
-      XDG autostart, full-screen / region capture via `QScreen.grabWindow`,
-      global hotkeys via `pynput`
-- [x] **Linux / Wayland GUI, CLI, and MCP** via `xdg-desktop-portal` (Screenshot
-      + GlobalShortcuts portals where available)
-- [x] **Multi-monitor selection** — `squill display list` + `capture --display N`
-      (and the matching MCP `display_list` tool / `display` argument)
-- [x] **Linux OCR backend** (Tesseract) — `squill ocr` and the editor's
-      extract-text action when the `tesseract` CLI is installed
-- [x] **Wayland smart-window parity** — smart capture uses the compositor's
-      portal picker there; app-side window enumeration is still unavailable by
-      design, so ShotQuill's own window highlight remains an X11/macOS/Windows
-      capability
-- [x] **X11 window enumeration** — `squill window list`, smart-capture window
-      highlight, and full-screen blocklist redaction, via EWMH over `python-xlib`
-      (Wayland forbids enumerating other apps' windows, so it stays unsupported
-      there by design)
-- [x] **Windows backend** — capture (`QScreen.grabWindow`), window enumeration
-      (`capture/windows.py`, user32 `EnumWindows`), global hotkeys, and
-      launch-at-login (the per-user `Run` key); on-device OCR via the WinRT
-      engine ships behind the optional `windows-ocr` extra
 - [ ] Scrolling / long-page capture
+
+Completed work is summarized in [Highlights](#highlights) and the platform
+sections above; version-by-version changes are available in
+[GitHub Releases](https://github.com/wardmos/shotquill/releases).
 
 ---
 
@@ -746,7 +770,7 @@ Issues and pull requests are welcome. Please run `ruff check`, `ruff format`, an
 
 ## License
 
-[Apache-2.0](LICENSE). Copyright (C) 2026 wardmos.
+[Apache-2.0](https://github.com/wardmos/shotquill/blob/main/LICENSE). Copyright (C) 2026 wardmos.
 
 ShotQuill bundles Qt via PySide6, which is licensed under the LGPLv3; the
 corresponding license notices are included with distributed builds.

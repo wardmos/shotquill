@@ -119,12 +119,13 @@ The parts agents rely on:
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.
-- **Every programmatic capture is audit-logged** — metadata only, never
-  pixels — to a JSONL file (`~/Library/Logs/shotquill/audit.log` on macOS,
-  `%LOCALAPPDATA%\shotquill\Logs\audit.log` on Windows, `$XDG_STATE_HOME/shotquill/audit.log`
-  elsewhere) and mirrored into the OS log store (unified log / journald) where one
-  exists, which user-space processes cannot rewrite.
-  Each entry records the process chain that drove the capture.
+- **Programmatic capture activity is audit-logged on a best-effort basis** —
+  metadata only, never pixels — to a JSONL file
+  (`~/Library/Logs/shotquill/audit.log` on macOS,
+  `%LOCALAPPDATA%\shotquill\Logs\audit.log` on Windows, and
+  `$XDG_STATE_HOME/shotquill/audit.log` elsewhere). macOS and Linux also mirror
+  entries into the OS-managed log store (unified log / journald). Each entry
+  records the process chain that drove the capture.
 
 `python -m shotquill` accepts the same subcommands.
 
@@ -236,8 +237,8 @@ squill session export "$DIR" --fail-on-pii          # bundle into one archive (r
   carries a `--scan-pii` flag, so a flagged trace isn't shared off the machine by
   accident. The MCP `session_export` tool mirrors it and also reports any residual
   PII in its result.
-- `--json` on any of these prints a machine-readable object; every step is
-  audit-logged with `via: "record"`.
+- `--json` on any of these prints a machine-readable object; session steps are
+  audit-logged with `via: "record"` on a best-effort basis.
 
 The MCP server exposes the same loop as `session_start` / `session_frame` /
 `session_end` (below). Two recipes layer on top of those tools, by agent shape:
