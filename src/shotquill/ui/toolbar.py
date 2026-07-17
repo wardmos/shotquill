@@ -306,9 +306,9 @@ def create_toolbar(
     save_action.triggered.connect(on_save)
 
     # Copy/save are the shot's finish actions, so they must never fold away. When
-    # the host can constrain the bar's width, split them onto a sibling
-    # no-collapse bar that keeps them visible while the tool row still folds
-    # normally. Hosts using this mode position both bars independently.
+    # the host can constrain the bar's width, split them into a fixed
+    # no-collapse section that stays visible while the annotation section folds.
+    # The host decides whether the two sections share a continuous row.
     if split_outputs:
         outputs = _NoCollapseToolBar()
         outputs.setToolButtonStyle(toolbar.toolButtonStyle())

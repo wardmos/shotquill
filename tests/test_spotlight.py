@@ -161,28 +161,32 @@ def test_copy_exports_and_closes(qtbot, config, monkeypatch):
 
 def test_toolbar_floats_as_a_child_near_the_selection(qtbot, config, monkeypatch):
     surface = _surface(qtbot, config, monkeypatch)
-    assert surface._toolbar.parent() is surface
-    assert surface._toolbar.isVisible()
+    assert surface._toolbar_row.parent() is surface
+    assert surface._toolbar.parent() is surface._toolbar_row
+    assert surface._toolbar.outputs_toolbar.parent() is surface._toolbar_row
+    assert surface._toolbar_row.isVisible()
     # Positioned inside the surface.
-    tb = surface._toolbar.geometry()
-    assert surface.rect().contains(tb.topLeft())
+    row = surface._toolbar_row.geometry()
+    assert surface.rect().contains(row.topLeft())
 
 
-def test_copy_and_save_stay_visible_when_the_floating_tool_row_overflows(
-    qtbot, config, monkeypatch
-):
-    # The full annotation row is wider than this screen. Copy/save must live on
-    # their own no-collapse bar instead of trailing the row and folding first.
+def test_copy_and_save_stay_in_the_floating_toolbar_when_it_overflows(qtbot, config, monkeypatch):
+    # The full row is wider than this surface. Copy/save must remain at its
+    # trailing end and visible while the annotation section folds.
     surface = _surface(qtbot, config, monkeypatch)
     toolbar = surface._toolbar
     outputs = toolbar.outputs_toolbar
+    row = surface._toolbar_row
 
     surface.resize(200, surface.height())
     surface._reposition_toolbar()
-    assert toolbar.width() > surface.width()
-    assert outputs.parent() is surface
-    assert outputs.isVisible()
-    assert surface.rect().contains(outputs.geometry().topLeft())
+    assert toolbar.sizeHint().width() + outputs.sizeHint().width() > surface.width()
+    assert row.width() == surface.width()
+    assert row.layout().indexOf(toolbar) < row.layout().indexOf(outputs)
+    assert toolbar.geometry().right() + 1 == outputs.geometry().left()
+    assert toolbar.geometry().top() == outputs.geometry().top()
+    assert outputs.actions() == [surface._copy_action, surface._save_action]
+    assert not toolbar.widgetForAction(toolbar.actions()[-1]).isVisible()
     assert outputs.widgetForAction(surface._copy_action).isVisible()
     assert outputs.widgetForAction(surface._save_action).isVisible()
 

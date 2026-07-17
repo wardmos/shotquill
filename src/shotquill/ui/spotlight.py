@@ -37,7 +37,7 @@ from PySide6.QtGui import (
     QRegion,
     QShortcut,
 )
-from PySide6.QtWidgets import QFrame, QLabel, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from shotquill.ocr import get_recognizer
 from shotquill.ui import macos_window
@@ -132,13 +132,19 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._status_badge = QLabel(self._canvas.viewport())
         self._status_badge.setStyleSheet(_BADGE_STYLE)
         self._status_badge.hide()
-        # The tool row floats as a child near the selection (positioned on show).
-        # Copy/save use their own no-collapse row so they remain visible even
-        # when the annotation row is wider than this screen.
+        # Keep one continuous floating row: annotation tools take the flexible
+        # leading section, while copy/save occupy a fixed trailing section. This
+        # preserves their order and lets only the annotation section fold.
         self._toolbar = toolbar
-        toolbar.setParent(self)
-        self._outputs_toolbar = toolbar.outputs_toolbar
-        self._outputs_toolbar.setParent(self)
+        outputs = toolbar.outputs_toolbar
+        self._toolbar_row = QWidget(self)
+        toolbar_layout = QHBoxLayout(self._toolbar_row)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(0)
+        toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        outputs.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        toolbar_layout.addWidget(toolbar, 1)
+        toolbar_layout.addWidget(outputs)
 
         # This screen's slice of the frozen desktop shot, painted dimmed as
         # context (None for non-region captures — then the surface is pure dim).
@@ -285,27 +291,27 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         from PySide6.QtGui import QCursor
 
         self._toolbar.adjustSize()
-        self._outputs_toolbar.adjustSize()
+        self._toolbar.outputs_toolbar.adjustSize()
+        self._toolbar_row.adjustSize()
+        preferred = self._toolbar_row.sizeHint()
+        # The fixed trailing output section keeps its preferred width; the
+        # leading annotation bar absorbs the constraint and exposes overflow.
+        self._toolbar_row.resize(min(preferred.width(), self.width()), preferred.height())
+        self._toolbar_row.layout().activate()
         sel = self._to_local(self._origin)
         area, align_right = _toolbar_placement(QCursor.pos(), self._origin)
-
-        def place(toolbar, target_area) -> None:
-            size = toolbar.size()
-            x = sel.right() - size.width() if align_right else sel.left()
-            if target_area == Qt.BottomToolBarArea:
-                y = sel.bottom() + _TOOLBAR_GAP
-            else:
-                y = sel.top() - size.height() - _TOOLBAR_GAP
-            # Clamp inside the surface so every toolbar remains reachable.
-            x = min(max(x, 0), max(self.width() - size.width(), 0))
-            y = min(max(y, 0), max(self.height() - size.height(), 0))
-            toolbar.move(int(x), int(y))
-            toolbar.show()
-            toolbar.raise_()
-
-        place(self._toolbar, area)
-        opposite_area = Qt.TopToolBarArea if area == Qt.BottomToolBarArea else Qt.BottomToolBarArea
-        place(self._outputs_toolbar, opposite_area)
+        tb = self._toolbar_row.size()
+        x = sel.right() - tb.width() if align_right else sel.left()
+        if area == Qt.BottomToolBarArea:
+            y = sel.bottom() + _TOOLBAR_GAP
+        else:
+            y = sel.top() - tb.height() - _TOOLBAR_GAP
+        # Clamp inside the surface so the toolbar is always reachable.
+        x = min(max(x, 0), max(self.width() - tb.width(), 0))
+        y = min(max(y, 0), max(self.height() - tb.height(), 0))
+        self._toolbar_row.move(int(x), int(y))
+        self._toolbar_row.show()
+        self._toolbar_row.raise_()
 
     # --- painting ---------------------------------------------------------
 
