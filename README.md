@@ -37,9 +37,10 @@ both in Settings.
   it. Window enumeration is still unavailable by Wayland design, so smart capture
   uses the compositor's own screen / window / region picker there.
 - **Windows** — full menu-bar GUI plus CLI / MCP: capture, window enumeration
-  (Win32), global hotkeys, and launch-at-login (the per-user `Run` key). On-device
-  OCR runs on the Windows WinRT engine, installed with the optional `windows-ocr`
-  extra (`pip install "shotquill[windows-ocr]"`).
+  (Win32), global hotkeys, and launch-at-login (the per-user `Run` key).
+  Experimental on-device OCR uses the WinRT engine and the user's installed OCR
+  languages; it is available to pip installs through the optional `windows-ocr`
+  extra (`pip install "shotquill[windows-ocr]"`), not in the release ZIP.
 
 **Jump to:**
 [Highlights](#highlights) ·
@@ -76,17 +77,21 @@ both in Settings.
 - **Configurable after-capture flow** — open the annotation editor by default, or
   make captures hands-free by auto-saving, auto-copying, or both.
 - **Annotation editor** — rectangles, ellipses, arrows, lines, freehand pen,
-  highlighter, text, and **mosaic redaction** that pixelates the real pixels (not
-  just an overlay, so the sensitive data never survives in the exported image).
+  highlighter, text, and **mosaic pixelation** for visual obfuscation. Mosaic
+  removes the original per-pixel detail from the exported image but retains
+  block-average information; use the solid-fill CLI / blocklist controls for
+  high-risk secrets instead.
 - **On-device OCR** — pull text out of a shot, fully offline, no network, no API
-  key. Recognizes Chinese (Simplified) + English. Apple Vision on macOS,
-  Tesseract on Linux (when installed), and the WinRT engine on Windows (via the
-  optional `windows-ocr` extra).
+  key. macOS requests Simplified Chinese and English from Apple Vision; Linux
+  uses whichever matching Tesseract language packs are installed. Experimental
+  Windows OCR uses the user's installed WinRT OCR languages and requires the
+  optional `windows-ocr` extra in a pip install.
 - **Scriptable & agent-ready** — a headless CLI
   (`squill capture` / `window list` / `display list` / `ocr` / `diff` /
-  `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist` — one path on
-  stdout, exit codes as the contract) and a built-in MCP server that gives AI
-  agents eyes on your screen. Programmatic captures are audit-logged on a best-effort basis.
+  `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist` — each command
+  documents its stdout, with exit codes as the contract) and a built-in MCP
+  server that gives AI agents eyes on your screen. `capture` prints one output path by
+  default; programmatic captures are audit-logged on a best-effort basis.
   See [Scripting & agents](https://github.com/wardmos/shotquill/blob/main/docs/scripting.md).
 - **Pin to screen** — float an annotated shot on top of the desktop for reference;
   drag to move, double-click or `Esc` to dismiss.
@@ -140,7 +145,7 @@ Two channels, pick by what you need:
 | You want… | Use |
 | --- | --- |
 | The **menu-bar GUI** + CLI + MCP | **pipx** (or pip) install from PyPI |
-| Just the **CLI / MCP** in one self-contained binary | **AppImage** from Releases |
+| Just the **CLI / MCP** in one single-file launcher | **x86_64 AppImage** from Releases |
 
 **pipx (recommended for the GUI):**
 
@@ -156,11 +161,13 @@ under `~/.local/share` automatically, so you can skip the `desktop install`
 step. (`pipx` stores data files inside its private venv, which the desktop
 doesn't search, hence the one-liner.)
 
-**AppImage (CLI / MCP only):** download the `.AppImage` from
+**AppImage (CLI / MCP only, x86_64):** download the `.AppImage` from
 [Releases](https://github.com/wardmos/shotquill/releases), `chmod +x`, run.
-It bundles Python + Qt headless bits (no QtWidgets, no GUI) so the binary
-stays small and the CLI/MCP work even where the GUI's dependencies wouldn't.
-Built on Ubuntu 22.04 → glibc 2.35 floor (Ubuntu 22.04+ / Debian 12+).
+It bundles Python + the headless Qt components (no QtWidgets, no GUI) in one
+file, but deliberately uses the host's EGL / GL, D-Bus, and xkbcommon runtime
+libraries. A typical graphical desktop already has them; a minimal Ubuntu /
+Debian system may need `libegl1 libgl1 libdbus-1-3 libxkbcommon0`. Built on
+Ubuntu 22.04 → glibc 2.35 floor (Ubuntu 22.04+ / Debian 12+).
 
 Download the matching `.sha256` sidecar and verify it before running:
 
@@ -195,9 +202,11 @@ Get-FileHash .\ShotQuill-*-windows-x64.zip -Algorithm SHA256
 Get-Content .\ShotQuill-*-windows-x64.zip.sha256
 ```
 
-Windows OCR uses the on-device WinRT engine, but the Python WinRT projections are
-optional and are not included in the default package / bundle. For a pip install
-that needs OCR, install:
+Windows OCR is experimental: its WinRT integration has not yet been validated
+against a live engine and it recognizes languages installed in the user's
+Windows profile rather than a fixed English / Chinese pair. The required Python
+WinRT projections are optional and are not included in the default package or
+release ZIP. To test it with a pip install, use:
 
 ```powershell
 pip install "shotquill[windows-ocr]"
@@ -286,11 +295,11 @@ squill session start --agent builder        # begin a replayable session trace
 squill mcp                                 # serve the Model Context Protocol over stdio
 ```
 
-Running it bare launches the GUI; with a subcommand it stays headless and prints
-one path on stdout (warnings on stderr), with exit codes as the contract. It
-captures one image (`capture`), reads or asserts on-screen text (`ocr`), or
-records an ordered trail of frames an agent leaves behind (`session`) — and the
-same loop is exposed to MCP clients as twelve tools.
+Running it bare launches the GUI; with a subcommand it stays headless. `capture`
+writes one file and prints its path by default; listing, OCR, diff, doctor, and
+session commands emit their documented text or JSON instead. Warnings go to
+stderr, and exit codes are the contract. The same capture / read / record loop
+is exposed to MCP clients as twelve tools.
 
 A typical JSON-style MCP host configuration is:
 
@@ -352,9 +361,10 @@ all:
 ```
 
 A window is blocked when any rule matches it: `bundle_id` matches the owning
-app's identifier exactly (case-insensitive — the robust default, since bundle
-ids are stable and unspoofable), or `name` matches its app name as a
-case-insensitive substring (handy for a quick edit). `squill doctor` prints
+app's identifier exactly (case-insensitive — usually more stable than its
+display name, but still matching metadata rather than a verified security
+identity), or `name` matches its app name as a case-insensitive substring
+(handy for a quick edit). `squill doctor` prints
 the active rules; a blocked capture exits `6` (the MCP `capture` tool returns
 error `type: "blocked"`); refusals and redactions are audit-logged on a best-effort basis.
 
@@ -552,7 +562,10 @@ line is also mirrored to the unified log / journald, which user-space processes
 can't rewrite; Windows currently keeps the JSONL log only. Audit logging is
 best-effort so a failing log sink never blocks a capture.
 
-**Still stuck?** Run `squill doctor` and attach its output to a
+**Still stuck?** Run `squill doctor`, then review its output before sharing it:
+the report can include local paths, blocklist / allowlist rule labels, display
+geometry, and the name of the process responsible for macOS Screen Recording.
+Redact anything sensitive before pasting it into a public
 [GitHub issue](https://github.com/wardmos/shotquill/issues).
 
 ---
@@ -564,10 +577,12 @@ ShotQuill is built to be trustworthy, and it's open source so you can verify it:
 - **No keylogging.** The global-hotkey listener only checks for your configured
   shortcut combos; it never records, stores, or forwards keystrokes.
 - **OCR is on-device.** Text recognition uses Apple Vision on macOS, Tesseract on
-  Linux, and Windows OCR through WinRT — nothing is uploaded, and it works with
-  no network connection.
-- **Redaction is real.** The mosaic tool rewrites the underlying pixels before
-  export, so blurred-out content isn't recoverable from the saved image.
+  Linux, and the experimental WinRT backend on Windows — nothing is uploaded,
+  and the available languages follow each backend as described above.
+- **Redaction has explicit boundaries.** Opaque blocklist, `--mask`, and detected
+  PII fills overwrite pixels. Mosaic is visual obfuscation: the export omits the
+  original per-pixel detail but retains block averages, so do not rely on it to
+  hide high-risk secrets.
 - **PII can be redacted automatically.** Programmatic captures can OCR a frame
   and mask likely personal data — emails, card numbers, SSNs — before it ever
   leaves ShotQuill (`squill capture --redact-pii`, `session frame --scan-pii` /
@@ -608,7 +623,7 @@ cross-platform UI:
 | Global hotkeys        | Carbon `RegisterEventHotKey` (no Input Monitoring needed) | X11: `pynput`; Wayland: `xdg-desktop-portal` GlobalShortcuts when available | `pynput` Win32 listener (no permission needed) |
 | Launch at login       | per-user `LaunchAgent`                                | XDG `~/.config/autostart/shotquill.desktop`            | per-user `Run` key (`HKCU\…\CurrentVersion\Run`)       |
 | Image processing      | Qt (`QImage`)                                          | same                                                   | same                                                   |
-| OCR                   | `pyobjc` → Apple Vision                                | `tesseract` CLI (when installed)                       | WinRT `Windows.Media.Ocr` (optional `windows-ocr` extra) |
+| OCR                   | `pyobjc` → Apple Vision (Simplified Chinese + English requested) | `tesseract` CLI (installed language packs)             | Experimental WinRT `Windows.Media.Ocr` (user-profile languages; optional `windows-ocr` extra) |
 
 Platform-specific code (capture, hotkeys, OCR, autostart) sits behind small
 `base.py` interfaces, so the editor and output layers stay portable and adding a

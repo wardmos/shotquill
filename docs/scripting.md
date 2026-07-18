@@ -74,9 +74,10 @@ The parts agents rely on:
 - **Or reveal only the action.** `--reveal X,Y,W,H` (repeatable) is the inverse:
   it mosaics the *whole* frame and keeps only the given rectangle(s) sharp, so a
   recorded frame shows what the agent did without leaving the rest of the screen
-  legible — minimize exposure to just the action. Each mosaic cell is the
-  average of its source block (a lone pixel can't survive), so it isn't
-  reversible, though the revealed window stays fully readable. Same coordinates,
+  legible — minimize exposure to just the action. Each mosaic cell keeps the
+  average of its source block: original per-pixel detail is omitted, but aggregate
+  visual information remains. Treat it as exposure minimization, not guaranteed
+  secret redaction; use `--mask` for known sensitive regions. Same coordinates,
   same `reveal` arg on the MCP tools; composes with `mask`.
 - **Or let it find the PII for you.** `--redact-pii` OCRs the frame and masks the
   pixels of any text that looks like PII (email, credit card, SSN, IBAN, IPv4,
