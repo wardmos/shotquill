@@ -74,9 +74,10 @@ The parts agents rely on:
 - **Or reveal only the action.** `--reveal X,Y,W,H` (repeatable) is the inverse:
   it mosaics the *whole* frame and keeps only the given rectangle(s) sharp, so a
   recorded frame shows what the agent did without leaving the rest of the screen
-  legible — minimize exposure to just the action. Each mosaic cell is the
-  average of its source block (a lone pixel can't survive), so it isn't
-  reversible, though the revealed window stays fully readable. Same coordinates,
+  legible — minimize exposure to just the action. Each mosaic cell keeps the
+  average of its source block: original per-pixel detail is omitted, but aggregate
+  visual information remains. Treat it as exposure minimization, not guaranteed
+  secret redaction; use `--mask` for known sensitive regions. Same coordinates,
   same `reveal` arg on the MCP tools; composes with `mask`.
 - **Or let it find the PII for you.** `--redact-pii` OCRs the frame and masks the
   pixels of any text that looks like PII (email, credit card, SSN, IBAN, IPv4,
@@ -119,12 +120,13 @@ The parts agents rely on:
 - **Permissions follow the invoking app.** macOS attributes Screen Recording to
   whatever launched the CLI (your terminal, an agent host) — the consent dialog
   names the real controller, and `squill doctor` reports what is missing.
-- **Every programmatic capture is audit-logged** — metadata only, never
-  pixels — to a JSONL file (`~/Library/Logs/shotquill/audit.log` on macOS,
-  `%LOCALAPPDATA%\shotquill\Logs\audit.log` on Windows, `$XDG_STATE_HOME/shotquill/audit.log`
-  elsewhere) and mirrored into the OS log store (unified log / journald) where one
-  exists, which user-space processes cannot rewrite.
-  Each entry records the process chain that drove the capture.
+- **Programmatic capture activity is audit-logged on a best-effort basis** —
+  metadata only, never pixels — to a JSONL file
+  (`~/Library/Logs/shotquill/audit.log` on macOS,
+  `%LOCALAPPDATA%\shotquill\Logs\audit.log` on Windows, and
+  `$XDG_STATE_HOME/shotquill/audit.log` elsewhere). macOS and Linux also mirror
+  entries into the OS-managed log store (unified log / journald). Each entry
+  records the process chain that drove the capture.
 
 `python -m shotquill` accepts the same subcommands.
 
@@ -236,8 +238,8 @@ squill session export "$DIR" --fail-on-pii          # bundle into one archive (r
   carries a `--scan-pii` flag, so a flagged trace isn't shared off the machine by
   accident. The MCP `session_export` tool mirrors it and also reports any residual
   PII in its result.
-- `--json` on any of these prints a machine-readable object; every step is
-  audit-logged with `via: "record"`.
+- `--json` on any of these prints a machine-readable object; session steps are
+  audit-logged with `via: "record"` on a best-effort basis.
 
 The MCP server exposes the same loop as `session_start` / `session_frame` /
 `session_end` (below). Two recipes layer on top of those tools, by agent shape:

@@ -22,7 +22,8 @@ The rules live in a plain JSON file (:func:`shotquill.paths.blocklist_path`)::
 A window is blocked when any rule matches it:
 
 - ``bundle_id`` matches the window's bundle id exactly (case-insensitive) —
-  the robust, default key, since bundle ids are stable and unspoofable; or
+  usually a more stable key than the display name, but still matching metadata
+  rather than a verified security identity; or
 - ``name`` matches as a case-insensitive substring of the window's owner app
   name — a convenience for quick hand-edits and platforms without bundle ids.
 
