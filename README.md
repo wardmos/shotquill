@@ -16,34 +16,21 @@
   <a href="https://github.com/wardmos/shotquill/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache 2.0"></a>
 </p>
 
-ShotQuill lives in your menu bar and turns a screenshot into a finished, shareable
-image in one motion: press a hotkey, then let the pointer pick a window / region /
-the whole screen, then annotate, redact, extract text, save, copy, or pin it from
-the built-in editor. Prefer a no-editor flow? Turn on auto-save, auto-copy, or
-both in Settings.
+From hotkey to share-ready image in seconds. Point at a window, drag a precise
+region, or capture every display—then annotate, pixelate sensitive areas,
+extract text, copy, save, or pin the result without breaking your flow.
 
-- **macOS** — the primary, most complete platform, and the one every other is
-  measured against: full menu-bar GUI, two global hotkeys, smart window / region
-  / full-screen capture (real pixels even under overlap, via ScreenCaptureKit),
-  the annotation editor, optional hands-free save + clipboard, launch-at-login, window
-  enumeration, blocklist redaction, and on-device OCR (Apple Vision) — plus the
-  full CLI and MCP server.
-- **Linux / X11** — full menu-bar GUI plus CLI / MCP, including window
-  enumeration (smart-capture window highlight, `squill window list`, and blocklist
-  redaction of full-screen grabs) and on-device OCR via Tesseract when it's
-  installed.
-- **Linux / Wayland** — GUI plus CLI / MCP through `xdg-desktop-portal` for
-  capture and the GlobalShortcuts portal for hotkeys when the compositor exposes
-  it. Window enumeration is still unavailable by Wayland design, so smart capture
-  uses the compositor's own screen / window / region picker there.
-- **Windows** — full menu-bar GUI plus CLI / MCP: capture, window enumeration
-  (Win32), global hotkeys, and launch-at-login (the per-user `Run` key).
-  Experimental on-device OCR uses the WinRT engine and the user's installed OCR
-  languages; it is available to pip installs through the optional `windows-ocr`
-  extra (`pip install "shotquill[windows-ocr]"`), not in the release ZIP.
+- **Capture exactly what you mean** — one smart overlay handles a window, a
+  region, or the current screen; a second hotkey captures every display at once.
+- **Finish it where you captured it** — annotate, extract text, copy, save, or
+  pin the result in the built-in editor, or skip it with auto-save / auto-copy.
+- **Automate the same workflow** — the `squill` CLI and built-in MCP server expose
+  capture, OCR, and replayable sessions with on-device processing, app
+  guardrails, and a local audit trail.
 
 **Jump to:**
 [Highlights](#highlights) ·
+[Platforms](#platform-support) ·
 [Install](#install) ·
 [Usage](#usage) ·
 [Scripting & agents (CLI · MCP)](#scripting--agents) ·
@@ -90,13 +77,25 @@ both in Settings.
   (`squill capture` / `window list` / `display list` / `ocr` / `diff` /
   `session` / `doctor` / `mcp`, plus `blocklist` / `allowlist` — each command
   documents its stdout, with exit codes as the contract) and a built-in MCP
-  server that gives AI agents eyes on your screen. `capture` prints one output path by
-  default; programmatic captures are audit-logged on a best-effort basis.
+  server that gives AI agents eyes on your screen. `capture` prints one output
+  path by default; programmatic captures are audit-logged on a best-effort
+  basis.
   See [Scripting & agents](https://github.com/wardmos/shotquill/blob/main/docs/scripting.md).
 - **Pin to screen** — float an annotated shot on top of the desktop for reference;
   drag to move, double-click or `Esc` to dismiss.
 - **Bilingual UI** — English / 中文, switchable in Settings (defaults to English).
 - **Menu-bar resident** — no Dock clutter; optional launch-at-login.
+
+---
+
+## Platform support
+
+| Platform | Core support | Notes |
+| --- | --- | --- |
+| **macOS** | Full GUI, smart capture, editor, global hotkeys, window enumeration, on-device OCR, CLI / MCP | Primary and most complete platform; ScreenCaptureKit capture on macOS 14+, with a CoreGraphics fallback otherwise. |
+| **Linux / X11** | Full GUI, editor, CLI / MCP, window enumeration, global hotkeys, blocklist redaction | OCR requires Tesseract and the desired language packs. |
+| **Linux / Wayland** | GUI and editor; capture for GUI / CLI / MCP uses `xdg-desktop-portal` and the compositor's picker | No window enumeration by design; global hotkeys require GlobalShortcuts portal support. |
+| **Windows** | GUI, editor, CLI / MCP, Win32 window enumeration, global hotkeys, launch at login | Release ZIP is x64 and omits OCR; the experimental WinRT backend requires the `windows-ocr` extra in a pip install. |
 
 ---
 
