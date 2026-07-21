@@ -20,13 +20,15 @@ From hotkey to share-ready image in seconds. Point at a window, drag a precise
 region, or capture every display—then annotate, pixelate sensitive areas,
 extract text, copy, save, or pin the result without breaking your flow.
 
-- **Capture exactly what you mean** — one smart overlay handles a window, a
-  region, or the current screen; a second hotkey captures every display at once.
-- **Finish it where you captured it** — annotate, extract text, copy, save, or
-  pin the result in the built-in editor, or skip it with auto-save / auto-copy.
-- **Automate the same workflow** — the `squill` CLI and built-in MCP server expose
-  capture, OCR, and replayable sessions with on-device processing, app
-  guardrails, and a local audit trail.
+- **Everything you expect from a screenshot app** — capture a window, region,
+  screen, or every display; then annotate, pixelate, extract text, copy, save,
+  or pin the result, with auto-save and auto-copy when you want them.
+- **CLI and MCP support built in** — automate capture, OCR, diffs, and replayable
+  sessions with the `squill` CLI, or give AI agents controlled screen access
+  through the built-in MCP server.
+- **App blocklists and allowlists** — keep sensitive apps out of every capture,
+  or restrict capture to approved apps only, with the same rules enforced across
+  the GUI, CLI, and MCP server.
 
 **Jump to:**
 [Highlights](#highlights) ·
