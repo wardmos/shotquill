@@ -2,4 +2,4 @@
 # Copyright (C) 2026 wardmos
 """shotquill — cross-platform screenshot & annotation tool (macOS first)."""
 
-__version__ = "0.0.15"
+__version__ = "0.1.0"
