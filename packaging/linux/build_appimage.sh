@@ -28,7 +28,7 @@ rm -rf build/appimage dist
 
 # The CLI path only needs QtCore / QtGui / QtDBus (the Wayland portal). Drop the
 # rest of the Qt stack and the macOS-only GUI/backends/pyobjc so they (and their
-# shared libraries) stay out of the bundle. Mirrors the macOS DMG excludes, but
+# shared libraries) stay out of the bundle. Mirrors the macOS PKG excludes, but
 # keeps QtDBus (Wayland) and drops QtWidgets (no GUI here).
 EXCLUDES=(
   PySide6.QtWidgets PySide6.QtNetwork
@@ -75,7 +75,7 @@ pyinstaller --noconfirm --name squill \
 # Pango/ATK/Cairo stack, …) that nothing on the CLI/MCP path loads — ~50 MB on a
 # 6.11 build. The pruner removes only libraries unreachable from the real entry
 # points, so it can't break a kept path; it fails loudly if the keep policy ever
-# prunes a required plugin (a Qt-layout-drift guard, like the macOS DMG's).
+# prunes a required plugin (a Qt-layout-drift guard, like the macOS PKG's).
 python3 packaging/linux/prune_bundle.py build/appimage/dist/squill
 
 # Assemble the AppDir: the PyInstaller tree under usr/bin, a .desktop + icon,

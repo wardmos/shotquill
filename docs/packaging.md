@@ -12,26 +12,44 @@ Use a clean virtual environment when possible. Packaging dependencies are pinned
 by `packaging/constraints-release.txt` so local smoke builds stay close to CI and
 release builds.
 
-## macOS DMG
+## macOS PKG
 
 Run on macOS. The script uses macOS tools such as `sips`, `iconutil`,
-`codesign`, and `hdiutil`.
+`codesign`, `pkgbuild`, `productbuild`, `pkgutil`, and `installer`.
 
 ```bash
 python -m pip install -U pip
 python -m pip install -c packaging/constraints-release.txt -e . pyinstaller
-SHOTQUILL_DMG_FORMAT=UDZO bash packaging/macos/build_dmg.sh 0.0.0 arm64
+bash packaging/macos/build_pkg.sh 0.0.0 arm64
 ```
-
-`SHOTQUILL_DMG_FORMAT=UDZO` uses faster zlib compression for local smoke builds.
-Release builds omit it and use the script default, `ULMO`, for smaller DMGs.
 
 The final argument selects the architecture. Use `arm64` on Apple Silicon,
 `x86_64` on Intel Macs, or `universal2` to validate the universal build path.
 Building non-native or universal2 bundles requires a universal2 Python and
 compatible universal2 wheels.
 
-Output: `dist/ShotQuill-0.0.0-<arch>.dmg`.
+Output: `dist/ShotQuill-0.0.0-<arch>.pkg`.
+
+The product package contains a required application component for
+`/Applications/ShotQuill.app` and a visible CLI component that is off by
+default. Selecting the CLI installs two guarded links under `/usr/local/bin`;
+the preinstall check refuses to replace unrelated commands. To inspect a local
+artifact without installing it:
+
+```bash
+installer -showChoicesXML -pkg dist/ShotQuill-0.0.0-arm64.pkg
+expanded=$(mktemp -d)
+pkgutil --expand-full dist/ShotQuill-0.0.0-arm64.pkg "$expanded"
+find "$expanded" -print
+rm -rf "$expanded"
+```
+
+The default app signature is ad hoc and the outer PKG is unsigned. Setting
+`SHOTQUILL_INSTALLER_IDENTITY` signs the product archive with an available
+Developer ID Installer identity, but production distribution also requires
+proper application signing and notarization. Installer authorization is based
+on the system installation domain, not just the CLI checkbox, so an app-only
+install under `/Applications` may still request administrator approval.
 
 ## Linux AppImage
 

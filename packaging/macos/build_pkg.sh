@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
-# Build ShotQuill.app and drag-to-Applications DMGs, one per CPU architecture.
-# Ad-hoc signed (anonymous, no Apple account, no notarization).
+# Build ShotQuill.app and an installer PKG, one per CPU architecture.
+# The app is ad-hoc signed by default. Set SHOTQUILL_INSTALLER_IDENTITY to sign
+# the outer product archive with a Developer ID Installer identity.
 #
-# Usage: packaging/macos/build_dmg.sh <version-or-tag> [arch ...]
+# Usage: packaging/macos/build_pkg.sh <version-or-tag> [arch ...]
 #   arch: arm64 | x86_64 | universal2 (default: all three)
 #
-# Single-arch DMGs are roughly half the size of universal2 because PyInstaller
+# Single-arch PKGs are roughly half the size of universal2 because PyInstaller
 # thins the fat (universal2) Python/Qt binaries down to one slice. Building a
 # non-native or universal2 app requires a universal2 Python and universal2
 # wheels for every binary dependency; PyInstaller fails loudly if that does not
 # hold. universal2 is therefore the strictest arch: the package smoke workflow
 # builds only it on PRs, since the thinned arm64/x86_64 slices cannot fail
 # independently of it.
-#
-# SHOTQUILL_DMG_FORMAT overrides the DMG compression (default ULMO = LZMA,
-# smallest but slow); smoke builds use UDZO (zlib) since their DMG is a
-# short-lived artifact where speed matters more than size.
 set -euo pipefail
 
 VERSION="${1:-0.0.0}"
@@ -25,6 +22,19 @@ ARCHES=("$@")
 if [ ${#ARCHES[@]} -eq 0 ]; then
   ARCHES=(arm64 x86_64 universal2)
 fi
+if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+  echo "error: unsafe package version: $VERSION" >&2
+  exit 2
+fi
+for arch in "${ARCHES[@]}"; do
+  case "$arch" in
+    arm64|x86_64|universal2) ;;
+    *)
+      echo "error: unsupported architecture: $arch" >&2
+      exit 2
+      ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -80,8 +90,8 @@ build_one() {
   local plist="$app/Contents/Info.plist"
 
   # --noupx: UPX rewrites Mach-O headers, which breaks the ad-hoc codesign below
-  # and Apple Silicon's loader; the DMG's LZMA compression is what shrinks the
-  # download instead. (macOS runners ship no upx anyway — this is belt-and-braces.)
+  # and Apple Silicon's loader. macOS runners ship no upx anyway, but keeping
+  # this explicit avoids architecture-specific bundle failures.
   pyinstaller --noconfirm --windowed --name ShotQuill \
     --osx-bundle-identifier com.wardmos.shotquill \
     --icon "$ICNS" \
@@ -132,21 +142,62 @@ build_one() {
   # Ad-hoc signature: required to run on Apple Silicon; embeds no identity.
   codesign --force --deep --sign - "$app"
 
-  # Assemble the DMG with hdiutil (built into macOS, no extra dependency).
-  local staging="dist/$arch/dmg"
-  rm -rf "$staging"
-  mkdir -p "$staging"
-  cp -R "$app" "$staging/"
-  ln -s /Applications "$staging/Applications"
+  # Build two component packages. The application is required; Distribution.xml
+  # exposes the two CLI links as an optional, default-off choice. Keeping the CLI
+  # root flat avoids changing ownership of an existing /usr/local tree (including
+  # Intel Homebrew installations). Its preinstall guard also refuses to replace
+  # commands owned by an unrelated installation.
+  local package_work="build/$arch/product"
+  local component_dir="$package_work/components"
+  local app_root="$package_work/app-root"
+  local cli_root="$package_work/cli-root"
+  local cli_scripts="packaging/macos/scripts/cli"
+  local app_component="ShotQuill-app.pkg"
+  local cli_component="ShotQuill-cli.pkg"
+  local distribution="$package_work/Distribution.xml"
+  rm -rf "$package_work"
+  mkdir -p "$component_dir" "$app_root" "$cli_root"
+  ditto "$app" "$app_root/ShotQuill.app"
+  ln -s /Applications/ShotQuill.app/Contents/MacOS/ShotQuill "$cli_root/shotquill"
+  ln -s /Applications/ShotQuill.app/Contents/MacOS/ShotQuill "$cli_root/squill"
 
-  local dmg="dist/ShotQuill-$VERSION-$arch.dmg"
-  # ULMO = LZMA-compressed DMG: noticeably smaller than UDZO (zlib). Mountable on
-  # macOS 10.15+, which is well below ShotQuill's target.
-  hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$staging" -ov \
-    -format "${SHOTQUILL_DMG_FORMAT:-ULMO}" "$dmg"
-  rm -rf "$staging"
+  pkgbuild \
+    --root "$app_root" \
+    --install-location /Applications \
+    --component-plist packaging/macos/app_components.plist \
+    --identifier com.wardmos.shotquill.app \
+    --version "$VERSION" \
+    --ownership recommended \
+    "$component_dir/$app_component"
+  pkgbuild \
+    --root "$cli_root" \
+    --install-location /usr/local/bin \
+    --scripts "$cli_scripts" \
+    --identifier com.wardmos.shotquill.cli \
+    --version "$VERSION" \
+    --ownership recommended \
+    "$component_dir/$cli_component"
 
-  echo "Built $dmg"
+  python packaging/macos/pkg_distribution.py \
+    --version "$VERSION" \
+    --app-package "$app_component" \
+    --cli-package "$cli_component" \
+    > "$distribution"
+
+  local pkg="dist/ShotQuill-$VERSION-$arch.pkg"
+  local productbuild_args=(
+    --distribution "$distribution"
+    --package-path "$component_dir"
+  )
+  if [ -n "${SHOTQUILL_INSTALLER_IDENTITY:-}" ]; then
+    productbuild_args+=(--sign "$SHOTQUILL_INSTALLER_IDENTITY")
+  fi
+  productbuild "${productbuild_args[@]}" "$pkg"
+
+  # Parse the finished package once so malformed Distribution XML cannot become
+  # a release artifact even if productbuild accepted it.
+  installer -showChoicesXML -pkg "$pkg" >/dev/null
+  echo "Built $pkg"
 }
 
 for arch in "${ARCHES[@]}"; do

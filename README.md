@@ -112,32 +112,33 @@ brew install --cask wardmos/tap/shotquill
 ```
 
 `brew upgrade --cask shotquill` keeps it current. The cask also puts both
-`shotquill` and `squill` on `PATH` for CLI / MCP use.
+`shotquill` and `squill` on `PATH` for CLI / MCP use. Because this installs a
+system package under `/Applications`, macOS or Homebrew may request
+administrator authorization.
 
-**Direct download:** grab the `.dmg` from
+**Direct download:** grab the `.pkg` from
 [Releases](https://github.com/wardmos/shotquill/releases) — `arm64` for Apple
 Silicon, `x86_64` for Intel Macs, or `universal2` if unsure (works on both,
-roughly twice the size) — open it, and drag ShotQuill to your Applications
-folder. Each release ships a `.sha256` sidecar so you can verify the download:
+roughly twice the size) — open it and follow Installer. The component page
+always installs ShotQuill in `/Applications`; **Command Line Interface** is
+optional and off by default. Select it to add `shotquill` and `squill` under
+`/usr/local/bin`. Each release ships a `.sha256` sidecar so you can verify the
+download:
 
 ```bash
-shasum -a 256 -c ShotQuill-*.dmg.sha256
+shasum -a 256 -c ShotQuill-*.pkg.sha256
 ```
 
-> ShotQuill is open source and **ad-hoc signed (not notarized)** so the developer
-> can stay anonymous. On first launch macOS Gatekeeper will warn that it can't
-> verify the developer — **right-click the app → Open** once, or run:
->
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/ShotQuill.app
-> ```
->
-> The Homebrew cask strips quarantine automatically, so this only applies to the
-> direct download.
+> The default release build contains an **ad-hoc-signed app in an unsigned,
+> unnotarized installer** so the developer can stay anonymous. Gatekeeper may
+> block the downloaded package. After trying to open it once, go to **System
+> Settings → Privacy & Security** and choose **Open Anyway** only if you trust
+> the release and its verified checksum.
 
-The direct `.app` does not install shell commands. If you want `shotquill` and
-`squill` on `PATH` without Homebrew, install the Python package with
-`pipx install shotquill`.
+The component checkbox cannot control authorization by itself. Both
+`/Applications` and `/usr/local/bin` are system locations, so macOS decides
+whether to request a password, Touch ID, or other administrator approval when
+you click **Install**. It may request approval even when the CLI is not selected.
 
 ### Linux
 
@@ -501,9 +502,9 @@ gives no error; the events simply never arrive. Remap it in Settings. ShotQuill
 uses Carbon `RegisterEventHotKey`, so global capture hotkeys do not require Input
 Monitoring.
 
-**"ShotQuill can't be opened" on first launch.** That's Gatekeeper on the
-ad-hoc-signed direct download — see [Install](#install) for the
-right-click → Open / `xattr` fix. The Homebrew cask is not affected.
+**The installer or ShotQuill is blocked on first launch.** That's Gatekeeper on
+the unsigned/unnotarized direct package — see [Install](#install) for the
+Privacy & Security override.
 
 ### Linux
 
@@ -710,7 +711,31 @@ per-app keylogging-style permission to grant.
 
 ```bash
 brew uninstall --cask shotquill        # Homebrew install
-# or just drag /Applications/ShotQuill.app to the Trash (direct download)
+```
+
+For a direct PKG install, if you selected the CLI component, first confirm that
+both links point into ShotQuill and remove them:
+
+```bash
+target=/Applications/ShotQuill.app/Contents/MacOS/ShotQuill
+for command in shotquill squill; do
+  path="/usr/local/bin/$command"
+  if [ "$(readlink "$path" 2>/dev/null)" = "$target" ]; then
+    sudo rm -f "$path"
+  else
+    echo "Keeping $path: it is not a ShotQuill PKG link"
+  fi
+done
+```
+
+The loop leaves any command with a different target untouched. Deselecting the
+CLI during a later PKG install does not remove links installed by an earlier
+version. Then drag
+`/Applications/ShotQuill.app` to the Trash and forget the receipts that exist:
+
+```bash
+sudo pkgutil --forget com.wardmos.shotquill.app
+sudo pkgutil --forget com.wardmos.shotquill.cli  # only if the CLI was installed
 ```
 
 ShotQuill keeps no hidden state beyond these per-user files — remove them for

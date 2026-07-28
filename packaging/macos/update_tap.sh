@@ -37,27 +37,47 @@ cask "shotquill" do
   sha256 arm:   "${ARM_SHA}",
          intel: "${INTEL_SHA}"
 
-  url "https://github.com/wardmos/shotquill/releases/download/v#{version}/ShotQuill-#{version}-#{arch}.dmg"
+  url "https://github.com/wardmos/shotquill/releases/download/v#{version}/ShotQuill-#{version}-#{arch}.pkg"
   name "ShotQuill"
   desc "Screenshot and annotation tool"
   homepage "https://github.com/wardmos/shotquill"
 
-  app "ShotQuill.app"
+  # The direct installer offers CLI links as an optional component. Homebrew
+  # leaves that component disabled and owns links in its own prefix instead,
+  # avoiding collisions with Intel Homebrew's /usr/local/bin.
+  pkg "ShotQuill-#{version}-#{arch}.pkg",
+      allow_untrusted: true,
+      choices: [
+        {
+          "choiceIdentifier" => "choice.cli",
+          "choiceAttribute"  => "selected",
+          "attributeSetting" => 0,
+        },
+      ]
+
   # The bundled binary doubles as the CLI (bare invocation opens the GUI),
   # so link it onto PATH under both documented command names.
-  binary "#{appdir}/ShotQuill.app/Contents/MacOS/ShotQuill", target: "shotquill"
-  binary "#{appdir}/ShotQuill.app/Contents/MacOS/ShotQuill", target: "squill"
+  binary "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill", target: "shotquill"
+  binary "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill", target: "squill"
 
-  # Ad-hoc-signed build: drop the quarantine flag so it opens without a warning.
+  # The app is ad-hoc signed until release signing is configured.
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/ShotQuill.app"]
+                   args: ["-dr", "com.apple.quarantine", "/Applications/ShotQuill.app"],
+                   sudo: true
   end
+
+  uninstall quit:    "com.wardmos.shotquill",
+            pkgutil: "com.wardmos.shotquill.app"
 end
 EOF
 
 cd "$WORK"
 git add Casks/shotquill.rb
+if git diff --cached --quiet; then
+  echo "${REPO} cask is already at ${VERSION}"
+  exit 0
+fi
 git -c user.name="shotquill-release" \
     -c user.email="release@users.noreply.github.com" \
     commit -m "shotquill ${VERSION}"

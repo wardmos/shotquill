@@ -10,7 +10,7 @@ platform theme (which drags in the entire GTK/Pango/ATK/Cairo stack), and so on.
 On a fresh 6.11 build that is ~45 MB of dead weight in a ~154 MB tree.
 
 Rather than hardcode a list of files to delete (which silently no-ops when a Qt
-upgrade renames or relocates something — the exact drift the macOS DMG guard
+upgrade renames or relocates something — the exact drift the macOS PKG guard
 warns about), this prunes by *reachability*. It seeds a root set with everything
 that can actually be an entry point at run time — the PyInstaller executable, the
 embedded ``libpython``, every Python C-extension (``*.cpython-*.so`` /
@@ -140,7 +140,7 @@ def prune(dist: Path) -> int:
             reclaimed += path.stat().st_size
             path.unlink()
 
-    # Qt UI translations: the CLI is English-only (mirrors the macOS DMG prune).
+    # Qt UI translations: the CLI is English-only (mirrors the macOS PKG prune).
     translations = dist / "_internal/PySide6/Qt/translations"
     if translations.is_dir():
         for path in translations.rglob("*"):
