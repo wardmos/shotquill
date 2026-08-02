@@ -121,9 +121,9 @@ administrator authorization.
 Silicon, `x86_64` for Intel Macs, or `universal2` if unsure (works on both,
 roughly twice the size) — open it and follow Installer. The component page
 always installs ShotQuill in `/Applications`; **Command Line Interface** is
-optional and off by default. Select it to add `shotquill` and `squill` under
-`/usr/local/bin`. Each release ships a `.sha256` sidecar so you can verify the
-download:
+selected by default so `shotquill` and `squill` are added under `/usr/local/bin`.
+Deselect it for an app-only installation. Each release ships a `.sha256` sidecar
+so you can verify the download:
 
 ```bash
 shasum -a 256 -c ShotQuill-*.pkg.sha256

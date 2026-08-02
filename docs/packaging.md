@@ -31,10 +31,10 @@ compatible universal2 wheels.
 Output: `dist/ShotQuill-0.0.0-<arch>.pkg`.
 
 The product package contains a required application component for
-`/Applications/ShotQuill.app` and a visible CLI component that is off by
-default. Selecting the CLI installs two guarded links under `/usr/local/bin`;
-the preinstall check refuses to replace unrelated commands. To inspect a local
-artifact without installing it:
+`/Applications/ShotQuill.app` and a visible CLI component that is selected by
+default. The CLI installs two guarded links under `/usr/local/bin` and can be
+deselected for an app-only installation; the preinstall check refuses to replace
+unrelated commands. To inspect a local artifact without installing it:
 
 ```bash
 installer -showChoicesXML -pkg dist/ShotQuill-0.0.0-arm64.pkg

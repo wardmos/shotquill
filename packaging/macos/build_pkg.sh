@@ -143,7 +143,7 @@ build_one() {
   codesign --force --deep --sign - "$app"
 
   # Build two component packages. The application is required; Distribution.xml
-  # exposes the two CLI links as an optional, default-off choice. Keeping the CLI
+  # exposes the two CLI links as an optional, default-on choice. Keeping the CLI
   # root flat avoids changing ownership of an existing /usr/local tree (including
   # Intel Homebrew installations). Its preinstall guard also refuses to replace
   # commands owned by an unrelated installation.

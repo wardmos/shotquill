@@ -40,7 +40,7 @@ def _package_refs(root):
     return {pkg.attrib["id"]: pkg for pkg in root.findall("pkg-ref")}
 
 
-def test_distribution_requires_app_and_offers_cli_unselected():
+def test_distribution_requires_app_and_offers_cli_selected_by_default():
     module = _load_distribution_module()
     xml = module.render_distribution(
         version="0.1.0",
@@ -65,7 +65,7 @@ def test_distribution_requires_app_and_offers_cli_unselected():
     assert choices["choice.app"].attrib["start_selected"] == "true"
     assert choices["choice.app"].attrib["start_enabled"] == "false"
     assert choices["choice.app"].attrib["start_visible"] == "false"
-    assert choices["choice.cli"].attrib["start_selected"] == "false"
+    assert choices["choice.cli"].attrib["start_selected"] == "true"
     assert choices["choice.cli"].attrib["start_enabled"] == "true"
     assert choices["choice.cli"].attrib["start_visible"] == "true"
     assert "/usr/local/bin" in choices["choice.cli"].attrib["description"]

@@ -85,10 +85,10 @@ def render_distribution(*, version: str, app_package: str, cli_package: str) -> 
             "id": "choice.cli",
             "title": "Command Line Interface",
             "description": (
-                "Optionally install shotquill and squill in /usr/local/bin. "
+                "Install shotquill and squill in /usr/local/bin. Deselect to skip. "
                 "macOS may request administrator authorization for this system install."
             ),
-            "start_selected": "false",
+            "start_selected": "true",
             "start_enabled": "true",
             "start_visible": "true",
         },
