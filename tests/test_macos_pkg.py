@@ -372,6 +372,9 @@ def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
     assert '/usr/bin/sudo /usr/bin/readlink -n "$path"' in source
     assert "root_link_target_matches" in source
     assert 'identity="$(/usr/bin/sudo /usr/bin/stat -f \'%d:%i\' "$path")"' in source
+    assert "-showChoiceChangesXML" in source
+    assert "assert_default_cli_selected" in source
+    assert '-applyChoiceChangesXML "$DEFAULT_CHOICES"' in source
     assert "ROOT_STAGE_ACL" in source
     assert "stat -f '%d:%i' \"$staged\"" in source
     assert '/bin/mv -n "$path" "$staged"' in source

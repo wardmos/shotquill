@@ -13,6 +13,7 @@ PKG="${1:?$USAGE}"
 EXPECTED_TARGET="/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"
 SMOKE_ROOT="$(/usr/bin/mktemp -d "${TMPDIR:-/private/tmp}/shotquill-pkg-smoke.XXXXXX")"
 EXPANDED="$SMOKE_ROOT/expanded"
+DEFAULT_CHOICES="$SMOKE_ROOT/default-choices.plist"
 ROOT_STAGE=""
 SHOTQUILL_PROBE_IDENTITY=""
 SHOTQUILL_PROBE_TARGET=""
@@ -25,6 +26,30 @@ root_path_exists() {
 
 root_link_exists() {
   /usr/bin/sudo /bin/test -L "$1"
+}
+
+assert_default_cli_selected() {
+  /usr/bin/env python3 - "$1" <<'PY'
+import plistlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as stream:
+    choices = plistlib.load(stream)
+selected = [
+    choice.get("attributeSetting")
+    for choice in choices
+    if isinstance(choice, dict)
+    and choice.get("choiceIdentifier") == "choice.cli"
+    and choice.get("choiceAttribute") == "selected"
+]
+if selected != [1]:
+    print(
+        f"default CLI choice is not selected exactly once: {selected!r}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
 }
 
 encoded_root_link_target() {
@@ -244,6 +269,10 @@ assert_no_existing_install() {
 
 assert_no_existing_install
 
+/usr/sbin/installer -showChoiceChangesXML -pkg "$PKG" -target / > "$DEFAULT_CHOICES"
+/usr/bin/plutil -lint "$DEFAULT_CHOICES"
+assert_default_cli_selected "$DEFAULT_CHOICES"
+
 /usr/bin/sudo /bin/mkdir -p /usr/local/bin
 ROOT_STAGE="$(
   /usr/bin/sudo /usr/bin/mktemp -d /private/tmp/.shotquill-pkg-smoke-root.XXXXXX
@@ -297,7 +326,10 @@ test "${#CLI_STAGE_RESIDUE[@]}" -eq 0
 cleanup_cli_probes
 assert_no_existing_install
 
-/usr/bin/sudo /usr/sbin/installer -pkg "$PKG" -target /
+/usr/bin/sudo /usr/sbin/installer \
+  -applyChoiceChangesXML "$DEFAULT_CHOICES" \
+  -pkg "$PKG" \
+  -target /
 
 INSTALLED_HELPER="/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall"
 /usr/bin/sudo /bin/test -d /Applications/ShotQuill.app
