@@ -19,32 +19,31 @@ SHOTQUILL_PROBE_TARGET=""
 SQUILL_PROBE_IDENTITY=""
 SQUILL_PROBE_TARGET=""
 
-encoded_link_target() {
-  local path="$1"
-  local readlink_status
-  /usr/bin/readlink "$path" 2>/dev/null
-  readlink_status=$?
-  /usr/bin/printf '\034'
-  return "$readlink_status"
+root_path_exists() {
+  /usr/bin/sudo /bin/test -e "$1" || /usr/bin/sudo /bin/test -L "$1"
+}
+
+root_link_exists() {
+  /usr/bin/sudo /bin/test -L "$1"
 }
 
 encoded_root_link_target() {
   local path="$1"
   local readlink_status
-  /usr/bin/sudo /usr/bin/readlink "$path" 2>/dev/null
+  /usr/bin/sudo /usr/bin/readlink -n "$path" 2>/dev/null
   readlink_status=$?
   /usr/bin/printf '\034'
   return "$readlink_status"
 }
 
-link_target_matches() {
+root_link_target_matches() {
   local path="$1"
   local expected_target="$2"
   local actual_target marker
   marker=$'\034'
-  [ -L "$path" ] || return 1
-  actual_target="$(encoded_link_target "$path")" || return 1
-  [ "$actual_target" = "$expected_target"$'\n'"$marker" ]
+  root_link_exists "$path" || return 1
+  actual_target="$(encoded_root_link_target "$path")" || return 1
+  [ "$actual_target" = "$expected_target$marker" ]
 }
 
 clear_cli_probe() {
@@ -67,19 +66,19 @@ track_cli_probe() {
   local path="/usr/local/bin/$command"
   local identity actual_target marker
   marker=$'\034'
-  if [ ! -L "$path" ]; then
+  if ! root_link_exists "$path"; then
     echo "CLI probe is not a symbolic link: $path" >&2
     return 1
   fi
-  if ! actual_target="$(encoded_link_target "$path")"; then
+  if ! actual_target="$(encoded_root_link_target "$path")"; then
     echo "cannot read CLI probe target: $path" >&2
     return 1
   fi
-  if [ "$actual_target" != "$expected_target"$'\n'"$marker" ]; then
+  if [ "$actual_target" != "$expected_target$marker" ]; then
     echo "unexpected CLI probe target: $path" >&2
     return 1
   fi
-  if ! identity="$(/usr/bin/stat -f '%d:%i' "$path")"; then
+  if ! identity="$(/usr/bin/sudo /usr/bin/stat -f '%d:%i' "$path")"; then
     echo "cannot read CLI probe identity: $path" >&2
     return 1
   fi
@@ -113,7 +112,7 @@ remove_cli_probe() {
   esac
   [ -n "$expected_identity" ] || return 0
   path="/usr/local/bin/$command"
-  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+  if ! root_path_exists "$path"; then
     clear_cli_probe "$command"
     return 0
   fi
@@ -126,7 +125,7 @@ remove_cli_probe() {
   fi
   /usr/bin/sudo /bin/mv -n "$path" "$staged" || return 1
   if ! /usr/bin/sudo /bin/test -L "$staged"; then
-    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    if ! root_path_exists "$path"; then
       /usr/bin/sudo /bin/mv -n "$staged" "$path" 2>/dev/null || true
     fi
     clear_cli_probe "$command"
@@ -136,12 +135,12 @@ remove_cli_probe() {
   staged_identity="$(/usr/bin/sudo /usr/bin/stat -f '%d:%i' "$staged")" || return 1
   staged_target="$(encoded_root_link_target "$staged")" || return 1
   if [ "$staged_identity" = "$expected_identity" ] \
-    && [ "$staged_target" = "$expected_target"$'\n'"$marker" ]; then
+    && [ "$staged_target" = "$expected_target$marker" ]; then
     /usr/bin/sudo /bin/rm "$staged" || return 1
     clear_cli_probe "$command"
     return 0
   fi
-  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+  if ! root_path_exists "$path"; then
     /usr/bin/sudo /bin/mv -n "$staged" "$path" 2>/dev/null || true
   fi
   clear_cli_probe "$command"
@@ -227,7 +226,7 @@ assert_no_existing_install() {
     /usr/local/bin/shotquill \
     /usr/local/bin/squill \
     "$USER_HOME/Library/LaunchAgents/com.wardmos.shotquill.plist"; do
-    if [ -e "$path" ] || [ -L "$path" ]; then
+    if root_path_exists "$path"; then
       echo "refusing to run over an existing ShotQuill installation object: $path" >&2
       return 1
     fi
@@ -257,11 +256,11 @@ ROOT_STAGE_ACL="$({
 } | /usr/bin/sed -n '2p')"
 test -z "$ROOT_STAGE_ACL"
 test "$(/usr/bin/sudo /usr/bin/stat -f '%d' "$ROOT_STAGE")" \
-  = "$(/usr/bin/stat -f '%d' /usr/local/bin)"
+  = "$(/usr/bin/sudo /usr/bin/stat -f '%d' /usr/local/bin)"
 
 for command in shotquill squill; do
   path="/usr/local/bin/$command"
-  test ! -e "$path" && test ! -L "$path"
+  ! root_path_exists "$path"
 done
 
 /usr/bin/sudo /bin/ln -s /another/tool /usr/local/bin/squill
@@ -270,8 +269,8 @@ if /usr/bin/sudo "$CLI_POSTINSTALL" component.pkg / /; then
   echo "CLI postinstall replaced a conflicting command" >&2
   exit 1
 fi
-test ! -e /usr/local/bin/shotquill && test ! -L /usr/local/bin/shotquill
-link_target_matches /usr/local/bin/squill /another/tool
+! root_path_exists /usr/local/bin/shotquill
+root_link_target_matches /usr/local/bin/squill /another/tool
 CLI_STAGE_RESIDUE=(/private/tmp/.shotquill-cli-install.*)
 test "${#CLI_STAGE_RESIDUE[@]}" -eq 0
 remove_cli_probe squill
@@ -291,8 +290,8 @@ track_cli_probe squill "$EXPECTED_TARGET"
 SHOTQUILL_IDENTITY="$SHOTQUILL_PROBE_IDENTITY"
 SQUILL_IDENTITY="$SQUILL_PROBE_IDENTITY"
 /usr/bin/sudo "$CLI_POSTINSTALL" component.pkg / /
-test "$(/usr/bin/stat -f '%d:%i' /usr/local/bin/shotquill)" = "$SHOTQUILL_IDENTITY"
-test "$(/usr/bin/stat -f '%d:%i' /usr/local/bin/squill)" = "$SQUILL_IDENTITY"
+test "$(/usr/bin/sudo /usr/bin/stat -f '%d:%i' /usr/local/bin/shotquill)" = "$SHOTQUILL_IDENTITY"
+test "$(/usr/bin/sudo /usr/bin/stat -f '%d:%i' /usr/local/bin/squill)" = "$SQUILL_IDENTITY"
 CLI_STAGE_RESIDUE=(/private/tmp/.shotquill-cli-install.*)
 test "${#CLI_STAGE_RESIDUE[@]}" -eq 0
 cleanup_cli_probes
@@ -301,9 +300,9 @@ assert_no_existing_install
 /usr/bin/sudo /usr/sbin/installer -pkg "$PKG" -target /
 
 INSTALLED_HELPER="/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall"
-test -d /Applications/ShotQuill.app
-test -x "$INSTALLED_HELPER"
-test "$(/usr/bin/stat -f '%u:%Lp' "$INSTALLED_HELPER")" = "0:755"
+/usr/bin/sudo /bin/test -d /Applications/ShotQuill.app
+/usr/bin/sudo /bin/test -x "$INSTALLED_HELPER"
+test "$(/usr/bin/sudo /usr/bin/stat -f '%u:%Lp' "$INSTALLED_HELPER")" = "0:755"
 for receipt in \
   com.wardmos.shotquill.app \
   com.wardmos.shotquill.cli \
@@ -311,8 +310,8 @@ for receipt in \
   /usr/sbin/pkgutil --pkg-info "$receipt" >/dev/null
 done
 for command in shotquill squill; do
-  test -L "/usr/local/bin/$command"
-  link_target_matches "/usr/local/bin/$command" "$EXPECTED_TARGET"
+  root_link_exists "/usr/local/bin/$command"
+  root_link_target_matches "/usr/local/bin/$command" "$EXPECTED_TARGET"
   track_cli_probe "$command" "$EXPECTED_TARGET"
 done
 
@@ -324,11 +323,11 @@ track_cli_probe shotquill /another/tool
 /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   /bin/bash --noprofile --norc "$INSTALLED_HELPER" --cli-coordinator
 
-test ! -e /Applications/ShotQuill.app
-test ! -e "$INSTALLED_HELPER"
-test -L /usr/local/bin/shotquill
-link_target_matches /usr/local/bin/shotquill /another/tool
-test ! -e /usr/local/bin/squill && test ! -L /usr/local/bin/squill
+! root_path_exists /Applications/ShotQuill.app
+! root_path_exists "$INSTALLED_HELPER"
+root_link_exists /usr/local/bin/shotquill
+root_link_target_matches /usr/local/bin/shotquill /another/tool
+! root_path_exists /usr/local/bin/squill
 clear_cli_probe squill
 for receipt in \
   com.wardmos.shotquill.app \

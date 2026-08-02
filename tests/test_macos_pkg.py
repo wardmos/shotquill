@@ -281,7 +281,7 @@ def test_cli_package_scripts_have_valid_bash_syntax():
         text=True,
     )
     assert result.returncode == 0, f"{_CLI_PREINSTALL}: {result.stderr}"
-    assert "readlink -n" not in _CLI_PREINSTALL.read_text(encoding="utf-8")
+    assert "readlink -n" in _CLI_PREINSTALL.read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="macOS release scripts require Bash")
@@ -366,7 +366,12 @@ def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
     assert "SQUILL_PROBE_IDENTITY" in source
     assert "CLI probe is not a symbolic link" in source
     assert "cannot read CLI probe identity" in source
-    assert "readlink -n" not in source
+    assert "root_path_exists" in source
+    assert "root_link_exists" in source
+    assert '/usr/bin/sudo /bin/test -L "$1"' in source
+    assert '/usr/bin/sudo /usr/bin/readlink -n "$path"' in source
+    assert "root_link_target_matches" in source
+    assert 'identity="$(/usr/bin/sudo /usr/bin/stat -f \'%d:%i\' "$path")"' in source
     assert "ROOT_STAGE_ACL" in source
     assert "stat -f '%d:%i' \"$staged\"" in source
     assert '/bin/mv -n "$path" "$staged"' in source
@@ -405,8 +410,8 @@ def test_pkg_uninstall_helper_revalidates_every_privileged_target():
     assert "/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall" in script
     assert "/usr/local/bin/shotquill" in script
     assert "/usr/local/bin/squill" in script
-    assert "readlink -n" not in script
-    assert "readlink's presentation newline" in script
+    assert "readlink -n" in script
+    assert "readlink_status=$?" in script
     assert "shasum -a 256" in script
     assert "codesign --verify --deep --strict" in script
     assert "PlistBuddy" in script
