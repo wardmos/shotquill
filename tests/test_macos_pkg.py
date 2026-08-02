@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import os
 import plistlib
 import subprocess
 import sys
@@ -13,12 +15,20 @@ from xml.etree import ElementTree
 
 import pytest
 
+from shotquill.autostart.macos import LAUNCH_AGENT_LABEL, build_launch_agent_plist
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DISTRIBUTION_MODULE = _REPO_ROOT / "packaging" / "macos" / "pkg_distribution.py"
 _BUILD_SCRIPT = _REPO_ROOT / "packaging" / "macos" / "build_pkg.sh"
 _COMPONENTS_PLIST = _REPO_ROOT / "packaging" / "macos" / "app_components.plist"
 _CLI_PREINSTALL = _REPO_ROOT / "packaging" / "macos" / "scripts" / "cli" / "preinstall"
+_CLI_LINK_INSTALLER = _REPO_ROOT / "packaging" / "macos" / "cli_link_installer.c"
+_UNINSTALL_HELPER = _REPO_ROOT / "packaging" / "macos" / "uninstall_pkg"
 _TAP_SCRIPT = _REPO_ROOT / "packaging" / "macos" / "update_tap.sh"
+_PKG_SMOKE_SCRIPT = _REPO_ROOT / "packaging" / "macos" / "smoke_pkg.sh"
+_CASK_SMOKE_SCRIPT = _REPO_ROOT / "packaging" / "macos" / "smoke_cask.sh"
+_PACKAGE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "package.yml"
+_RELEASE_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 
 def _load_distribution_module():
@@ -46,6 +56,7 @@ def test_distribution_requires_app_and_offers_cli_selected_by_default():
         version="0.1.0",
         app_package="ShotQuill-app.pkg",
         cli_package="ShotQuill-cli.pkg",
+        uninstaller_package="ShotQuill-uninstaller.pkg",
     )
     root = ElementTree.fromstring(xml)
 
@@ -84,11 +95,15 @@ def test_distribution_separates_app_and_cli_packages():
             version="0.1.0",
             app_package="ShotQuill-app.pkg",
             cli_package="ShotQuill-cli.pkg",
+            uninstaller_package="ShotQuill-uninstaller.pkg",
         )
     )
 
     choices = _choices(root)
-    assert choices["choice.app"].find("pkg-ref").attrib["id"] == "com.wardmos.shotquill.app"
+    assert [ref.attrib["id"] for ref in choices["choice.app"].findall("pkg-ref")] == [
+        "com.wardmos.shotquill.app",
+        "com.wardmos.shotquill.uninstaller",
+    ]
     assert choices["choice.cli"].find("pkg-ref").attrib["id"] == "com.wardmos.shotquill.cli"
 
     packages = _package_refs(root)
@@ -96,6 +111,8 @@ def test_distribution_separates_app_and_cli_packages():
     assert packages["com.wardmos.shotquill.app"].text == "ShotQuill-app.pkg"
     assert packages["com.wardmos.shotquill.cli"].attrib["version"] == "0.1.0"
     assert packages["com.wardmos.shotquill.cli"].text == "ShotQuill-cli.pkg"
+    assert packages["com.wardmos.shotquill.uninstaller"].attrib["version"] == "0.1.0"
+    assert packages["com.wardmos.shotquill.uninstaller"].text == "ShotQuill-uninstaller.pkg"
     assert all("auth" not in package.attrib for package in packages.values())
 
 
@@ -115,6 +132,7 @@ def test_distribution_rejects_unsafe_values(version, package):
             version=version,
             app_package=package,
             cli_package="ShotQuill-cli.pkg",
+            uninstaller_package="ShotQuill-uninstaller.pkg",
         )
 
 
@@ -128,12 +146,19 @@ def test_pkg_builder_replaces_the_dmg_container():
     assert "hdiutil" not in script
     assert "SHOTQUILL_DMG_FORMAT" not in script
     assert 'installer -showChoicesXML -pkg "$pkg" -target /' in script
+    assert "install -m 0755 packaging/macos/uninstall_pkg" in script
+    assert '"$uninstaller_root/com.wardmos.shotquill.uninstall"' in script
     assert "--install-location /Applications" in script
-    assert "--install-location /usr/local/bin" in script
-    assert '"$cli_root/shotquill"' in script
-    assert '"$cli_root/squill"' in script
-    assert "$cli_root/usr/local" not in script
+    assert "--install-location /Library/PrivilegedHelperTools" in script
+    assert "--nopayload" in script
     assert '--scripts "$cli_scripts"' in script
+    assert "xcrun clang" in script
+    assert "cli_link_installer.c" in script
+    assert "cli_arch_flags=(-arch arm64 -arch x86_64)" in script
+    assert 'MACOS_MIN_VERSION="13.0"' in script
+    assert '-mmacosx-version-min="$MACOS_MIN_VERSION"' in script
+    assert "LSMinimumSystemVersion" in script
+    assert 'codesign --force --sign - "$cli_scripts/postinstall"' in script
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="macOS build script requires Bash")
@@ -206,18 +231,222 @@ def test_cli_preinstall_accepts_an_existing_shotquill_link(tmp_path):
     assert result.returncode == 0
 
 
-def test_homebrew_cask_installs_pkg_without_the_pkg_cli_component():
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS package script requires POSIX links")
+def test_cli_preinstall_rejects_a_target_with_a_trailing_newline(tmp_path):
+    command_dir = tmp_path / "usr" / "local" / "bin"
+    command_dir.mkdir(parents=True)
+    target = "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill\n"
+    (command_dir / "shotquill").symlink_to(target)
+
+    result = subprocess.run(
+        ["bash", str(_CLI_PREINSTALL), "component.pkg", "/usr/local/bin", str(tmp_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "refusing to replace" in result.stderr
+
+
+def test_cli_postinstall_uses_atomic_no_replace_and_generation_checked_rollback():
+    source = _CLI_LINK_INSTALLER.read_text(encoding="utf-8")
+
+    assert "renameatx_np" in source
+    assert "RENAME_EXCL" in source
+    assert "rename_exclusive" in source
+    assert "AT_SYMLINK_NOFOLLOW" in source
+    assert "identity_matches_at" in source
+    assert "rollback_created_entries" in source
+    assert "verify_directory_chain" in source
+    assert '"/private/tmp"' in source
+    assert "verify_sticky_temp_directory" in source
+    assert "verify_same_filesystem" in source
+    assert "acl_get_fd_np" in source
+    assert "acl_set_fd_np" in source
+    assert "acl_delete_fd_np" not in source
+    assert "fchown(fd, 0" in source
+    assert "fchmod(fd, 0700)" in source
+    assert "verify_directory_empty" in source
+    assert "umask(0022)" in source
+    assert "unlinkat(bin_fd, entry->name" not in source
+
+
+def test_cli_package_scripts_have_valid_bash_syntax():
+    result = subprocess.run(
+        ["bash", "-n", str(_CLI_PREINSTALL)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"{_CLI_PREINSTALL}: {result.stderr}"
+
+
+@pytest.mark.parametrize(
+    "script",
+    (_TAP_SCRIPT, _PKG_SMOKE_SCRIPT, _CASK_SMOKE_SCRIPT),
+)
+def test_macos_release_scripts_have_valid_bash_syntax(script):
+    result = subprocess.run(
+        ["bash", "-n", str(script)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"{script}: {result.stderr}"
+
+
+def test_tap_script_can_render_the_exact_cask_without_publishing(tmp_path):
+    output = tmp_path / "Casks" / "shotquill.rb"
+    result = subprocess.run(
+        ["bash", str(_TAP_SCRIPT), "v0.1.0", "a" * 64, "b" * 64],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "SHOTQUILL_CASK_OUTPUT": str(output), "TAP_TOKEN": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    cask = output.read_text(encoding="utf-8")
+    assert 'version "0.1.0"' in cask
+    assert f'sha256 arm:   "{"a" * 64}"' in cask
+    assert f'intel: "{"b" * 64}"' in cask
+    assert 'depends_on macos: ">= :ventura"' in cask
+    assert '"attributeSetting" => 1' in cask
+    assert '"$helper" --cli-coordinator' in cask
+
+
+@pytest.mark.parametrize(
+    ("version", "arm_sha", "intel_sha"),
+    (
+        ('0.1.0"\nend', "a" * 64, "b" * 64),
+        ("0.1.0", "not-a-digest", "b" * 64),
+        ("0.1.0", "a" * 64, "B" * 64),
+    ),
+)
+def test_tap_script_rejects_unsafe_release_metadata(version, arm_sha, intel_sha, tmp_path):
+    output = tmp_path / "shotquill.rb"
+    result = subprocess.run(
+        ["bash", str(_TAP_SCRIPT), version, arm_sha, intel_sha],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "SHOTQUILL_CASK_OUTPUT": str(output)},
+    )
+
+    assert result.returncode == 2
+    assert not output.exists()
+
+
+def test_package_and_release_workflows_share_macos_smoke_scripts():
+    for workflow in (_PACKAGE_WORKFLOW, _RELEASE_WORKFLOW):
+        source = workflow.read_text(encoding="utf-8")
+        assert "packaging/macos/smoke_pkg.sh" in source
+        assert "packaging/macos/smoke_cask.sh" in source
+
+
+def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
+    source = _PKG_SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+    assert source.count("assert_no_existing_install") == 3
+    assert "/Applications/ShotQuill.app" in source
+    assert "/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall" in source
+    assert "/opt/homebrew/Caskroom/shotquill" in source
+    assert "/usr/local/Caskroom/shotquill" in source
+    assert '"$USER_HOME/Library/LaunchAgents/com.wardmos.shotquill.plist"' in source
+    assert 'pkgutil --pkg-info "$receipt"' in source
+    assert "SHOTQUILL_PROBE_IDENTITY" in source
+    assert "SQUILL_PROBE_IDENTITY" in source
+    assert "ROOT_STAGE_ACL" in source
+    assert "stat -f '%d:%i' \"$staged\"" in source
+    assert '/bin/mv -n "$path" "$staged"' in source
+    assert '/bin/rm "$path"' not in source
+
+
+def test_homebrew_cask_uses_the_guarded_pkg_cli_component():
     script = _TAP_SCRIPT.read_text(encoding="utf-8")
 
     assert "ShotQuill-#{version}-#{arch}.pkg" in script
     assert 'pkg "ShotQuill-#{version}-#{arch}.pkg"' in script
     assert "allow_untrusted: true" in script
+    assert 'depends_on macos: ">= :ventura"' in script
+    assert "SHOTQUILL_CASK_OUTPUT" in script
     assert '"choiceIdentifier" => "choice.cli"' in script
-    assert '"attributeSetting" => 0' in script
-    assert 'pkgutil: "com.wardmos.shotquill.app"' in script
+    assert '"attributeSetting" => 1' in script
+    assert '"/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall"' in script
+    assert 'launchctl: "com.wardmos.shotquill"' not in script
+    assert 'uninstall quit:   "com.wardmos.shotquill"' in script
+    assert 'executable: "/usr/bin/env"' in script
+    assert '"$helper" --cli-coordinator' in script
+    assert "/bin/ls -lde" in script
+    assert '"-i"' in script
+    assert "pkgutil:" not in script
     assert "#{appdir}" not in script
-    assert 'binary "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"' in script
-    assert 'target: "shotquill"' in script
-    assert 'target: "squill"' in script
-    assert "sudo: true" in script
+    assert 'binary "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"' not in script
+    assert 'system_command "/usr/bin/xattr"' not in script
     assert ".dmg" not in script
+
+
+def test_pkg_uninstall_helper_revalidates_every_privileged_target():
+    script = _UNINSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert "/Applications/ShotQuill.app" in script
+    assert "com.wardmos.shotquill" in script
+    assert "/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall" in script
+    assert "/usr/local/bin/shotquill" in script
+    assert "/usr/local/bin/squill" in script
+    assert "readlink -n" in script
+    assert "shasum -a 256" in script
+    assert "codesign --verify --deep --strict" in script
+    assert "PlistBuddy" in script
+    assert "pkgutil --forget" in script
+    assert "pkgutil --files" not in script
+    assert "mktemp -d" in script
+    assert "--launch-gui-coordinator" in script
+    assert "--gui-coordinator" in script
+    assert "--cli-coordinator" in script
+    assert "--root-uninstall" in script
+    assert "require_user_handshake_directory" in script
+    assert "require_no_extended_acl" in script
+    assert "coordinator handshake already exists" in script
+    assert "terminate_running_app_processes" in script
+    assert "/usr/sbin/lsof" in script
+    assert "-d txt" in script
+    assert '[ ! -s "$error_file" ] || return 2' in script
+    assert "pgrep" not in script
+    assert "validate_bound_payload" in script
+    assert "reopen_app_if_present" in script
+    assert "show_gui_success" in script
+    assert "cleanup_current_user_payload" in script
+    assert "launchctl bootout" not in script
+    assert "--worker" not in script
+    assert "link_matches" in script
+    assert "work_device" in script
+    assert "cli_device" in script
+    assert "/bin/mv -n" in script
+    assert ".ShotQuill.uninstall.$$" not in script
+    assert "Pictures" not in script
+    assert "Application Support" not in script
+
+
+def test_pkg_uninstall_helper_only_removes_the_canonical_launch_agent():
+    script = _UNINSTALL_HELPER.read_text(encoding="utf-8")
+    contents = build_launch_agent_plist(
+        LAUNCH_AGENT_LABEL,
+        ["/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"],
+    ).encode("utf-8")
+    digest = hashlib.sha256(contents).hexdigest()
+
+    assert f'CANONICAL_LAUNCH_AGENT_SHA256="{digest}"' in script
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS helper requires Bash")
+def test_pkg_uninstall_helper_has_valid_bash_syntax():
+    result = subprocess.run(
+        ["bash", "-n", str(_UNINSTALL_HELPER)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr

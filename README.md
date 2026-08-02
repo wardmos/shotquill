@@ -94,7 +94,7 @@ extract text, copy, save, or pin the result without breaking your flow.
 
 | Platform | Core support | Notes |
 | --- | --- | --- |
-| **macOS** | Full GUI, smart capture, editor, global hotkeys, window enumeration, on-device OCR, CLI / MCP | Primary and most complete platform; ScreenCaptureKit capture on macOS 14+, with a CoreGraphics fallback otherwise. |
+| **macOS 13+** | Full GUI, smart capture, editor, global hotkeys, window enumeration, on-device OCR, CLI / MCP | Primary and most complete platform; ScreenCaptureKit capture on macOS 14+, with a CoreGraphics fallback on macOS 13. |
 | **Linux / X11** | Full GUI, editor, CLI / MCP, window enumeration, global hotkeys, blocklist redaction | OCR requires Tesseract and the desired language packs. |
 | **Linux / Wayland** | GUI and editor; capture for GUI / CLI / MCP uses `xdg-desktop-portal` and the compositor's picker | No window enumeration by design; global hotkeys require GlobalShortcuts portal support. |
 | **Windows** | GUI, editor, CLI / MCP, Win32 window enumeration, global hotkeys, launch at login | Release ZIP is x64 and omits OCR; the experimental WinRT backend requires the `windows-ocr` extra in a pip install. |
@@ -111,9 +111,11 @@ extract text, copy, save, or pin the result without breaking your flow.
 brew install --cask wardmos/tap/shotquill
 ```
 
-`brew upgrade --cask shotquill` keeps it current. The cask also puts both
-`shotquill` and `squill` on `PATH` for CLI / MCP use. Because this installs a
-system package under `/Applications`, macOS or Homebrew may request
+`brew upgrade --cask shotquill` keeps it current. The cask selects the guarded
+PKG CLI component, which puts both `shotquill` and `squill` under
+`/usr/local/bin` for CLI / MCP use. Direct PKG and Homebrew installs therefore
+use the same links rather than installing duplicate CLIs. Because this installs
+a system package under `/Applications`, macOS or Homebrew may request
 administrator authorization.
 
 **Direct download:** grab the `.pkg` from
@@ -123,7 +125,9 @@ roughly twice the size) — open it and follow Installer. The component page
 always installs ShotQuill in `/Applications`; **Command Line Interface** is
 selected by default so `shotquill` and `squill` are added under `/usr/local/bin`.
 Deselect it for an app-only installation. Each release ships a `.sha256` sidecar
-so you can verify the download:
+so you can verify the download. Installer choices do not remove components from
+an older installation: to change an existing CLI-enabled install to app-only,
+use the built-in uninstaller and then reinstall with CLI deselected.
 
 ```bash
 shasum -a 256 -c ShotQuill-*.pkg.sha256
@@ -709,34 +713,56 @@ per-app keylogging-style permission to grant.
 
 ### macOS
 
+ShotQuill can inspect the active installation channel and preview everything an
+uninstall would change:
+
+```bash
+squill uninstall --dry-run
+squill uninstall                 # preview, then ask for confirmation
+squill uninstall --yes           # skip the prompt in an interactive terminal
+```
+
+The same action is available from **Settings → Uninstall ShotQuill…** for a
+direct PKG installation. Homebrew installations are handed back to Homebrew and
+show the command below instead of allowing the app to delete Brew-owned files:
+
 ```bash
 brew uninstall --cask shotquill        # Homebrew install
 ```
 
-For a direct PKG install, if you selected the CLI component, first confirm that
-both links point into ShotQuill and remove them:
+The uninstall flow removes only the validated ShotQuill app, its protected
+one-shot helper, its two guarded CLI links, the three package receipts that
+exist, and its launch-at-login entry. After administrator authorization, the
+protected coordinator has already replaced or closed every App-backed process.
+It binds the app, helper, and CLI-link identities before authorization, then
+rechecks the bundle identifier, code-signature integrity, ownership, filesystem
+boundaries, content generation, ACLs, and literal link targets before deleting
+anything. Cancelling authorization, or a failure before app removal, reopens
+ShotQuill. A partial cleanup after app removal instead shows recovery steps; the
+CLI waits and returns the final result. Settings,
+blocklist/allowlist rules, logs, recorded sessions, screenshots, and custom
+save folders are preserved.
 
-```bash
-target=/Applications/ShotQuill.app/Contents/MacOS/ShotQuill
-for command in shotquill squill; do
-  path="/usr/local/bin/$command"
-  if [ "$(readlink "$path" 2>/dev/null)" = "$target" ]; then
-    sudo rm -f "$path"
-  else
-    echo "Keeping $path: it is not a ShotQuill PKG link"
-  fi
-done
-```
+During a PKG-based Homebrew upgrade, a running ShotQuill is reopened by Homebrew and
+recreates an enabled launch-at-login entry. If ShotQuill was not running during
+the upgrade, open it once afterward to restore that entry from the preserved
+setting.
 
-The loop leaves any command with a different target untouched. Deselecting the
-CLI during a later PKG install does not remove links installed by an earlier
-version. Then drag
-`/Applications/ShotQuill.app` to the Trash and forget the receipts that exist:
+Before the first upgrade from the older DMG-based cask, quit ShotQuill manually,
+run `brew upgrade --cask shotquill`, and reopen it afterward. The legacy cask did
+not yet contain the automatic quit/reopen coordinator. Do not install a direct
+PKG over that still-registered legacy cask. If that mixed state already exists,
+upgrade or reinstall the current cask once so Homebrew records the PKG-based
+uninstall coordinator, then uninstall normally.
 
-```bash
-sudo pkgutil --forget com.wardmos.shotquill.app
-sudo pkgutil --forget com.wardmos.shotquill.cli  # only if the CLI was installed
-```
+If a current PKG installation reports that its protected helper is missing or
+unsafe, reinstall the same or newer ShotQuill PKG first, then use the built-in
+uninstaller. Do not execute an unverified helper with `sudo`.
+
+For an older direct-PKG release that never shipped the protected helper,
+install the current PKG over it and then use the built-in uninstaller. This is
+safer than manually deleting receipt-listed paths, which may have been replaced
+by another tool since the older package was installed.
 
 ShotQuill keeps no hidden state beyond these per-user files — remove them for
 a clean slate. Headless captures without an explicit output path use a private

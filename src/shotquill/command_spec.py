@@ -683,6 +683,26 @@ REGISTRY: tuple[Command, ...] = (
         handler="mcp",
     ),
     Command(
+        cli_path=("uninstall",),
+        summary="uninstall ShotQuill on macOS while preserving user data",
+        description=(
+            "Detect whether Homebrew or the direct macOS PKG owns ShotQuill, preview the exact "
+            "removal plan, and delegate to that installer. Settings, recordings, logs, "
+            "screenshots, and custom save folders are always preserved. Without --yes an "
+            "interactive terminal asks for confirmation; execution always requires a terminal. "
+            "This command is not exposed over MCP."
+        ),
+        params=(
+            Param("dry_run", "show the removal plan without changing anything", kind="flag"),
+            Param(
+                "yes",
+                "confirm the displayed plan without a prompt (still requires a terminal)",
+                kind="flag",
+            ),
+        ),
+        handler="uninstall",
+    ),
+    Command(
         cli_path=("desktop", "install"),
         summary="install the Linux .desktop entry and icon under ~/.local/share",
         description=(

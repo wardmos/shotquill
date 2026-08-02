@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QKeyCombination, Qt
+from PySide6.QtCore import QEvent, QKeyCombination, Qt, Signal
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -263,6 +263,8 @@ class _PermissionRow(QWidget):
 
 
 class SettingsDialog(QDialog):
+    uninstall_requested = Signal()
+
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
@@ -394,6 +396,13 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
+        if sys.platform == "darwin":
+            self._uninstall_button = buttons.addButton(
+                t("settings.uninstall"), QDialogButtonBox.ButtonRole.ActionRole
+            )
+            self._uninstall_button.clicked.connect(self.uninstall_requested.emit)
+        else:
+            self._uninstall_button = None
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)

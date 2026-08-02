@@ -12,15 +12,17 @@ format, and UI language are editable in Settings.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QProcess, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog, QSystemTrayIcon
 
-from shotquill import __version__, debug_log, headless, permissions, redact
+from shotquill import __version__, debug_log, headless, permissions, redact, uninstall
 from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
@@ -39,6 +41,9 @@ from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
 
 _LOG = debug_log.get_logger(__name__)
+_UNINSTALL_LAUNCH_TIMEOUT_MS = 45_000
+_UNINSTALL_TERM_GRACE_MS = 2_000
+_UNINSTALL_TIMEOUT_DETAIL = "the protected uninstall launcher timed out"
 
 
 def _build_icon() -> QIcon:
@@ -152,6 +157,12 @@ class _HotkeyBridge(QObject):
     fullscreen_requested = Signal()
 
 
+class _UninstallProbeBridge(QObject):
+    """Returns slow installer inspection results to the Qt thread."""
+
+    finished = Signal(int, object, object)
+
+
 class ShotquillApp(QObject):
     """Owns the tray icon, hotkeys, capturer, overlays, and editor windows.
 
@@ -181,6 +192,17 @@ class ShotquillApp(QObject):
         self._windows: list[object] = []  # keep overlays/editors alive
         self._settings_dialog: SettingsDialog | None = None
         self._settings_shelved = False  # Settings hidden while a capture runs
+        self._uninstall_probe_running = False
+        self._uninstall_probe_generation = 0
+        self._uninstall_probe_thread: threading.Thread | None = None
+        self._uninstall_process: QProcess | None = None
+        self._uninstall_launch_timer: QTimer | None = None
+        self._uninstall_kill_timer: QTimer | None = None
+        self._uninstall_launcher_timed_out = False
+        self._uninstall_progress: QProgressDialog | None = None
+        self._uninstall_interaction_suspended = False
+        self._capture_actions: tuple[QAction, ...] = ()
+        self._quit_action: QAction | None = None
         self._pending_permission_prompt: str | None = None
         # Blocklisted windows on screen for the current smart-capture session
         # (id → window); refused on click, skipped in the hover preview.
@@ -208,6 +230,8 @@ class ShotquillApp(QObject):
         self._bridge.fullscreen_requested.connect(
             self._capture_fullscreen, Qt.ConnectionType.QueuedConnection
         )
+        self._uninstall_probe_bridge = _UninstallProbeBridge(self)
+        self._uninstall_probe_bridge.finished.connect(self._uninstall_probe_finished)
 
         self._tray = QSystemTrayIcon(_build_icon(), self._app)
         self._tray.setToolTip("ShotQuill")
@@ -233,6 +257,9 @@ class ShotquillApp(QObject):
         smart.triggered.connect(self._capture_smart)
         fullscreen = QAction(f"{t('menu.fullscreen')}\t{fullscreen_key}", menu)
         fullscreen.triggered.connect(self._capture_fullscreen)
+        captures_enabled = not self._uninstall_interaction_suspended
+        smart.setEnabled(captures_enabled)
+        fullscreen.setEnabled(captures_enabled)
         open_folder = QAction(t("menu.open_folder"), menu)
         open_folder.triggered.connect(self._open_save_folder)
         settings = QAction(t("menu.settings"), menu)
@@ -240,7 +267,8 @@ class ShotquillApp(QObject):
         about = QAction(t("menu.about"), menu)
         about.triggered.connect(self._show_about)
         quit_action = QAction(t("menu.quit"), menu)
-        quit_action.triggered.connect(self._app.quit)
+        quit_action.setEnabled(self._uninstall_process is None)
+        quit_action.triggered.connect(self._request_quit)
 
         menu.addAction(smart)
         menu.addAction(fullscreen)
@@ -253,6 +281,14 @@ class ShotquillApp(QObject):
 
         self._tray.setContextMenu(menu)
         self._menu = menu  # keep a reference
+        self._capture_actions = (smart, fullscreen)
+        self._quit_action = quit_action
+
+    def _request_quit(self) -> None:
+        """Keep the app alive until the uninstall coordinator is ready."""
+        if self._uninstall_process is not None:
+            return
+        self._app.quit()
 
     def _apply_permission_gated_hotkeys(self) -> None:
         if self._needs_screen_recording_permission():
@@ -349,6 +385,8 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_fullscreen(self) -> None:
+        if self._uninstall_interaction_suspended:
+            return
         operation_id = debug_log.new_operation_id("capture")
         previous = self._current_debug_id
         self._current_debug_id = operation_id
@@ -387,6 +425,8 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_smart(self) -> None:
+        if self._uninstall_interaction_suspended:
+            return
         operation_id = debug_log.new_operation_id("capture")
         self._current_debug_id = operation_id
         self._smart_debug_id = operation_id
@@ -935,11 +975,292 @@ class ShotquillApp(QObject):
             return
         dialog = SettingsDialog(self._config)
         dialog.accepted.connect(self._apply_settings)
+        dialog.uninstall_requested.connect(self._request_uninstall)
         dialog.finished.connect(self._forget_settings_dialog)
         self._settings_dialog = dialog
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _request_uninstall(self) -> None:
+        """Route uninstall through Brew or the fixed direct-PKG helper."""
+        if self._uninstall_probe_running or self._uninstall_process is not None:
+            return
+        self._uninstall_probe_running = True
+        self._uninstall_probe_generation += 1
+        generation = self._uninstall_probe_generation
+        self._show_uninstall_progress(t("uninstall.inspecting"), cancelable=True)
+        thread = threading.Thread(
+            target=self._probe_uninstall,
+            args=(generation,),
+            name="shotquill-uninstall-probe",
+            daemon=True,
+        )
+        self._uninstall_probe_thread = thread
+        thread.start()
+
+    def _probe_uninstall(self, generation: int) -> None:
+        try:
+            plan = uninstall.prepare_uninstall_plan()
+        except Exception as exc:  # noqa: BLE001 - GUI boundary reports probe failures
+            _LOG.exception("uninstall inspection failed")
+            self._uninstall_probe_bridge.finished.emit(generation, None, exc)
+            return
+        self._uninstall_probe_bridge.finished.emit(generation, plan, None)
+
+    @Slot(int, object, object)
+    def _uninstall_probe_finished(
+        self,
+        generation: int,
+        plan: object,
+        error: object,
+    ) -> None:
+        if generation != self._uninstall_probe_generation or not self._uninstall_probe_running:
+            return
+        self._uninstall_probe_running = False
+        self._uninstall_probe_thread = None
+        self._clear_uninstall_progress()
+        if error is not None:
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error=error),
+            )
+            return
+        if not isinstance(plan, uninstall.UninstallPlan):
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error="invalid uninstall plan"),
+            )
+            return
+        self._present_uninstall_plan(plan)
+
+    def _present_uninstall_plan(self, plan: uninstall.UninstallPlan) -> None:
+        """Show the channel-specific action after background inspection."""
+        preview = uninstall.format_uninstall_plan(
+            plan,
+            language=self._config.language(),
+        )
+
+        if not plan.can_execute:
+            QMessageBox.warning(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.unavailable").format(plan=preview),
+            )
+            return
+        if plan.channel is uninstall.InstallChannel.HOMEBREW:
+            if plan.brew_command is None:  # Defensive: executable plans always include it.
+                QMessageBox.warning(
+                    self._settings_dialog,
+                    t("uninstall.title"),
+                    t("uninstall.unavailable").format(plan=preview),
+                )
+                return
+            QMessageBox.information(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.brew").format(
+                    command=shlex.join(plan.brew_command),
+                    plan=preview,
+                ),
+            )
+            return
+
+        if not self._confirm_uninstall(preview):
+            return
+        self._start_direct_uninstall(plan)
+
+    def _confirm_uninstall(self, preview: str) -> bool:
+        """Ask for explicit confirmation with Cancel as the safe default."""
+        dialog = QMessageBox(self._settings_dialog)
+        dialog.setWindowTitle(t("uninstall.title"))
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setText(t("uninstall.confirm").format(plan=preview))
+        uninstall_button = dialog.addButton(
+            t("uninstall.action"),
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        cancel_button = dialog.addButton(
+            t("uninstall.cancel"),
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        dialog.setDefaultButton(cancel_button)
+        dialog.setEscapeButton(cancel_button)
+        dialog.exec()
+        return dialog.clickedButton() is uninstall_button
+
+    def _show_uninstall_progress(self, message: str, *, cancelable: bool = False) -> None:
+        if self._settings_dialog is None:
+            return
+        self._clear_uninstall_progress()
+        cancel_text = t("uninstall.cancel") if cancelable else ""
+        progress = QProgressDialog(message, cancel_text, 0, 0, self._settings_dialog)
+        progress.setWindowTitle(t("uninstall.title"))
+        if cancelable:
+            progress.canceled.connect(self._cancel_uninstall_probe)
+        else:
+            progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        self._uninstall_progress = progress
+        progress.show()
+
+    def _cancel_uninstall_probe(self) -> None:
+        """Hide a slow read-only probe and ignore its eventual result."""
+        if not self._uninstall_probe_running:
+            return
+        self._uninstall_probe_generation += 1
+        self._uninstall_probe_running = False
+        self._uninstall_probe_thread = None
+        self._clear_uninstall_progress()
+
+    def _clear_uninstall_progress(self) -> None:
+        if self._uninstall_progress is None:
+            return
+        self._uninstall_progress.close()
+        self._uninstall_progress.deleteLater()
+        self._uninstall_progress = None
+
+    def _start_direct_uninstall(self, plan: uninstall.UninstallPlan) -> None:
+        """Start the protected post-exit coordinator without blocking Qt."""
+        try:
+            argv = uninstall.gui_coordinator_argv(
+                plan,
+                parent_pid=os.getpid(),
+                language=self._config.language(),
+            )
+        except (OSError, ValueError) as exc:
+            _LOG.exception("uninstall helper launch failed")
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error=exc),
+            )
+            return
+
+        process = QProcess(self)
+        process.setProgram(argv[0])
+        process.setArguments(list(argv[1:]))
+        process.finished.connect(self._uninstall_finished)
+        process.errorOccurred.connect(self._uninstall_process_error)
+        launch_timer = QTimer(self)
+        launch_timer.setSingleShot(True)
+        launch_timer.timeout.connect(self._uninstall_launch_timed_out)
+        self._uninstall_process = process
+        self._uninstall_launch_timer = launch_timer
+        self._uninstall_launcher_timed_out = False
+        self._uninstall_interaction_suspended = True
+        self._hotkeys.clear()
+        for action in self._capture_actions:
+            action.setEnabled(False)
+        if self._quit_action is not None:
+            self._quit_action.setEnabled(False)
+        self._show_uninstall_progress(t("uninstall.preparing"))
+        launch_timer.start(_UNINSTALL_LAUNCH_TIMEOUT_MS)
+        process.start()
+
+    def _stop_uninstall_timer(self, timer: QTimer | None) -> None:
+        if timer is None:
+            return
+        timer.stop()
+        timer.deleteLater()
+
+    def _release_uninstall_process(
+        self,
+        *,
+        restore_interaction: bool = True,
+        delete_process: bool = True,
+    ) -> None:
+        process = self._uninstall_process
+        self._uninstall_process = None
+        launch_timer = self._uninstall_launch_timer
+        self._uninstall_launch_timer = None
+        kill_timer = self._uninstall_kill_timer
+        self._uninstall_kill_timer = None
+        self._stop_uninstall_timer(launch_timer)
+        self._stop_uninstall_timer(kill_timer)
+        self._uninstall_launcher_timed_out = False
+        self._clear_uninstall_progress()
+        if restore_interaction:
+            self._uninstall_interaction_suspended = False
+            for action in self._capture_actions:
+                action.setEnabled(True)
+            self._apply_permission_gated_hotkeys()
+            if self._quit_action is not None:
+                self._quit_action.setEnabled(True)
+        if process is not None and delete_process:
+            process.deleteLater()
+
+    def _uninstall_launch_timed_out(self) -> None:
+        """Ask the launcher to exit so its EXIT trap can clean its coordinator."""
+        process = self._uninstall_process
+        if process is None or self._uninstall_launcher_timed_out:
+            return
+        self._uninstall_launcher_timed_out = True
+        self._stop_uninstall_timer(self._uninstall_launch_timer)
+        self._uninstall_launch_timer = None
+        _LOG.error("uninstall coordinator launcher timed out")
+        process.terminate()
+
+        kill_timer = QTimer(self)
+        kill_timer.setSingleShot(True)
+        kill_timer.timeout.connect(self._kill_timed_out_uninstall_launcher)
+        self._uninstall_kill_timer = kill_timer
+        kill_timer.start(_UNINSTALL_TERM_GRACE_MS)
+
+    def _kill_timed_out_uninstall_launcher(self) -> None:
+        """Force a stuck launcher down after allowing its TERM cleanup to run."""
+        process = self._uninstall_process
+        if process is None or not self._uninstall_launcher_timed_out:
+            return
+        process.finished.connect(lambda *_args: process.deleteLater())
+        process.kill()
+        if self._uninstall_process is not process:
+            return
+        self._release_uninstall_process(delete_process=False)
+        QMessageBox.critical(
+            self._settings_dialog,
+            t("uninstall.title"),
+            t("uninstall.start_failed").format(error=_UNINSTALL_TIMEOUT_DETAIL),
+        )
+
+    def _uninstall_process_error(self, error: QProcess.ProcessError) -> None:
+        if error != QProcess.ProcessError.FailedToStart or self._uninstall_process is None:
+            return
+        message = self._uninstall_process.errorString()
+        self._release_uninstall_process()
+        _LOG.error("uninstall authorization process failed to start: %s", message)
+        QMessageBox.critical(
+            self._settings_dialog,
+            t("uninstall.title"),
+            t("uninstall.start_failed").format(error=message),
+        )
+
+    def _uninstall_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        process = self._uninstall_process
+        if process is None:
+            return
+        stderr = bytes(process.readAllStandardError()).decode("utf-8", errors="replace")
+        timed_out = self._uninstall_launcher_timed_out
+        succeeded = (
+            not timed_out and exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0
+        )
+        self._release_uninstall_process(restore_interaction=not succeeded)
+
+        if not succeeded:
+            detail = _UNINSTALL_TIMEOUT_DETAIL if timed_out else stderr.strip() or str(exit_code)
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error=detail),
+            )
+            return
+
+        self._app.quit()
 
     def _apply_settings(self) -> None:
         debug_log.configure(self._config)

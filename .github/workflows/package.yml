@@ -72,20 +72,13 @@ jobs:
         # it is the strictest of the three arches — the thinned arm64/x86_64
         # release slices can't fail independently of it.
         run: bash packaging/macos/build_pkg.sh "${{ steps.smoke.outputs.version }}" universal2
-      - name: Inspect PKG payload
+      - name: Exercise universal2 PKG install and uninstall
+        run: bash packaging/macos/smoke_pkg.sh dist/ShotQuill-*-universal2.pkg
+      - name: Validate generated Homebrew cask
         run: |
-          packages=(dist/ShotQuill-*-universal2.pkg)
-          test "${#packages[@]}" -eq 1
-          pkg="${packages[0]}"
-          expanded=build/pkg-expanded
-          pkgutil --expand-full "$pkg" "$expanded"
-          test -f "$expanded/Distribution"
-          find "$expanded" -path "*/ShotQuill.app/Contents/MacOS/ShotQuill" -type f | grep -q .
-          for command in shotquill squill; do
-            link=$(find "$expanded" -type l -name "$command" -print | sed -n '1p')
-            test -n "$link"
-            test "$(readlink "$link")" = "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"
-          done
+          arm_sha="$(printf 'a%.0s' {1..64})"
+          intel_sha="$(printf 'b%.0s' {1..64})"
+          bash packaging/macos/smoke_cask.sh v0.0.0 "$arm_sha" "$intel_sha"
       - name: Upload PKG artifact
         uses: actions/upload-artifact@v7
         with:

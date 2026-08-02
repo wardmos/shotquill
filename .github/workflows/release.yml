@@ -77,7 +77,7 @@ jobs:
     # gate and the Release shell are their own jobs.
     needs: [gate, create-release]
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       arm_sha: ${{ steps.sha.outputs.arm_sha }}
       intel_sha: ${{ steps.sha.outputs.intel_sha }}
@@ -104,6 +104,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Build .app + PKGs (arm64, x86_64, universal2)
         run: bash packaging/macos/build_pkg.sh "${{ github.ref_name }}"
+      - name: Exercise universal2 PKG install and uninstall
+        run: bash packaging/macos/smoke_pkg.sh dist/ShotQuill-*-universal2.pkg
       - name: Compute SHA256
         id: sha
         run: |
@@ -114,6 +116,12 @@ jobs:
           done
           echo "arm_sha=$(awk '{print $1}' ShotQuill-*-arm64.pkg.sha256)" >> "$GITHUB_OUTPUT"
           echo "intel_sha=$(awk '{print $1}' ShotQuill-*-x86_64.pkg.sha256)" >> "$GITHUB_OUTPUT"
+      - name: Validate generated Homebrew cask
+        run: |
+          bash packaging/macos/smoke_cask.sh \
+            "${{ github.ref_name }}" \
+            "${{ steps.sha.outputs.arm_sha }}" \
+            "${{ steps.sha.outputs.intel_sha }}"
       - name: Add PKGs to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b

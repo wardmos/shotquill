@@ -1,0 +1,1060 @@
+#!/bin/bash -p
+# Remove only the fixed system payload owned by the ShotQuill product PKG.
+# User settings, recordings, logs, screenshots, and custom save folders are
+# deliberately outside this helper's allowlist.
+set -Eeuo pipefail
+umask 077
+
+APP="/Applications/ShotQuill.app"
+EXECUTABLE_NAME="ShotQuill"
+EXPECTED_BUNDLE_ID="com.wardmos.shotquill"
+EXPECTED_EXECUTABLE="/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"
+HELPER_DIR="/Library/PrivilegedHelperTools"
+HELPER="/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall"
+APP_RECEIPT="com.wardmos.shotquill.app"
+CLI_RECEIPT="com.wardmos.shotquill.cli"
+UNINSTALL_RECEIPT="com.wardmos.shotquill.uninstaller"
+LAUNCH_AGENT_LABEL="com.wardmos.shotquill"
+LAUNCH_AGENT_NAME="$LAUNCH_AGENT_LABEL.plist"
+CANONICAL_LAUNCH_AGENT_SHA256="0dd944cfff165d814ee0ad13aa63ecb3ca30f0f576a39456a2031cfd79092f77"
+
+die() {
+  if [ "${SHOTQUILL_UNINSTALL_COORDINATOR:-}" = "1" ]; then
+    /usr/bin/logger -t shotquill-uninstall "$*" || true
+  fi
+  echo "shotquill-uninstall: $*" >&2
+  exit 1
+}
+
+mode_for() {
+  local permissions
+  permissions="$(/usr/bin/stat -f '%Lp' "$1")" || die "cannot stat $1"
+  echo $((8#$permissions))
+}
+
+identity_for() {
+  /usr/bin/stat -f '%d:%i' "$1"
+}
+
+hash_file() {
+  local output digest
+  output="$(/usr/bin/shasum -a 256 "$1")" || die "cannot hash $1"
+  digest="${output%% *}"
+  [[ "$digest" =~ ^[0-9a-f]+$ ]] && [ "${#digest}" -eq 64 ] \
+    || die "invalid SHA-256 digest for $1"
+  echo "$digest"
+}
+
+hash_link_target() {
+  local output digest
+  output="$(/usr/bin/readlink -n "$1" | /usr/bin/shasum -a 256)" \
+    || die "cannot hash link target $1"
+  digest="${output%% *}"
+  [[ "$digest" =~ ^[0-9a-f]+$ ]] && [ "${#digest}" -eq 64 ] \
+    || die "invalid link digest for $1"
+  echo "$digest"
+}
+
+require_no_extended_acl() {
+  local acl_entry
+  acl_entry="$(LC_ALL=C /bin/ls -lde "$1" | /usr/bin/sed -n '2p')" \
+    || die "cannot inspect ACLs on $1"
+  [ -z "$acl_entry" ] || die "$1 has an extended ACL"
+}
+
+require_root_owned_nonwritable() {
+  local path="$1"
+  local owner mode
+  owner="$(/usr/bin/stat -f '%u' "$path")" || die "cannot stat $path"
+  mode="$(mode_for "$path")" || die "cannot read permissions for $path"
+  [ "$owner" -eq 0 ] || die "$path is not owned by root"
+  (( (mode & 8#022) == 0 )) || die "$path is writable by group or other"
+  require_no_extended_acl "$path"
+}
+
+require_protected_directory() {
+  local path="$1"
+  [ -d "$path" ] && [ ! -L "$path" ] || die "$path is not a physical directory"
+  require_root_owned_nonwritable "$path"
+}
+
+require_regular_file() {
+  local path="$1"
+  [ -f "$path" ] && [ ! -L "$path" ] || die "$path is not a regular file"
+  require_root_owned_nonwritable "$path"
+}
+
+link_matches() {
+  local path="$1"
+  local actual expected marker
+  marker=$'\034'
+  [ -L "$path" ] || return 1
+  # BSD readlink appends a presentation newline unless -n is supplied. The
+  # marker prevents command substitution from trimming newlines that are part
+  # of the literal target itself.
+  actual="$(/usr/bin/readlink -n "$path" 2>/dev/null; /usr/bin/printf '\034')"
+  expected="$EXPECTED_EXECUTABLE$marker"
+  [ "$actual" = "$expected" ]
+}
+
+validate_generation_value() {
+  local digest
+  case "$1" in
+    missing|preserve) return 0 ;;
+  esac
+  [[ "$1" =~ ^[0-9]+:[0-9]+:[0-9a-f]+$ ]] || return 1
+  digest="${1##*:}"
+  [ "${#digest}" -eq 64 ]
+}
+
+validate_pid() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+validate_receipt_mask() {
+  [[ "$1" =~ ^r[01][01][01]$ ]]
+}
+
+direct_channel_is_clear() {
+  local caskroom
+  for caskroom in \
+    /opt/homebrew/Caskroom/shotquill \
+    /usr/local/Caskroom/shotquill; do
+    if [ -e "$caskroom" ] || [ -L "$caskroom" ]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+require_direct_channel() {
+  direct_channel_is_clear \
+    || die "Homebrew registered ShotQuill after the uninstall preview; use brew uninstall"
+}
+
+require_private_user_directory() {
+  local path="$1"
+  local expected_uid="$2"
+  local owner mode
+  [[ "$path" =~ ^/private/tmp/com[.]wardmos[.]shotquill[.](uninstall|cleanup)[.][A-Za-z0-9]+$ ]] \
+    || die "invalid private work directory"
+  [ -d "$path" ] && [ ! -L "$path" ] \
+    || die "coordinator handshake directory is not physical"
+  owner="$(/usr/bin/stat -f '%u' "$path")" \
+    || die "cannot identify coordinator handshake owner"
+  mode="$(mode_for "$path")" || die "cannot read coordinator handshake permissions"
+  [ "$owner" = "$expected_uid" ] && (( mode == 8#700 )) \
+    || die "coordinator handshake directory is not private"
+  require_no_extended_acl "$path"
+}
+
+require_user_handshake_directory() {
+  [[ "$1" =~ ^/private/tmp/com[.]wardmos[.]shotquill[.]uninstall[.][A-Za-z0-9]+$ ]] \
+    || die "invalid coordinator handshake directory"
+  require_private_user_directory "$1" "$2"
+}
+
+validate_app() {
+  local app="$1"
+  local info_plist="$app/Contents/Info.plist"
+  local executable="$app/Contents/MacOS/$EXECUTABLE_NAME"
+  local signature_directory="$app/Contents/_CodeSignature"
+  local signature_resources="$signature_directory/CodeResources"
+  local bundle_id executable_name
+
+  require_protected_directory "$app"
+  require_protected_directory "$app/Contents"
+  require_protected_directory "$app/Contents/MacOS"
+  require_protected_directory "$app/Contents/Resources"
+  require_protected_directory "$signature_directory"
+  require_regular_file "$info_plist"
+  require_regular_file "$executable"
+  require_regular_file "$signature_resources"
+
+  bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")" \
+    || die "cannot read the bundle identifier"
+  [ "$bundle_id" = "$EXPECTED_BUNDLE_ID" ] \
+    || die "bundle identifier does not match ShotQuill"
+  executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")" \
+    || die "cannot read the bundle executable"
+  [ "$executable_name" = "$EXECUTABLE_NAME" ] \
+    || die "bundle executable does not match ShotQuill"
+  /usr/bin/codesign --verify --deep --strict "$app" \
+    || die "app signature verification failed"
+}
+
+app_seal_for() {
+  local app="$1"
+  local info_hash executable_hash resources_hash output digest
+  info_hash="$(hash_file "$app/Contents/Info.plist")" \
+    || die "cannot seal app metadata"
+  executable_hash="$(hash_file "$app/Contents/MacOS/$EXECUTABLE_NAME")" \
+    || die "cannot seal app executable"
+  resources_hash="$(hash_file "$app/Contents/_CodeSignature/CodeResources")" \
+    || die "cannot seal app resources"
+  output="$(
+    /usr/bin/printf '%s\n%s\n%s\n' \
+      "$info_hash" "$executable_hash" "$resources_hash" \
+      | /usr/bin/shasum -a 256
+  )" || die "cannot seal app generation"
+  digest="${output%% *}"
+  [[ "$digest" =~ ^[0-9a-f]+$ ]] && [ "${#digest}" -eq 64 ] \
+    || die "invalid app generation digest"
+  echo "$digest"
+}
+
+file_generation() {
+  local path="$1"
+  local identity digest
+  identity="$(identity_for "$path")" || die "cannot identify $path"
+  digest="$(hash_file "$path")" || die "cannot hash $path"
+  echo "$identity:$digest"
+}
+
+validate_tree() {
+  local app="$1"
+  local expected_device="$2"
+  local manifest="$3"
+  local entry owner mode device
+
+  /usr/bin/find -x "$app" ! -type l -print0 > "$manifest" \
+    || die "cannot inspect the app payload"
+  while IFS= read -r -d '' entry; do
+    device="$(/usr/bin/stat -f '%d' "$entry")" || die "cannot stat $entry"
+    [ "$device" = "$expected_device" ] || die "app contains another filesystem"
+    owner="$(/usr/bin/stat -f '%u' "$entry")" || die "$entry is not owned by root"
+    [ "$owner" -eq 0 ] || die "$entry is not owned by root"
+    mode="$(mode_for "$entry")" || die "cannot read permissions for $entry"
+    (( (mode & 8#022) == 0 )) || die "$entry is writable by group or other"
+    require_no_extended_acl "$entry"
+  done < "$manifest"
+}
+
+app_generation_for() {
+  local app="$1"
+  local identity seal
+  validate_app "$app"
+  identity="$(identity_for "$app")" || die "cannot identify the app"
+  seal="$(app_seal_for "$app")" || die "cannot seal the app"
+  echo "$identity:$seal"
+}
+
+capture_app_generation() {
+  if [ -e "$APP" ] || [ -L "$APP" ]; then
+    app_generation_for "$APP"
+  else
+    echo missing
+  fi
+}
+
+capture_link_generation() {
+  local identity digest
+  if link_matches "$1"; then
+    identity="$(identity_for "$1")" || die "cannot identify $1"
+    digest="$(hash_link_target "$1")" || die "cannot hash $1"
+    echo "$identity:$digest"
+  else
+    echo preserve
+  fi
+}
+
+capture_app_for_policy() {
+  case "$1" in
+    owned)
+      [ -e "$APP" ] && [ ! -L "$APP" ] \
+        || die "the confirmed ShotQuill app is no longer present"
+      capture_app_generation
+      ;;
+    missing)
+      [ ! -e "$APP" ] && [ ! -L "$APP" ] \
+        || die "a ShotQuill app appeared after the uninstall preview"
+      echo missing
+      ;;
+    *) die "invalid app uninstall scope" ;;
+  esac
+}
+
+capture_link_for_policy() {
+  local path="$1"
+  local policy="$2"
+  local generation
+  case "$policy" in
+    owned)
+      generation="$(capture_link_generation "$path")" \
+        || die "cannot capture $path"
+      [ "$generation" != "preserve" ] \
+        || die "$path changed after the uninstall preview"
+      echo "$generation"
+      ;;
+    preserve) echo preserve ;;
+    *) die "invalid command uninstall scope" ;;
+  esac
+}
+
+cli_directory_is_protected() {
+  local parent owner mode acl_entry
+  for parent in /usr /usr/local /usr/local/bin; do
+    [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
+    owner="$(/usr/bin/stat -f '%u' "$parent")" || return 1
+    mode="$(mode_for "$parent")" || return 1
+    acl_entry="$(LC_ALL=C /bin/ls -lde "$parent" | /usr/bin/sed -n '2p')" \
+      || return 1
+    [ "$owner" -eq 0 ] && (( (mode & 8#022) == 0 )) \
+      && [ -z "$acl_entry" ] || return 1
+  done
+}
+
+validate_bound_payload() {
+  local expected_app="$1"
+  local expected_helper="$2"
+  local expected_shotquill="$3"
+  local expected_squill="$4"
+  local current
+
+  current="$(file_generation "$HELPER")" \
+    || die "cannot identify the uninstall helper generation"
+  [ "$current" = "$expected_helper" ] \
+    || die "the uninstall helper changed after confirmation"
+
+  if [ "$expected_app" = "missing" ]; then
+    [ ! -e "$APP" ] && [ ! -L "$APP" ] \
+      || die "a new ShotQuill app appeared after confirmation"
+  else
+    validate_app "$APP"
+    current="$(capture_app_generation)" || die "cannot identify the app generation"
+    [ "$current" = "$expected_app" ] || die "the app changed after confirmation"
+  fi
+
+  validate_bound_link /usr/local/bin/shotquill "$expected_shotquill"
+  validate_bound_link /usr/local/bin/squill "$expected_squill"
+}
+
+validate_bound_link() {
+  local path="$1"
+  local expected="$2"
+  local current
+  [ "$expected" != "preserve" ] || return 0
+  current="$(capture_link_generation "$path")" \
+    || die "$path changed after confirmation"
+  [ "$current" = "$expected" ] \
+    || die "$path changed after confirmation"
+}
+
+list_running_app_pids() {
+  local error_file="$1"
+  local executable="$2"
+  local output status line
+  : > "$error_file" || return 2
+  [ -f "$error_file" ] && [ ! -L "$error_file" ] || return 2
+  if output="$(/usr/sbin/lsof -n -P -a -d txt -t "$executable" 2>"$error_file")"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ ! -s "$error_file" ] || return 2
+  if [ "$status" -eq 1 ] && [ -z "$output" ]; then
+    return 0
+  fi
+  [ "$status" -eq 0 ] || return 2
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    validate_pid "$line" || return 2
+    echo "$line"
+  done <<< "$output"
+}
+
+terminate_running_app_processes() {
+  local error_file="$1"
+  local executable="$2"
+  local pids pid attempt
+  if ! pids="$(list_running_app_pids "$error_file" "$executable")"; then
+    die "cannot determine whether ShotQuill is running"
+  fi
+  if [ -n "$pids" ]; then
+    while IFS= read -r pid; do
+      [ -z "$pid" ] || /bin/kill -TERM "$pid" 2>/dev/null || true
+    done <<< "$pids"
+  fi
+
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    if ! pids="$(list_running_app_pids "$error_file" "$executable")"; then
+      die "cannot determine whether ShotQuill exited"
+    fi
+    [ -n "$pids" ] || return 0
+    /bin/sleep 0.1
+  done
+  die "another ShotQuill process did not exit within 30 seconds"
+}
+
+stage_and_remove_link() {
+  local path="$1"
+  local expected="$2"
+  local workdir="$3"
+  local command quarantined current
+  [ "$expected" != "preserve" ] || return 0
+  command="${path##*/}"
+  quarantined="$workdir/$command.link"
+  current="$(capture_link_generation "$path")" || die "$path changed during cleanup"
+  [ "$current" = "$expected" ] \
+    || die "$path changed during cleanup"
+  /bin/mv "$path" "$quarantined" || die "cannot stage $path"
+  current="$(capture_link_generation "$quarantined")" \
+    || die "cannot identify staged $path"
+  if [ "$current" = "$expected" ]; then
+    /bin/rm "$quarantined"
+    return
+  fi
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    /bin/mv -n "$quarantined" "$path" \
+      || die "$path changed and could not be restored from $quarantined"
+  fi
+  die "$path changed during cleanup; no replacement was deleted"
+}
+
+remove_system_payload() {
+  local expected_app="$1"
+  local expected_helper="$2"
+  local expected_shotquill="$3"
+  local expected_squill="$4"
+  local install_channel="$5"
+  local receipt_mask="$6"
+  local workdir manifest staged_app staged_helper work_device app_device
+  local initial_identity cli_device current receipt receipt_index
+
+  if [ "$install_channel" = "direct" ]; then
+    require_direct_channel
+  fi
+  validate_bound_payload \
+    "$expected_app" "$expected_helper" "$expected_shotquill" "$expected_squill"
+
+  workdir="$(/usr/bin/mktemp -d "$HELPER_DIR/.shotquill-uninstall.XXXXXX")" \
+    || die "cannot create protected work directory"
+  require_protected_directory "$workdir"
+  manifest="$workdir/app.paths"
+  staged_app="$workdir/ShotQuill.app"
+  staged_helper="$workdir/uninstall.helper"
+  work_device="$(/usr/bin/stat -f '%d' "$workdir")" || die "cannot identify work directory"
+  if cli_directory_is_protected \
+    && { [ "$expected_shotquill" != "preserve" ] || [ "$expected_squill" != "preserve" ]; }; then
+    cli_device="$(/usr/bin/stat -f '%d' /usr/local/bin)" \
+      || die "cannot identify /usr/local/bin"
+    [ "$cli_device" = "$work_device" ] \
+      || die "/usr/local/bin is on another filesystem; refusing non-atomic cleanup"
+  fi
+
+  if [ "$expected_app" != "missing" ]; then
+    terminate_running_app_processes "$workdir/lsof.errors" "$EXPECTED_EXECUTABLE"
+    /bin/rm -f "$workdir/lsof.errors"
+  fi
+  validate_bound_payload \
+    "$expected_app" "$expected_helper" "$expected_shotquill" "$expected_squill"
+
+  if [ "$expected_app" != "missing" ]; then
+    initial_identity="${expected_app%:*}"
+    app_device="${initial_identity%%:*}"
+    [ "$app_device" = "$work_device" ] || die "app and protected work directory differ"
+    validate_tree "$APP" "$app_device" "$manifest"
+    [ "$(capture_app_generation)" = "$expected_app" ] \
+      || die "app changed during validation"
+    [ "$install_channel" != "direct" ] || require_direct_channel
+
+    /bin/mv "$APP" "$staged_app" || die "cannot stage the app for removal"
+    if [ "$(app_generation_for "$staged_app")" != "$expected_app" ]; then
+      if [ ! -e "$APP" ] && [ ! -L "$APP" ] \
+        && /bin/mv -n "$staged_app" "$APP"; then
+        /bin/rm -f "$manifest"
+        /bin/rmdir "$workdir" || true
+        die "app changed during staging and was restored; refusing deletion"
+      fi
+      die "a different app was staged and preserved at $staged_app"
+    fi
+    validate_app "$staged_app"
+    validate_tree "$staged_app" "$app_device" "$manifest"
+    [ "$(app_generation_for "$staged_app")" = "$expected_app" ] \
+      || die "staged app changed during validation"
+    terminate_running_app_processes \
+      "$workdir/lsof.errors" "$staged_app/Contents/MacOS/$EXECUTABLE_NAME"
+    /bin/rm -f "$workdir/lsof.errors"
+    [ "$(app_generation_for "$staged_app")" = "$expected_app" ] \
+      || die "staged app changed while processes were closing"
+    if [ "$install_channel" = "direct" ] && ! direct_channel_is_clear; then
+      if [ ! -e "$APP" ] && [ ! -L "$APP" ]; then
+        /bin/mv -n "$staged_app" "$APP" \
+          || die "Homebrew appeared and the staged app could not be restored"
+      fi
+      die "Homebrew registered ShotQuill during cleanup; the staged app was preserved"
+    fi
+    /usr/bin/find -x "$staged_app" -depth -delete \
+      || die "could not remove the staged app without crossing filesystems"
+  fi
+  /bin/rm -f "$manifest"
+
+  # Only root-mutably handle CLI entries when every directory parent is itself
+  # root-owned and non-writable. Intel Homebrew may own /usr/local/bin; in that
+  # layout the unprivileged coordinator (or Homebrew) removes its own links.
+  if cli_directory_is_protected; then
+    stage_and_remove_link /usr/local/bin/shotquill "$expected_shotquill" "$workdir"
+    stage_and_remove_link /usr/local/bin/squill "$expected_squill" "$workdir"
+  fi
+
+  [ ! -e "$APP" ] && [ ! -L "$APP" ] || die "a new app appeared during cleanup"
+  [ "$(file_generation "$HELPER")" = "$expected_helper" ] \
+    || die "a new uninstall helper appeared during cleanup"
+  [ "$install_channel" != "direct" ] || require_direct_channel
+
+  /bin/mv "$HELPER" "$staged_helper" || die "cannot stage the uninstall helper"
+  current="$(file_generation "$staged_helper")" \
+    || die "cannot identify the staged uninstall helper"
+  if [ "$current" != "$expected_helper" ]; then
+    /bin/mv -n "$staged_helper" "$HELPER" 2>/dev/null || true
+    die "the uninstall helper changed during staging and was preserved"
+  fi
+  if [ -e "$APP" ] || [ -L "$APP" ] || [ -e "$HELPER" ] || [ -L "$HELPER" ]; then
+    if [ ! -e "$HELPER" ] && [ ! -L "$HELPER" ]; then
+      /bin/mv -n "$staged_helper" "$HELPER" 2>/dev/null || true
+    fi
+    die "a new installation appeared during cleanup and was preserved"
+  fi
+
+  receipt_index=0
+  for receipt in "$APP_RECEIPT" "$CLI_RECEIPT"; do
+    receipt_index=$((receipt_index + 1))
+    if [ "${receipt_mask:$receipt_index:1}" = "1" ] \
+      && /usr/sbin/pkgutil --pkg-info "$receipt" >/dev/null 2>&1; then
+      /usr/sbin/pkgutil --forget "$receipt" >/dev/null
+    fi
+    [ "$install_channel" != "direct" ] || require_direct_channel
+    [ ! -e "$APP" ] && [ ! -L "$APP" ] \
+      && [ ! -e "$HELPER" ] && [ ! -L "$HELPER" ] \
+      || die "a new installation appeared while receipts were being cleaned"
+  done
+
+  [ "$(file_generation "$staged_helper")" = "$expected_helper" ] \
+    || die "the staged uninstall helper changed before removal"
+  /bin/rm "$staged_helper"
+  /bin/rmdir "$workdir" || die "protected work directory is not empty"
+  [ ! -e "$APP" ] && [ ! -L "$APP" ] \
+    && [ ! -e "$HELPER" ] && [ ! -L "$HELPER" ] \
+    || die "a new installation appeared before final receipt cleanup"
+  [ "$install_channel" != "direct" ] || require_direct_channel
+  if [ "${receipt_mask:3:1}" = "1" ] \
+    && /usr/sbin/pkgutil --pkg-info "$UNINSTALL_RECEIPT" >/dev/null 2>&1; then
+    /usr/sbin/pkgutil --forget "$UNINSTALL_RECEIPT" >/dev/null
+  fi
+
+  echo "ShotQuill was uninstalled. User data and screenshots were kept."
+}
+
+current_user_home() {
+  local uid username record home owner
+  uid="$(/usr/bin/id -u)" || return 1
+  username="$(/usr/bin/id -un)" || return 1
+  record="$(/usr/bin/dscl . -read "/Users/$username" NFSHomeDirectory 2>/dev/null)" \
+    || return 1
+  case "$record" in
+    "NFSHomeDirectory: "*) home="${record#NFSHomeDirectory: }" ;;
+    *) return 1 ;;
+  esac
+  [ -d "$home" ] && [ ! -L "$home" ] || return 1
+  owner="$(/usr/bin/stat -f '%u' "$home")" || return 1
+  [ "$owner" -eq "$uid" ] || return 1
+  echo "$home"
+}
+
+remove_current_user_link() {
+  local path="$1"
+  local expected="$2"
+  local workdir="$3"
+  local current command quarantined source_device work_device
+  [ "$expected" != "preserve" ] || return 0
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    return 0
+  fi
+  current="$(capture_link_generation "$path")" || return 1
+  if [ "$current" != "$expected" ]; then
+    echo "Keeping changed command at $path" >&2
+    return 0
+  fi
+  source_device="${expected%%:*}"
+  work_device="$(/usr/bin/stat -f '%d' "$workdir")" || return 1
+  if [ "$source_device" != "$work_device" ]; then
+    echo "Keeping $path because it cannot be staged atomically" >&2
+    return 1
+  fi
+  command="${path##*/}"
+  quarantined="$workdir/$command.link"
+  /bin/mv "$path" "$quarantined" || return 1
+  current="$(capture_link_generation "$quarantined")" || current=changed
+  if [ "$current" = "$expected" ]; then
+    /bin/rm "$quarantined"
+    return
+  fi
+  /bin/mv -n "$quarantined" "$path" 2>/dev/null || true
+  echo "Keeping a changed command; inspect $path and $quarantined" >&2
+  return 1
+}
+
+launch_agent_matches() {
+  local path="$1"
+  local uid="$2"
+  local owner mode acl_entry digest
+  owner="$(/usr/bin/stat -f '%u' "$path")" || return 1
+  mode="$(mode_for "$path")" || return 1
+  acl_entry="$(LC_ALL=C /bin/ls -lde "$path" | /usr/bin/sed -n '2p')" || return 1
+  [ -f "$path" ] && [ ! -L "$path" ] && [ "$owner" -eq "$uid" ] \
+    && (( (mode & 8#022) == 0 )) && [ -z "$acl_entry" ] || return 1
+  digest="$(hash_file "$path")" || return 1
+  [ "$digest" = "$CANONICAL_LAUNCH_AGENT_SHA256" ]
+}
+
+capture_launch_agent_generation() {
+  local uid home path
+  uid="$(/usr/bin/id -u)" || return 1
+  home="$(current_user_home)" || {
+    echo preserve
+    return 0
+  }
+  path="$home/Library/LaunchAgents/$LAUNCH_AGENT_NAME"
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    echo missing
+  elif launch_agent_matches "$path" "$uid"; then
+    file_generation "$path"
+  else
+    echo preserve
+  fi
+}
+
+remove_current_user_launch_agent() {
+  local workdir="$1"
+  local expected="$2"
+  local uid home directory path staged source_device work_device current
+  [ "$expected" != "preserve" ] && [ "$expected" != "missing" ] || return 0
+  uid="$(/usr/bin/id -u)" || return 1
+  home="$(current_user_home)" || return 1
+  directory="$home/Library/LaunchAgents"
+  path="$directory/$LAUNCH_AGENT_NAME"
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    return 0
+  fi
+  [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
+  launch_agent_matches "$path" "$uid" || return 0
+  current="$(file_generation "$path")" || return 1
+  [ "$current" = "$expected" ] || return 0
+  source_device="${expected%%:*}"
+  work_device="$(/usr/bin/stat -f '%d' "$workdir")" || return 1
+  [ "$source_device" = "$work_device" ] || return 1
+  staged="$workdir/$LAUNCH_AGENT_NAME"
+  /bin/mv "$path" "$staged" || return 1
+  current="$(file_generation "$staged")" || current=changed
+  if [ "$current" != "$expected" ] || ! launch_agent_matches "$staged" "$uid"; then
+    /bin/mv -n "$staged" "$path" 2>/dev/null || true
+    echo "Keeping a changed login item; inspect $path and $staged" >&2
+    return 1
+  fi
+  /bin/rm "$staged" || return 1
+}
+
+cleanup_current_user_payload() {
+  local expected_shotquill="$1"
+  local expected_squill="$2"
+  local expected_launch_agent="$3"
+  local uid workdir failed=0
+  uid="$(/usr/bin/id -u)" || return 1
+  workdir="$(/usr/bin/mktemp -d /private/tmp/com.wardmos.shotquill.cleanup.XXXXXX)" \
+    || return 1
+  require_private_user_directory "$workdir" "$uid"
+  remove_current_user_link \
+    /usr/local/bin/shotquill "$expected_shotquill" "$workdir" || failed=1
+  remove_current_user_link \
+    /usr/local/bin/squill "$expected_squill" "$workdir" || failed=1
+  remove_current_user_launch_agent "$workdir" "$expected_launch_agent" || failed=1
+  /bin/rmdir "$workdir" 2>/dev/null || failed=1
+  return "$failed"
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local attempt
+  for ((attempt = 0; attempt < 600; attempt++)); do
+    if ! /bin/kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    /bin/sleep 0.1
+  done
+  return 1
+}
+
+reopen_app_if_present() {
+  local expected_app="$1"
+  local current
+  [ "$expected_app" != "missing" ] || return 1
+  current="$(capture_app_generation 2>/dev/null)" || return 1
+  [ "$current" = "$expected_app" ] || return 1
+  /usr/bin/open "$APP" >/dev/null 2>&1
+}
+
+show_gui_reopen_warning() {
+  local language="$1"
+  local message
+  if [ "$language" = "zh" ]; then
+    message="管理员授权已取消，但 ShotQuill 未能自动重新打开。请从“应用程序”文件夹手动打开。"
+  else
+    message="Administrator authorization was cancelled, but ShotQuill could not reopen automatically. Open it from Applications."
+  fi
+  /usr/bin/osascript -e "display dialog \"$message\" with title \"ShotQuill\" buttons {\"OK\"} default button \"OK\"" \
+    >/dev/null 2>&1 || true
+}
+
+show_gui_failure() {
+  local language="$1"
+  local message
+  if [ "$language" = "zh" ]; then
+    message="ShotQuill 未能完成卸载。应用已尽可能保留，请重新打开后重试。"
+  else
+    message="ShotQuill could not be uninstalled. The app was kept when possible; reopen it and retry."
+  fi
+  /usr/bin/osascript -e "display dialog \"$message\" with title \"ShotQuill\" buttons {\"OK\"} default button \"OK\"" \
+    >/dev/null 2>&1 || true
+}
+
+show_gui_success() {
+  local language="$1"
+  local message
+  if [ "$language" = "zh" ]; then
+    message="ShotQuill 已卸载；设置、日志和截图均已保留。"
+  else
+    message="ShotQuill was uninstalled; settings, logs, and screenshots were kept."
+  fi
+  /usr/bin/osascript -e "display notification \"$message\" with title \"ShotQuill\"" \
+    >/dev/null 2>&1 || true
+}
+
+show_gui_authorization_next() {
+  local language="$1"
+  local message
+  if [ "$language" = "zh" ]; then
+    message="ShotQuill 已退出，接下来 macOS 将请求管理员授权。"
+  else
+    message="ShotQuill has closed; macOS will request administrator authorization next."
+  fi
+  /usr/bin/osascript -e "display notification \"$message\" with title \"ShotQuill\"" \
+    >/dev/null 2>&1 || true
+}
+
+show_root_gui_started() {
+  local uid="$1"
+  local language="$2"
+  local message
+  if [ "$language" = "zh" ]; then
+    message="授权已通过，ShotQuill 正在后台校验和清理；完成时会再次通知。"
+  else
+    message="Authorization succeeded. ShotQuill is verifying and cleaning up in the background; another notice will confirm completion."
+  fi
+  /bin/launchctl asuser "$uid" \
+    /usr/bin/sudo -u "#$uid" \
+    /usr/bin/osascript -e \
+    "display notification \"$message\" with title \"ShotQuill\"" \
+    >/dev/null 2>&1 || true
+}
+
+show_gui_cleanup_warning() {
+  local language="$1"
+  local message
+  if [ "$language" = "zh" ]; then
+    message="ShotQuill 已无法使用，但清理未全部完成。请重新安装同一 PKG 后再次卸载，或手动检查 /usr/local/bin 中的命令链接及 ~/Library/LaunchAgents/com.wardmos.shotquill.plist；辅助程序或软件包收据也可能残留。"
+  else
+    message="ShotQuill is no longer available, but cleanup did not finish. Reinstall the same PKG and uninstall again, or manually check its links in /usr/local/bin and ~/Library/LaunchAgents/com.wardmos.shotquill.plist; the helper or package receipts may also remain."
+  fi
+  /usr/bin/osascript -e "display dialog \"$message\" with title \"ShotQuill\" buttons {\"OK\"} default button \"OK\"" \
+    >/dev/null 2>&1 || true
+}
+
+GUI_COORDINATOR_ACTIVE=0
+GUI_COORDINATOR_DONE=0
+GUI_COORDINATOR_LANGUAGE=en
+GUI_COORDINATOR_READY=0
+GUI_COORDINATOR_WAIT_PID=""
+GUI_COORDINATOR_EXPECTED_APP=missing
+
+gui_coordinator_exit() {
+  local status=$?
+  trap - EXIT
+  if [ "$GUI_COORDINATOR_ACTIVE" -eq 1 ] && [ "$GUI_COORDINATOR_DONE" -eq 0 ]; then
+    if [ "$GUI_COORDINATOR_READY" -eq 1 ]; then
+      wait_for_pid_exit "$GUI_COORDINATOR_WAIT_PID" || true
+      if [ -e "$APP" ] || [ -L "$APP" ]; then
+        show_gui_failure "$GUI_COORDINATOR_LANGUAGE"
+        reopen_app_if_present "$GUI_COORDINATOR_EXPECTED_APP" || true
+      else
+        show_gui_cleanup_warning "$GUI_COORDINATOR_LANGUAGE"
+      fi
+    fi
+  fi
+  exit "$status"
+}
+
+run_gui_coordinator() {
+  local wait_pid="$1"
+  local expected_uid="$2"
+  local expected_app="$3"
+  local expected_helper="$4"
+  local expected_shotquill="$5"
+  local expected_squill="$6"
+  local expected_launch_agent="$7"
+  local language="$8"
+  local handshake_dir="$9"
+  local install_channel="${10}"
+  local receipt_mask="${11}"
+  local ready_file ready_pending root_command script output status
+
+  [ "$(/usr/bin/id -u)" = "$expected_uid" ] || die "coordinator user changed"
+  validate_bound_payload \
+    "$expected_app" "$expected_helper" "$expected_shotquill" "$expected_squill"
+  require_user_handshake_directory "$handshake_dir" "$expected_uid"
+  ready_file="$handshake_dir/ready"
+  ready_pending="$handshake_dir/ready.pending"
+  [ ! -e "$ready_file" ] && [ ! -L "$ready_file" ] \
+    && [ ! -e "$ready_pending" ] && [ ! -L "$ready_pending" ] \
+    || die "coordinator handshake already exists"
+  /usr/bin/printf '%s\n' "$$" > "$ready_pending" \
+    || die "cannot signal uninstall coordinator readiness"
+  /bin/mv "$ready_pending" "$ready_file" \
+    || die "cannot publish uninstall coordinator readiness"
+  GUI_COORDINATOR_READY=1
+  wait_for_pid_exit "$wait_pid" || die "ShotQuill did not exit within 60 seconds"
+  show_gui_authorization_next "$language"
+
+  root_command="/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc $HELPER --root-uninstall $expected_app $expected_helper $expected_shotquill $expected_squill $install_channel $receipt_mask $expected_uid $language"
+  script="do shell script \"$root_command\" with administrator privileges"
+  if output="$(/usr/bin/osascript -e "$script" 2>&1)"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  if [ "$status" -ne 0 ]; then
+    /usr/bin/logger -t shotquill-uninstall "$output" || true
+    if [[ "$output" = *"(-128)"* ]] || [[ "$output" = *"number -128"* ]]; then
+      reopen_app_if_present "$expected_app" || show_gui_reopen_warning "$language"
+      return 0
+    fi
+    if [ -e "$APP" ] || [ -L "$APP" ]; then
+      show_gui_failure "$language"
+      reopen_app_if_present "$expected_app" || true
+    else
+      cleanup_current_user_payload \
+        "$expected_shotquill" "$expected_squill" "$expected_launch_agent" || true
+      show_gui_cleanup_warning "$language"
+    fi
+    return "$status"
+  fi
+
+  if cleanup_current_user_payload \
+    "$expected_shotquill" "$expected_squill" "$expected_launch_agent"; then
+    show_gui_success "$language"
+  else
+    /usr/bin/logger -t shotquill-uninstall \
+      "system payload was removed but current-user cleanup was incomplete" || true
+    show_gui_cleanup_warning "$language"
+  fi
+}
+
+# This path is the trust boundary: unlike /Applications, every parent is owned
+# by root and not writable by the admin group. Every launcher opens this script
+# only from this fixed location and supplies no deletion paths.
+require_protected_directory /
+require_protected_directory /Library
+require_protected_directory "$HELPER_DIR"
+[ "${BASH_SOURCE[0]}" = "$HELPER" ] || die "refusing to run outside the protected path"
+require_regular_file "$HELPER"
+[ -z "${BASH_ENV:-}" ] && [ -z "${ENV:-}" ] || die "unsafe shell environment"
+
+case "${1:-}" in
+  --inspect-direct)
+    [ "$#" -eq 4 ] \
+      || die "usage: $HELPER --inspect-direct APP SHOTQUILL SQUILL"
+    [ "$(/usr/bin/id -u)" -ne 0 ] || die "inspect the uninstall plan without sudo"
+    [ "$2" = "owned" ] || [ "$2" = "missing" ] || die "invalid app uninstall scope"
+    for policy in "$3" "$4"; do
+      [ "$policy" = "owned" ] || [ "$policy" = "preserve" ] \
+        || die "invalid command uninstall scope"
+    done
+    require_direct_channel
+    app_generation="$(capture_app_for_policy "$2")"
+    helper_generation="$(file_generation "$HELPER")" \
+      || die "cannot identify the helper generation"
+    shotquill_generation="$(
+      capture_link_for_policy /usr/local/bin/shotquill "$3"
+    )"
+    squill_generation="$(capture_link_for_policy /usr/local/bin/squill "$4")"
+    launch_agent_generation="$(capture_launch_agent_generation)"
+    /usr/bin/printf 'v2 %s %s %s %s %s\n' \
+      "$app_generation" "$helper_generation" \
+      "$shotquill_generation" "$squill_generation" "$launch_agent_generation"
+    ;;
+
+  --launch-gui-coordinator)
+    launcher_handshake_dir=""
+    launcher_coordinator_pid=""
+    cleanup_gui_launcher() {
+      if [ -n "$launcher_coordinator_pid" ]; then
+        /bin/kill -TERM "$launcher_coordinator_pid" 2>/dev/null || true
+      fi
+      if [ -n "$launcher_handshake_dir" ]; then
+        /bin/rm -f \
+          "$launcher_handshake_dir/ready" \
+          "$launcher_handshake_dir/ready.pending"
+        /bin/rmdir "$launcher_handshake_dir" 2>/dev/null || true
+      fi
+    }
+    abort_gui_launcher() {
+      trap - EXIT HUP INT TERM
+      cleanup_gui_launcher
+      exit 1
+    }
+    [ "$#" -eq 9 ] \
+      || die "usage: $HELPER --launch-gui-coordinator PID LANGUAGE APP HELPER SHOTQUILL SQUILL LAUNCH_AGENT RECEIPTS"
+    validate_pid "$2" || die "invalid ShotQuill PID"
+    [ "$3" = "en" ] || [ "$3" = "zh" ] || die "invalid UI language"
+    for generation in "$4" "$5" "$6" "$7" "$8"; do
+      validate_generation_value "$generation" || die "invalid install generation"
+    done
+    [ "$5" != "missing" ] && [ "$5" != "preserve" ] \
+      || die "invalid helper generation"
+    validate_receipt_mask "$9" || die "invalid receipt uninstall scope"
+    require_direct_channel
+    uid="$(/usr/bin/id -u)" || die "cannot identify the current user"
+    [ "$uid" -ne 0 ] || die "the GUI coordinator must not run as root"
+    validate_bound_payload "$4" "$5" "$6" "$7"
+    launcher_handshake_dir="$(
+      /usr/bin/mktemp -d /private/tmp/com.wardmos.shotquill.uninstall.XXXXXX
+    )" || die "cannot create coordinator handshake directory"
+    require_user_handshake_directory "$launcher_handshake_dir" "$uid"
+    trap cleanup_gui_launcher EXIT
+    trap abort_gui_launcher HUP INT TERM
+    /usr/bin/nohup /usr/bin/env -i \
+      PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+      SHOTQUILL_UNINSTALL_COORDINATOR=1 \
+      /bin/bash --noprofile --norc "$HELPER" \
+      --gui-coordinator "$2" "$uid" "$4" "$5" "$6" "$7" \
+      "$8" "$3" "$launcher_handshake_dir" direct "$9" \
+      </dev/null >/dev/null 2>&1 &
+    launcher_coordinator_pid=$!
+    coordinator_ready=0
+    for ((attempt = 0; attempt < 50; attempt++)); do
+      if [ -f "$launcher_handshake_dir/ready" ] \
+        && [ ! -L "$launcher_handshake_dir/ready" ]; then
+        ready_pid="$(/bin/cat "$launcher_handshake_dir/ready")" \
+          || die "cannot read coordinator handshake"
+        [ "$ready_pid" = "$launcher_coordinator_pid" ] \
+          || die "uninstall coordinator identity mismatch"
+        coordinator_ready=1
+        break
+      fi
+      /bin/kill -0 "$launcher_coordinator_pid" 2>/dev/null \
+        || die "could not start the uninstall coordinator"
+      /bin/sleep 0.1
+    done
+    [ "$coordinator_ready" -eq 1 ] || die "uninstall coordinator readiness timed out"
+    /bin/rm "$launcher_handshake_dir/ready" \
+      || die "cannot clear coordinator handshake"
+    /bin/rmdir "$launcher_handshake_dir" \
+      || die "cannot remove coordinator handshake directory"
+    launcher_handshake_dir=""
+    launcher_coordinator_pid=""
+    trap - EXIT HUP INT TERM
+    echo "ShotQuill uninstall coordinator is ready."
+    ;;
+
+  --gui-coordinator)
+    [ "$#" -eq 12 ] || die "invalid GUI coordinator invocation"
+    validate_pid "$2" && validate_pid "$3" || die "invalid coordinator identity"
+    for generation in "$4" "$5" "$6" "$7" "$8"; do
+      validate_generation_value "$generation" || die "invalid install generation"
+    done
+    [ "$9" = "en" ] || [ "$9" = "zh" ] || die "invalid UI language"
+    [ "$11" = "direct" ] || die "invalid GUI install channel"
+    validate_receipt_mask "$12" || die "invalid receipt uninstall scope"
+    require_direct_channel
+    GUI_COORDINATOR_ACTIVE=1
+    GUI_COORDINATOR_LANGUAGE="$9"
+    GUI_COORDINATOR_WAIT_PID="$2"
+    GUI_COORDINATOR_EXPECTED_APP="$4"
+    trap gui_coordinator_exit EXIT
+    if run_gui_coordinator \
+      "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12"; then
+      coordinator_status=0
+    else
+      coordinator_status=$?
+    fi
+    GUI_COORDINATOR_DONE=1
+    exit "$coordinator_status"
+    ;;
+
+  --cli-coordinator)
+    [ "$#" -eq 1 ] || [ "$#" -eq 8 ] \
+      || die "usage: $HELPER --cli-coordinator [direct APP HELPER SHOTQUILL SQUILL LAUNCH_AGENT RECEIPTS]"
+    [ "$(/usr/bin/id -u)" -ne 0 ] || die "run squill uninstall without sudo"
+    if [ "$#" -eq 1 ]; then
+      install_channel=brew
+      receipt_mask=r111
+      app_generation="$(capture_app_generation)"
+      helper_generation="$(file_generation "$HELPER")" \
+        || die "cannot identify the helper generation"
+      shotquill_generation="$(capture_link_generation /usr/local/bin/shotquill)"
+      squill_generation="$(capture_link_generation /usr/local/bin/squill)"
+      launch_agent_generation="$(capture_launch_agent_generation)"
+    else
+      [ "$2" = "direct" ] || die "invalid CLI install channel"
+      for generation in "$3" "$4" "$5" "$6" "$7"; do
+        validate_generation_value "$generation" || die "invalid install generation"
+      done
+      [ "$4" != "missing" ] && [ "$4" != "preserve" ] \
+        || die "invalid helper generation"
+      validate_receipt_mask "$8" || die "invalid receipt uninstall scope"
+      require_direct_channel
+      install_channel=direct
+      receipt_mask="$8"
+      app_generation="$3"
+      helper_generation="$4"
+      shotquill_generation="$5"
+      squill_generation="$6"
+      launch_agent_generation="$7"
+      validate_bound_payload \
+        "$app_generation" "$helper_generation" \
+        "$shotquill_generation" "$squill_generation"
+    fi
+    /usr/bin/sudo /usr/bin/env -i \
+      PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+      /bin/bash --noprofile --norc "$HELPER" \
+      --root-uninstall "$app_generation" "$helper_generation" \
+      "$shotquill_generation" "$squill_generation" \
+      "$install_channel" "$receipt_mask"
+    cleanup_current_user_payload \
+      "$shotquill_generation" "$squill_generation" "$launch_agent_generation" \
+      || die "ShotQuill was removed but current-user cleanup was incomplete"
+    ;;
+
+  --root-uninstall)
+    [ "$#" -eq 7 ] || [ "$#" -eq 9 ] \
+      || die "invalid privileged uninstall invocation"
+    [ "$(/usr/bin/id -u)" -eq 0 ] || die "administrator authorization is required"
+    for generation in "$2" "$3" "$4" "$5"; do
+      validate_generation_value "$generation" || die "invalid install generation"
+    done
+    [ "$3" != "missing" ] && [ "$3" != "preserve" ] \
+      || die "invalid helper generation"
+    [ "$6" = "direct" ] || [ "$6" = "brew" ] || die "invalid install channel"
+    validate_receipt_mask "$7" || die "invalid receipt uninstall scope"
+    if [ "$#" -eq 9 ]; then
+      validate_pid "$8" || die "invalid notification user"
+      [ "$9" = "en" ] || [ "$9" = "zh" ] || die "invalid notification language"
+      show_root_gui_started "$8" "$9"
+    fi
+    remove_system_payload "$2" "$3" "$4" "$5" "$6" "$7"
+    ;;
+
+  *)
+    die "unsupported uninstall helper mode"
+    ;;
+esac

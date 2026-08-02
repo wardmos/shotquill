@@ -30,11 +30,18 @@ def _validate_package_name(package: str) -> None:
         raise ValueError(f"unsafe component package name: {package!r}")
 
 
-def render_distribution(*, version: str, app_package: str, cli_package: str) -> str:
+def render_distribution(
+    *,
+    version: str,
+    app_package: str,
+    cli_package: str,
+    uninstaller_package: str,
+) -> str:
     """Return a productbuild Distribution document for one release."""
     _validate_version(version)
     _validate_package_name(app_package)
     _validate_package_name(cli_package)
+    _validate_package_name(uninstaller_package)
 
     root = ElementTree.Element("installer-gui-script", {"minSpecVersion": "2"})
     ElementTree.SubElement(root, "title").text = "ShotQuill"
@@ -76,6 +83,11 @@ def render_distribution(*, version: str, app_package: str, cli_package: str) -> 
         app_choice,
         "pkg-ref",
         {"id": "com.wardmos.shotquill.app"},
+    )
+    ElementTree.SubElement(
+        app_choice,
+        "pkg-ref",
+        {"id": "com.wardmos.shotquill.uninstaller"},
     )
 
     cli_choice = ElementTree.SubElement(
@@ -119,6 +131,16 @@ def render_distribution(*, version: str, app_package: str, cli_package: str) -> 
     )
     cli_ref.text = cli_package
 
+    uninstaller_ref = ElementTree.SubElement(
+        root,
+        "pkg-ref",
+        {
+            "id": "com.wardmos.shotquill.uninstaller",
+            "version": version,
+        },
+    )
+    uninstaller_ref.text = uninstaller_package
+
     ElementTree.indent(root, space="  ")
     return '<?xml version="1.0" encoding="utf-8"?>\n' + ElementTree.tostring(
         root,
@@ -132,12 +154,14 @@ def main() -> None:
     parser.add_argument("--version", required=True)
     parser.add_argument("--app-package", required=True)
     parser.add_argument("--cli-package", required=True)
+    parser.add_argument("--uninstaller-package", required=True)
     args = parser.parse_args()
     print(
         render_distribution(
             version=args.version,
             app_package=args.app_package,
             cli_package=args.cli_package,
+            uninstaller_package=args.uninstaller_package,
         )
     )
 

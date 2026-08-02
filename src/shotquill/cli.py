@@ -126,6 +126,7 @@ def _handlers() -> dict:
         "session_prune": _cmd_session_prune,
         "session_export": _cmd_session_export,
         "mcp": _cmd_mcp,
+        "uninstall": _cmd_uninstall,
         "desktop_install": _cmd_install_desktop_entry,
         "blocklist_list": _cmd_blocklist_list,
         "blocklist_add": _cmd_blocklist_add,
@@ -948,6 +949,34 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     from shotquill.mcp import serve
 
     return serve(session_timeout=args.timeout)
+
+
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    if sys.platform != "darwin":
+        print("squill: uninstall is currently available only for macOS packages", file=sys.stderr)
+        return headless.EXIT_UNSUPPORTED
+
+    from shotquill import uninstall
+
+    plan = uninstall.prepare_uninstall_plan()
+    print(uninstall.format_uninstall_plan(plan))
+    if args.dry_run:
+        return 0
+    if not plan.can_execute:
+        print("squill: this installation cannot be removed automatically", file=sys.stderr)
+        return headless.EXIT_UNSUPPORTED
+    if not sys.stdin.isatty():
+        print("squill: uninstall requires an interactive terminal", file=sys.stderr)
+        return _EXIT_USAGE
+    if not args.yes:
+        try:
+            response = input("Uninstall ShotQuill and keep all user data? [y/N] ")
+        except EOFError:
+            return 1
+        if response.strip().casefold() not in {"y", "yes"}:
+            print("Cancelled.", file=sys.stderr)
+            return 1
+    return uninstall.execute_cli_uninstall(plan)
 
 
 def _cmd_blocklist_list(args: argparse.Namespace) -> int:

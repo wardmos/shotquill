@@ -248,6 +248,53 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Open System Settings…",
         "zh": "打开系统设置…",
     },
+    "settings.uninstall": {"en": "Uninstall ShotQuill…", "zh": "卸载 ShotQuill…"},
+    "uninstall.title": {"en": "Uninstall ShotQuill", "zh": "卸载 ShotQuill"},
+    "uninstall.action": {"en": "Uninstall", "zh": "卸载"},
+    "uninstall.cancel": {"en": "Cancel", "zh": "取消"},
+    "uninstall.inspecting": {
+        "en": "Checking the installation channel…",
+        "zh": "正在检查安装来源…",
+    },
+    "uninstall.preparing": {
+        "en": "Preparing the protected uninstaller…",
+        "zh": "正在准备受保护的卸载程序…",
+    },
+    "uninstall.confirm": {
+        "en": "Remove the application, ShotQuill-owned command links, and package receipts? "
+        "Settings, recordings, logs, screenshots, and custom save folders are kept. "
+        "Save and close any open editors first; unsaved annotations will be lost. "
+        "ShotQuill closes before macOS requests administrator authorization. If authorization "
+        "is cancelled, or removal fails before the app is removed, ShotQuill opens again. "
+        "After approval, verified cleanup may take about 30 seconds; a completion notice follows. "
+        "If cleanup only partially completes, follow-up steps are shown.\n\n{plan}",
+        "zh": "是否移除应用、ShotQuill 自有命令链接及软件包收据？"
+        "设置、录制、日志、截图和自定义保存目录都会保留。"
+        "请先保存并关闭已打开的编辑器，未保存的标注将会丢失。"
+        "ShotQuill 会先退出，然后 macOS 可能请求管理员授权；"
+        "若取消授权，或在应用移除前失败，ShotQuill 会重新打开；"
+        "授权后，校验和清理可能需要约 30 秒，完成后会显示通知；"
+        "若只完成部分清理，将显示后续处理步骤。\n\n{plan}",
+    },
+    "uninstall.brew": {
+        "en": "Homebrew manages this installation. Run this command in Terminal:\n\n"
+        "{command}\n\n{plan}",
+        "zh": "此安装由 Homebrew 管理。请在终端运行：\n\n{command}\n\n{plan}",
+    },
+    "uninstall.unavailable": {
+        "en": "This installation cannot be removed automatically. No files were changed.\n\n{plan}",
+        "zh": "无法自动移除此安装，未更改任何文件。\n\n{plan}",
+    },
+    "uninstall.start_failed": {
+        "en": "The uninstaller could not be started: {error}",
+        "zh": "无法启动卸载器：{error}",
+    },
+    "uninstall.failed": {
+        "en": "The uninstaller did not complete (exit code {code}). ShotQuill will stay open "
+        "when possible; no user data was targeted.",
+        "zh": "卸载未完成（退出码 {code}）。如果条件允许，ShotQuill 会保持运行；"
+        "卸载过程未将用户数据列为目标。",
+    },
     "settings.blocklist": {"en": "Blocked apps", "zh": "排除名单"},
     "settings.blocklist_button": {"en": "Blocked apps…", "zh": "排除名单…"},
     # Blocklist editor

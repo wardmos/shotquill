@@ -40,6 +40,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 PB="/usr/libexec/PlistBuddy"
+MACOS_MIN_VERSION="13.0"
 
 rm -rf build dist
 
@@ -92,6 +93,7 @@ build_one() {
   # --noupx: UPX rewrites Mach-O headers, which breaks the ad-hoc codesign below
   # and Apple Silicon's loader. macOS runners ship no upx anyway, but keeping
   # this explicit avoids architecture-specific bundle failures.
+  MACOSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION" \
   pyinstaller --noconfirm --windowed --name ShotQuill \
     --osx-bundle-identifier com.wardmos.shotquill \
     --icon "$ICNS" \
@@ -118,6 +120,8 @@ build_one() {
     || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
   "$PB" -c "Set :CFBundleVersion $VERSION" "$plist" 2>/dev/null \
     || "$PB" -c "Add :CFBundleVersion string $VERSION" "$plist"
+  "$PB" -c "Set :LSMinimumSystemVersion $MACOS_MIN_VERSION" "$plist" 2>/dev/null \
+    || "$PB" -c "Add :LSMinimumSystemVersion string $MACOS_MIN_VERSION" "$plist"
 
   # Trim payload --exclude-module cannot reach (it works per-module, not
   # per-file). Prune both Contents/Frameworks and Contents/Resources:
@@ -142,24 +146,40 @@ build_one() {
   # Ad-hoc signature: required to run on Apple Silicon; embeds no identity.
   codesign --force --deep --sign - "$app"
 
-  # Build two component packages. The application is required; Distribution.xml
-  # exposes the two CLI links as an optional, default-on choice. Keeping the CLI
-  # root flat avoids changing ownership of an existing /usr/local tree (including
-  # Intel Homebrew installations). Its preinstall guard also refuses to replace
-  # commands owned by an unrelated installation.
+  # Build three component packages. The application and fixed-target uninstall
+  # helper are required; Distribution.xml exposes the two CLI links as an
+  # optional, default-on choice. The helper is not a daemon. Its protected,
+  # root-owned location prevents replacement while macOS is authorizing a
+  # one-shot uninstall. Keeping the CLI root flat avoids changing ownership of
+  # an existing /usr/local tree (including Intel Homebrew installations).
   local package_work="build/$arch/product"
   local component_dir="$package_work/components"
   local app_root="$package_work/app-root"
-  local cli_root="$package_work/cli-root"
-  local cli_scripts="packaging/macos/scripts/cli"
+  local uninstaller_root="$package_work/uninstaller-root"
+  local cli_script_source="packaging/macos/scripts/cli"
+  local cli_scripts="$package_work/cli-scripts"
+  local cli_arch_flags=()
   local app_component="ShotQuill-app.pkg"
   local cli_component="ShotQuill-cli.pkg"
+  local uninstaller_component="ShotQuill-uninstaller.pkg"
   local distribution="$package_work/Distribution.xml"
   rm -rf "$package_work"
-  mkdir -p "$component_dir" "$app_root" "$cli_root"
+  mkdir -p "$component_dir" "$app_root" "$uninstaller_root" "$cli_scripts"
   ditto "$app" "$app_root/ShotQuill.app"
-  ln -s /Applications/ShotQuill.app/Contents/MacOS/ShotQuill "$cli_root/shotquill"
-  ln -s /Applications/ShotQuill.app/Contents/MacOS/ShotQuill "$cli_root/squill"
+  install -m 0755 "$cli_script_source/preinstall" "$cli_scripts/preinstall"
+  if [ "$arch" = universal2 ]; then
+    cli_arch_flags=(-arch arm64 -arch x86_64)
+  else
+    cli_arch_flags=(-arch "$arch")
+  fi
+  xcrun clang -std=c11 -Os -Wall -Wextra -Werror \
+    -mmacosx-version-min="$MACOS_MIN_VERSION" \
+    "${cli_arch_flags[@]}" \
+    packaging/macos/cli_link_installer.c -o "$cli_scripts/postinstall"
+  chmod 0755 "$cli_scripts/postinstall"
+  codesign --force --sign - "$cli_scripts/postinstall"
+  install -m 0755 packaging/macos/uninstall_pkg \
+    "$uninstaller_root/com.wardmos.shotquill.uninstall"
 
   pkgbuild \
     --root "$app_root" \
@@ -170,18 +190,24 @@ build_one() {
     --ownership recommended \
     "$component_dir/$app_component"
   pkgbuild \
-    --root "$cli_root" \
-    --install-location /usr/local/bin \
+    --nopayload \
     --scripts "$cli_scripts" \
     --identifier com.wardmos.shotquill.cli \
     --version "$VERSION" \
-    --ownership recommended \
     "$component_dir/$cli_component"
+  pkgbuild \
+    --root "$uninstaller_root" \
+    --install-location /Library/PrivilegedHelperTools \
+    --identifier com.wardmos.shotquill.uninstaller \
+    --version "$VERSION" \
+    --ownership recommended \
+    "$component_dir/$uninstaller_component"
 
   python packaging/macos/pkg_distribution.py \
     --version "$VERSION" \
     --app-package "$app_component" \
     --cli-package "$cli_component" \
+    --uninstaller-package "$uninstaller_component" \
     > "$distribution"
 
   local pkg="dist/ShotQuill-$VERSION-$arch.pkg"

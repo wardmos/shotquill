@@ -11,6 +11,87 @@ VERSION="${VERSION#v}"
 ARM_SHA="${2:?$USAGE}"
 INTEL_SHA="${3:?$USAGE}"
 
+[[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] \
+  || { echo "unsafe release version: $VERSION" >&2; exit 2; }
+[[ "$ARM_SHA" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "invalid arm64 SHA-256" >&2; exit 2; }
+[[ "$INTEL_SHA" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "invalid x86_64 SHA-256" >&2; exit 2; }
+
+render_cask() {
+  local output="$1"
+  mkdir -p "$(dirname "$output")"
+  cat > "$output" <<EOF
+cask "shotquill" do
+  arch arm: "arm64", intel: "x86_64"
+
+  version "${VERSION}"
+  sha256 arm:   "${ARM_SHA}",
+         intel: "${INTEL_SHA}"
+
+  url "https://github.com/wardmos/shotquill/releases/download/v#{version}/ShotQuill-#{version}-#{arch}.pkg"
+  name "ShotQuill"
+  desc "Screenshot and annotation tool"
+  homepage "https://github.com/wardmos/shotquill"
+  depends_on macos: ">= :ventura"
+
+EOF
+
+  cat >> "$output" <<'EOF'
+  # Homebrew selects the package's guarded CLI component. This keeps a single
+  # pair of links under /usr/local/bin for both installation channels and lets
+  # the package preinstall reject unrelated same-name commands. Do not use
+  # Homebrew binary artifacts here: their uninstall path removes any symlink
+  # at the destination without validating its current target.
+  pkg "ShotQuill-#{version}-#{arch}.pkg",
+      allow_untrusted: true,
+      choices: [
+        {
+          "choiceIdentifier" => "choice.cli",
+          "choiceAttribute"  => "selected",
+          "attributeSetting" => 1,
+        },
+      ]
+
+  # Quit lets Homebrew reopen a running app after upgrade. Delegate all
+  # validated user and system cleanup to the coordinator: broad launchctl and
+  # pkgutil directives can remove a same-name replacement or a mixed-PKG link.
+  # The system-shell wrapper rejects POSIX- or ACL-writable helper paths before
+  # parsing package-owned code that can request administrator authorization.
+  uninstall quit:   "com.wardmos.shotquill",
+            script: {
+              executable: "/usr/bin/env",
+              args: [
+                "-i",
+                "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                'set -euo pipefail; ' \
+                'helper="/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall"; ' \
+                'for path in / /Library /Library/PrivilegedHelperTools "$helper"; do ' \
+                '  if [ "$path" = "$helper" ]; then [ -f "$path" ] && [ ! -L "$path" ]; ' \
+                '  else [ -d "$path" ] && [ ! -L "$path" ]; fi; ' \
+                '  owner="$(/usr/bin/stat -f %u "$path")"; [ "$owner" -eq 0 ]; ' \
+                '  permissions="$(/usr/bin/stat -f %Lp "$path")"; ' \
+                '  mode=$((8#$permissions)); (( (mode & 8#022) == 0 )); ' \
+                '  acl_entry="$(LC_ALL=C /bin/ls -lde "$path" | /usr/bin/sed -n "2p")"; ' \
+                '  [ -z "$acl_entry" ]; ' \
+                'done; ' \
+                'exec /bin/bash --noprofile --norc "$helper" --cli-coordinator',
+              ],
+            }
+end
+EOF
+}
+
+if [ -n "${SHOTQUILL_CASK_OUTPUT:-}" ]; then
+  render_cask "$SHOTQUILL_CASK_OUTPUT"
+  echo "Rendered ShotQuill cask to $SHOTQUILL_CASK_OUTPUT"
+  exit 0
+fi
+
 if [ -z "${TAP_TOKEN:-}" ]; then
   echo "TAP_TOKEN not set; skipping Homebrew tap update."
   exit 0
@@ -28,49 +109,7 @@ export GIT_CONFIG_KEY_0="http.extraHeader"
 export GIT_CONFIG_VALUE_0="$AUTH_HEADER"
 git clone --depth 1 "https://github.com/${REPO}.git" "$WORK"
 mkdir -p "$WORK/Casks"
-
-cat > "$WORK/Casks/shotquill.rb" <<EOF
-cask "shotquill" do
-  arch arm: "arm64", intel: "x86_64"
-
-  version "${VERSION}"
-  sha256 arm:   "${ARM_SHA}",
-         intel: "${INTEL_SHA}"
-
-  url "https://github.com/wardmos/shotquill/releases/download/v#{version}/ShotQuill-#{version}-#{arch}.pkg"
-  name "ShotQuill"
-  desc "Screenshot and annotation tool"
-  homepage "https://github.com/wardmos/shotquill"
-
-  # The direct installer offers CLI links as an optional component. Homebrew
-  # leaves that component disabled and owns links in its own prefix instead,
-  # avoiding collisions with Intel Homebrew's /usr/local/bin.
-  pkg "ShotQuill-#{version}-#{arch}.pkg",
-      allow_untrusted: true,
-      choices: [
-        {
-          "choiceIdentifier" => "choice.cli",
-          "choiceAttribute"  => "selected",
-          "attributeSetting" => 0,
-        },
-      ]
-
-  # The bundled binary doubles as the CLI (bare invocation opens the GUI),
-  # so link it onto PATH under both documented command names.
-  binary "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill", target: "shotquill"
-  binary "/Applications/ShotQuill.app/Contents/MacOS/ShotQuill", target: "squill"
-
-  # The app is ad-hoc signed until release signing is configured.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "/Applications/ShotQuill.app"],
-                   sudo: true
-  end
-
-  uninstall quit:    "com.wardmos.shotquill",
-            pkgutil: "com.wardmos.shotquill.app"
-end
-EOF
+render_cask "$WORK/Casks/shotquill.rb"
 
 cd "$WORK"
 git add Casks/shotquill.rb

@@ -10,12 +10,13 @@ touching real system frameworks.
 """
 
 import sys
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QProcess, Qt, Signal  # noqa: E402
 from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
@@ -1356,8 +1357,357 @@ def test_capturer_gets_cursor_preference_from_config(qapp, config, fakes):
 class _FakeSettingsDialog(QDialog):
     """Stands in for SettingsDialog: a plain QDialog that ignores the config."""
 
+    uninstall_requested = Signal()
+
     def __init__(self, cfg):
         super().__init__()
+
+
+class _FakeSignal:
+    def __init__(self):
+        self._callbacks = []
+
+    def connect(self, callback):
+        self._callbacks.append(callback)
+
+    def emit(self, *args):
+        for callback in tuple(self._callbacks):
+            callback(*args)
+
+
+class _FakeUninstallProcess:
+    ProcessError = QProcess.ProcessError
+    ExitStatus = QProcess.ExitStatus
+    instances = []
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.finished = _FakeSignal()
+        self.errorOccurred = _FakeSignal()
+        self.program = None
+        self.arguments = None
+        self.started = False
+        self.stderr = b""
+        self.error_text = "could not start"
+        self.deleted = False
+        self.terminated = False
+        self.killed = False
+        self.instances.append(self)
+
+    def setProgram(self, program):
+        self.program = program
+
+    def setArguments(self, arguments):
+        self.arguments = arguments
+
+    def start(self):
+        self.started = True
+
+    def readAllStandardError(self):
+        return self.stderr
+
+    def errorString(self):
+        return self.error_text
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def deleteLater(self):
+        self.deleted = True
+
+
+def _bound_direct_uninstall_plan(*, app_path=True):
+    from shotquill import uninstall
+
+    digest = "a" * 64
+    app_generation = f"1:2:{digest}" if app_path else "missing"
+    return uninstall.UninstallPlan(
+        channel=uninstall.InstallChannel.PKG,
+        can_execute=True,
+        remove_paths=(Path(uninstall.APP_PATH),) if app_path else (),
+        forget_receipts=(uninstall.APP_RECEIPT,),
+        brew_command=None,
+        helper_path=Path(uninstall.UNINSTALL_HELPER_PATH),
+        warnings=(),
+        generation=uninstall.InstallGeneration(
+            app=app_generation,
+            helper=f"3:4:{'b' * 64}",
+            shotquill="preserve",
+            squill="preserve",
+            launch_agent="missing",
+        ),
+    )
+
+
+def test_open_settings_connects_uninstall_request(qapp, config, fakes, monkeypatch):
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    requested = []
+    monkeypatch.setattr(app, "_request_uninstall", lambda: requested.append(True))
+
+    app._open_settings()
+    app._settings_dialog.uninstall_requested.emit()
+
+    assert requested == [True]
+    app.shutdown()
+
+
+def test_uninstall_channel_probe_does_not_block_the_gui_thread(
+    qapp, qtbot, config, fakes, monkeypatch
+):
+    import threading
+
+    from shotquill import uninstall
+
+    app = _build_app(qapp, fakes)
+    plan = _bound_direct_uninstall_plan()
+    started = threading.Event()
+    release = threading.Event()
+
+    def inspect():
+        started.set()
+        assert release.wait(2)
+        return plan
+
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", inspect)
+    presented = []
+    monkeypatch.setattr(app, "_present_uninstall_plan", presented.append)
+
+    app._request_uninstall()
+
+    assert started.wait(1)
+    assert app._uninstall_probe_running is True
+    assert presented == []
+    release.set()
+    qtbot.waitUntil(lambda: presented == [plan])
+    assert app._uninstall_probe_running is False
+    app.shutdown()
+
+
+def test_cancelled_uninstall_probe_ignores_its_eventual_result(
+    qapp, qtbot, config, fakes, monkeypatch
+):
+    import threading
+
+    from shotquill import uninstall
+
+    app = _build_app(qapp, fakes)
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    def inspect():
+        started.set()
+        assert release.wait(2)
+        completed.set()
+        return object()
+
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", inspect)
+    presented = []
+    monkeypatch.setattr(app, "_present_uninstall_plan", presented.append)
+
+    app._request_uninstall()
+    assert started.wait(1)
+    app._cancel_uninstall_probe()
+    assert app._uninstall_probe_running is False
+    release.set()
+
+    assert completed.wait(1)
+    qtbot.wait(20)
+    assert presented == []
+    app.shutdown()
+
+
+def test_direct_pkg_uninstall_confirmation_launches_helper_and_quits(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    autostart_before = fakes[2].last
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+
+    process = _FakeUninstallProcess.instances[0]
+    assert process.program == "/usr/bin/env"
+    assert process.arguments[:1] == ["-i"]
+    assert "--launch-gui-coordinator" in process.arguments
+    assert process.started is True
+    assert app._quit_action.isEnabled() is False
+    assert all(action.isEnabled() is False for action in app._capture_actions)
+    launch_timer = app._uninstall_launch_timer
+    assert launch_timer.isActive() is True
+    assert quit_requested == []
+
+    app._request_quit()
+    assert quit_requested == []
+
+    process.finished.emit(0, QProcess.ExitStatus.NormalExit)
+
+    assert quit_requested == [True]
+    assert app._quit_action.isEnabled() is False
+    assert all(action.isEnabled() is False for action in app._capture_actions)
+    assert launch_timer.isActive() is False
+    assert process.deleted is True
+    assert fakes[2].last is autostart_before
+    app.shutdown()
+
+
+def test_cancelled_pkg_uninstall_keeps_the_app_running(qapp, config, fakes, monkeypatch):
+    app = _build_app(qapp, fakes)
+    autostart_before = fakes[2].last
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: False)
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+
+    assert app._uninstall_process is None
+    assert quit_requested == []
+    assert fakes[2].last is autostart_before
+    app.shutdown()
+
+
+def test_failed_pkg_coordinator_start_keeps_app_and_autostart(qapp, config, fakes, monkeypatch):
+    app = _build_app(qapp, fakes)
+    autostart_before = fakes[2].last
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    errors = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+    process = _FakeUninstallProcess.instances[0]
+    process.stderr = b"shotquill-uninstall: coordinator failed to start\n"
+    process.finished.emit(1, QProcess.ExitStatus.NormalExit)
+
+    assert errors
+    assert quit_requested == []
+    assert app._quit_action.isEnabled() is True
+    assert all(action.isEnabled() is True for action in app._capture_actions)
+    assert fakes[2].last is autostart_before
+    app.shutdown()
+
+
+def test_timed_out_pkg_coordinator_is_terminated_and_restores_interaction(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    errors = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+    process = _FakeUninstallProcess.instances[0]
+    app._uninstall_launch_timed_out()
+
+    assert process.terminated is True
+    assert app._uninstall_process is process
+    assert app._quit_action.isEnabled() is False
+    kill_timer = app._uninstall_kill_timer
+    assert kill_timer.isActive() is True
+
+    process.finished.emit(15, QProcess.ExitStatus.CrashExit)
+
+    assert errors
+    assert "timed out" in errors[0][0][2]
+    assert quit_requested == []
+    assert app._uninstall_process is None
+    assert app._quit_action.isEnabled() is True
+    assert all(action.isEnabled() is True for action in app._capture_actions)
+    assert kill_timer.isActive() is False
+    assert process.deleted is True
+    app.shutdown()
+
+
+def test_timed_out_pkg_coordinator_is_killed_if_term_does_not_finish(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    errors = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+
+    app._present_uninstall_plan(plan)
+    process = _FakeUninstallProcess.instances[0]
+    app._uninstall_launch_timed_out()
+    app._kill_timed_out_uninstall_launcher()
+
+    assert process.terminated is True
+    assert process.killed is True
+    assert errors
+    assert app._uninstall_process is None
+    assert app._quit_action.isEnabled() is True
+    assert all(action.isEnabled() is True for action in app._capture_actions)
+    assert process.deleted is False
+    process.finished.emit(15, QProcess.ExitStatus.CrashExit)
+    assert process.deleted is True
+    app.shutdown()
+
+
+def test_unsafe_homebrew_plan_never_shows_uninstall_command(qapp, config, fakes, monkeypatch):
+    from shotquill import uninstall
+
+    app = _build_app(qapp, fakes)
+    plan = uninstall.UninstallPlan(
+        channel=uninstall.InstallChannel.HOMEBREW,
+        can_execute=False,
+        remove_paths=(),
+        forget_receipts=(),
+        brew_command=None,
+        helper_path=None,
+        warnings=("Refusing an unrelated app.",),
+    )
+    warnings = []
+    instructions = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "information",
+        lambda *args, **kwargs: instructions.append((args, kwargs)),
+    )
+
+    app._present_uninstall_plan(plan)
+
+    assert warnings
+    assert instructions == []
+    app.shutdown()
 
 
 def test_open_settings_syncs_capturer_cursor_preference(qapp, config, fakes, monkeypatch):
