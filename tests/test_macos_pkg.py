@@ -150,7 +150,9 @@ def test_pkg_builder_replaces_the_dmg_container():
     assert '"$uninstaller_root/com.wardmos.shotquill.uninstall"' in script
     assert "--install-location /Applications" in script
     assert "--install-location /Library/PrivilegedHelperTools" in script
-    assert "--nopayload" in script
+    assert 'local cli_root="$package_work/cli-root"' in script
+    assert '--root "$cli_root"' in script
+    assert "--nopayload" not in script
     assert '--scripts "$cli_scripts"' in script
     assert "xcrun clang" in script
     assert "cli_link_installer.c" in script

@@ -155,6 +155,7 @@ build_one() {
   local package_work="build/$arch/product"
   local component_dir="$package_work/components"
   local app_root="$package_work/app-root"
+  local cli_root="$package_work/cli-root"
   local uninstaller_root="$package_work/uninstaller-root"
   local cli_script_source="packaging/macos/scripts/cli"
   local cli_scripts="$package_work/cli-scripts"
@@ -164,7 +165,12 @@ build_one() {
   local uninstaller_component="ShotQuill-uninstaller.pkg"
   local distribution="$package_work/Distribution.xml"
   rm -rf "$package_work"
-  mkdir -p "$component_dir" "$app_root" "$uninstaller_root" "$cli_scripts"
+  mkdir -p \
+    "$component_dir" \
+    "$app_root" \
+    "$cli_root" \
+    "$uninstaller_root" \
+    "$cli_scripts"
   ditto "$app" "$app_root/ShotQuill.app"
   install -m 0755 "$cli_script_source/preinstall" "$cli_scripts/preinstall"
   if [ "$arch" = universal2 ]; then
@@ -189,8 +195,12 @@ build_one() {
     --version "$VERSION" \
     --ownership recommended \
     "$component_dir/$app_component"
+  # A true payload-free package runs scripts but intentionally leaves no
+  # receipt. An empty payload root keeps the CLI optional while giving upgrades
+  # and the guarded uninstaller a receipt to track and forget.
   pkgbuild \
-    --nopayload \
+    --root "$cli_root" \
+    --install-location / \
     --scripts "$cli_scripts" \
     --identifier com.wardmos.shotquill.cli \
     --version "$VERSION" \
