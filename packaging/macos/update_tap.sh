@@ -33,7 +33,8 @@ cask "shotquill" do
   name "ShotQuill"
   desc "Screenshot and annotation tool"
   homepage "https://github.com/wardmos/shotquill"
-  depends_on macos: ">= :ventura"
+
+  depends_on macos: :ventura
 
 EOF
 
@@ -45,7 +46,7 @@ EOF
   # at the destination without validating its current target.
   pkg "ShotQuill-#{version}-#{arch}.pkg",
       allow_untrusted: true,
-      choices: [
+      choices:         [
         {
           "choiceIdentifier" => "choice.cli",
           "choiceAttribute"  => "selected",
@@ -61,24 +62,24 @@ EOF
   uninstall quit:   "com.wardmos.shotquill",
             script: {
               executable: "/usr/bin/env",
-              args: [
+              args:       [
                 "-i",
                 "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
                 "/bin/bash",
                 "--noprofile",
                 "--norc",
                 "-c",
-                'set -euo pipefail; ' \
+                "set -euo pipefail; " \
                 'helper="/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall"; ' \
-                'for path in / /Library /Library/PrivilegedHelperTools "$helper"; do ' \
-                '  if [ "$path" = "$helper" ]; then [ -f "$path" ] && [ ! -L "$path" ]; ' \
-                '  else [ -d "$path" ] && [ ! -L "$path" ]; fi; ' \
-                '  owner="$(/usr/bin/stat -f %u "$path")"; [ "$owner" -eq 0 ]; ' \
-                '  permissions="$(/usr/bin/stat -f %Lp "$path")"; ' \
-                '  mode=$((8#$permissions)); (( (mode & 8#022) == 0 )); ' \
-                '  acl_entry="$(LC_ALL=C /bin/ls -lde "$path" | /usr/bin/sed -n "2p")"; ' \
-                '  [ -z "$acl_entry" ]; ' \
-                'done; ' \
+                'for path in / /Library /Library/PrivilegedHelperTools "$helper"; do   ' \
+                'if [ "$path" = "$helper" ]; then [ -f "$path" ] && [ ! -L "$path" ];   ' \
+                'else [ -d "$path" ] && [ ! -L "$path" ]; fi;   ' \
+                'owner="$(/usr/bin/stat -f %u "$path")"; [ "$owner" -eq 0 ];   ' \
+                'permissions="$(/usr/bin/stat -f %Lp "$path")";   ' \
+                'mode=$((8#$permissions)); (( (mode & 8#022) == 0 ));   ' \
+                'acl_entry="$(LC_ALL=C /bin/ls -lde "$path" | /usr/bin/sed -n "2p")";   ' \
+                '[ -z "$acl_entry" ]; ' \
+                "done; " \
                 'exec /bin/bash --noprofile --norc "$helper" --cli-coordinator',
               ],
             }

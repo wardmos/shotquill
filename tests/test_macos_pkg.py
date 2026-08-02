@@ -317,7 +317,10 @@ def test_tap_script_can_render_the_exact_cask_without_publishing(tmp_path):
     assert 'version "0.1.0"' in cask
     assert f'sha256 arm:   "{"a" * 64}"' in cask
     assert f'intel: "{"b" * 64}"' in cask
-    assert 'depends_on macos: ">= :ventura"' in cask
+    assert "depends_on macos: :ventura" in cask
+    assert 'depends_on macos: ">= :ventura"' not in cask
+    assert "choices:         [" in cask
+    assert "args:       [" in cask
     assert '"attributeSetting" => 1' in cask
     assert '"$helper" --cli-coordinator' in cask
 
@@ -389,7 +392,7 @@ def test_homebrew_cask_uses_the_guarded_pkg_cli_component():
     assert "ShotQuill-#{version}-#{arch}.pkg" in script
     assert 'pkg "ShotQuill-#{version}-#{arch}.pkg"' in script
     assert "allow_untrusted: true" in script
-    assert 'depends_on macos: ">= :ventura"' in script
+    assert "depends_on macos: :ventura" in script
     assert "SHOTQUILL_CASK_OUTPUT" in script
     assert '"choiceIdentifier" => "choice.cli"' in script
     assert '"attributeSetting" => 1' in script
