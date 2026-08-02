@@ -352,6 +352,8 @@ def test_package_and_release_workflows_share_macos_smoke_scripts():
 def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
     source = _PKG_SMOKE_SCRIPT.read_text(encoding="utf-8")
 
+    assert "command failed at line $LINENO: $BASH_COMMAND" in source
+    assert 'vtool -arch "$helper_arch" -show-build "$CLI_POSTINSTALL"' in source
     assert source.count("assert_no_existing_install") == 3
     assert "/Applications/ShotQuill.app" in source
     assert "/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall" in source

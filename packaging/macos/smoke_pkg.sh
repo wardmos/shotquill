@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the release-grade universal macOS PKG on an ephemeral CI runner.
 set -Eeuo pipefail
+trap 'status=$?; echo "smoke_pkg.sh: command failed at line $LINENO: $BASH_COMMAND (exit $status)" >&2' ERR
 shopt -s nullglob
 umask 077
 
@@ -159,7 +160,7 @@ test -x "$CLI_POSTINSTALL"
 /usr/bin/lipo "$CLI_POSTINSTALL" -verify_arch arm64 x86_64
 /usr/bin/codesign --verify --strict --all-architectures "$CLI_POSTINSTALL"
 for helper_arch in arm64 x86_64; do
-  /usr/bin/xcrun vtool -show-build -arch "$helper_arch" "$CLI_POSTINSTALL" \
+  /usr/bin/xcrun vtool -arch "$helper_arch" -show-build "$CLI_POSTINSTALL" \
     | /usr/bin/grep -Eq 'minos[[:space:]]+13[.]0'
 done
 
