@@ -204,6 +204,21 @@ APP_EXECUTABLE_COUNT="$({
     -path "*/ShotQuill.app/Contents/MacOS/ShotQuill" -type f -print
 } | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')"
 test "$APP_EXECUTABLE_COUNT" = "1"
+PACKAGED_EXECUTABLE="$(/usr/bin/find "$EXPANDED" \
+  -path "*/ShotQuill.app/Contents/MacOS/ShotQuill" -type f -print)"
+PACKAGED_APP="${PACKAGED_EXECUTABLE%/Contents/MacOS/ShotQuill}"
+PACKAGED_INFO_PLIST="$PACKAGED_APP/Contents/Info.plist"
+PACKAGED_EXECUTABLE_HASH="$({
+  /usr/bin/shasum -a 256 "$PACKAGED_EXECUTABLE"
+} | /usr/bin/awk '{print $1}')"
+PACKAGED_PRODUCT_VERSION="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PACKAGED_INFO_PLIST"
+)"
+PACKAGED_BUILD_VERSION="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PACKAGED_INFO_PLIST"
+)"
+[[ "$PACKAGED_PRODUCT_VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]
+[[ "$PACKAGED_BUILD_VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]
 
 UNINSTALL_HELPER_COUNT="$({
   /usr/bin/find "$EXPANDED" -type f \
@@ -267,6 +282,16 @@ assert_no_existing_install() {
   done
 }
 
+seed_older_brew_app() {
+  local stale_marker="/Applications/ShotQuill.app/Contents/Resources/stale-smoke-payload"
+  /usr/bin/sudo /usr/bin/ditto "$PACKAGED_APP" /Applications/ShotQuill.app
+  /usr/bin/sudo /usr/libexec/PlistBuddy \
+    -c "Set :CFBundleVersion 0.1.0" \
+    /Applications/ShotQuill.app/Contents/Info.plist
+  /usr/bin/sudo /usr/bin/touch "$stale_marker"
+  /usr/bin/sudo /bin/test -f "$stale_marker"
+}
+
 assert_no_existing_install
 
 /usr/sbin/installer -showChoiceChangesXML -pkg "$PKG" -target / > "$DEFAULT_CHOICES"
@@ -325,6 +350,7 @@ CLI_STAGE_RESIDUE=(/private/tmp/.shotquill-cli-install.*)
 test "${#CLI_STAGE_RESIDUE[@]}" -eq 0
 cleanup_cli_probes
 assert_no_existing_install
+seed_older_brew_app
 
 /usr/bin/sudo /usr/sbin/installer \
   -applyChoiceChangesXML "$DEFAULT_CHOICES" \
@@ -335,17 +361,38 @@ INSTALLED_HELPER="/Library/PrivilegedHelperTools/com.wardmos.shotquill.uninstall
 /usr/bin/sudo /bin/test -d /Applications/ShotQuill.app
 /usr/bin/sudo /bin/test -x "$INSTALLED_HELPER"
 test "$(/usr/bin/sudo /usr/bin/stat -f '%u:%Lp' "$INSTALLED_HELPER")" = "0:755"
+/usr/bin/sudo /bin/test ! -e \
+  /Applications/ShotQuill.app/Contents/Resources/stale-smoke-payload
+installed_hash="$({
+  /usr/bin/sudo /usr/bin/shasum -a 256 "$EXPECTED_TARGET"
+} | /usr/bin/awk '{print $1}')"
+test "$installed_hash" = "$PACKAGED_EXECUTABLE_HASH"
+test "$(
+  /usr/libexec/PlistBuddy \
+    -c 'Print :CFBundleShortVersionString' \
+    /Applications/ShotQuill.app/Contents/Info.plist
+)" = "$PACKAGED_PRODUCT_VERSION"
+test "$(
+  /usr/libexec/PlistBuddy \
+    -c 'Print :CFBundleVersion' \
+    /Applications/ShotQuill.app/Contents/Info.plist
+)" = "$PACKAGED_BUILD_VERSION"
 for receipt in \
   com.wardmos.shotquill.app \
   com.wardmos.shotquill.cli \
   com.wardmos.shotquill.uninstaller; do
-  /usr/sbin/pkgutil --pkg-info "$receipt" >/dev/null
+  receipt_version="$({
+    /usr/sbin/pkgutil --pkg-info "$receipt"
+  } | /usr/bin/sed -n 's/^version: //p')"
+  test "$receipt_version" = "$PACKAGED_BUILD_VERSION"
 done
 for command in shotquill squill; do
   root_link_exists "/usr/local/bin/$command"
   root_link_target_matches "/usr/local/bin/$command" "$EXPECTED_TARGET"
   track_cli_probe "$command" "$EXPECTED_TARGET"
 done
+/usr/local/bin/shotquill uninstall --dry-run > "$SMOKE_ROOT/uninstall-plan.txt"
+/usr/bin/grep -q "/Applications/ShotQuill.app" "$SMOKE_ROOT/uninstall-plan.txt"
 
 # A command installed after the PKG must survive uninstall even while the old
 # CLI receipt still lists that path in its BOM.

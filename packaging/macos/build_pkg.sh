@@ -6,6 +6,11 @@
 # Usage: packaging/macos/build_pkg.sh <version-or-tag> [arch ...]
 #   arch: arm64 | x86_64 | universal2 (default: all three)
 #
+# SHOTQUILL_BUILD_VERSION optionally supplies a monotonically increasing,
+# numeric CFBundleVersion and component-package version. CI sets it to the
+# repository-wide GitHub run ID so a PKG can upgrade an App installed by Brew
+# even when both builds have the same user-facing product version.
+#
 # Single-arch PKGs are roughly half the size of universal2 because PyInstaller
 # thins the fat (universal2) Python/Qt binaries down to one slice. Building a
 # non-native or universal2 app requires a universal2 Python and universal2
@@ -17,13 +22,18 @@ set -euo pipefail
 
 VERSION="${1:-0.0.0}"
 VERSION="${VERSION#v}"
+BUILD_VERSION="${SHOTQUILL_BUILD_VERSION:-$VERSION}"
 shift || true
 ARCHES=("$@")
 if [ ${#ARCHES[@]} -eq 0 ]; then
   ARCHES=(arm64 x86_64 universal2)
 fi
-if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+if [[ ! "$VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
   echo "error: unsafe package version: $VERSION" >&2
+  exit 2
+fi
+if [[ ! "$BUILD_VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
+  echo "error: unsafe package build version: $BUILD_VERSION" >&2
   exit 2
 fi
 for arch in "${ARCHES[@]}"; do
@@ -118,8 +128,8 @@ build_one() {
     || "$PB" -c "Set :NSAccessibilityUsageDescription 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$plist"
   "$PB" -c "Set :CFBundleShortVersionString $VERSION" "$plist" 2>/dev/null \
     || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
-  "$PB" -c "Set :CFBundleVersion $VERSION" "$plist" 2>/dev/null \
-    || "$PB" -c "Add :CFBundleVersion string $VERSION" "$plist"
+  "$PB" -c "Set :CFBundleVersion $BUILD_VERSION" "$plist" 2>/dev/null \
+    || "$PB" -c "Add :CFBundleVersion string $BUILD_VERSION" "$plist"
   "$PB" -c "Set :LSMinimumSystemVersion $MACOS_MIN_VERSION" "$plist" 2>/dev/null \
     || "$PB" -c "Add :LSMinimumSystemVersion string $MACOS_MIN_VERSION" "$plist"
 
@@ -192,7 +202,7 @@ build_one() {
     --install-location /Applications \
     --component-plist packaging/macos/app_components.plist \
     --identifier com.wardmos.shotquill.app \
-    --version "$VERSION" \
+    --version "$BUILD_VERSION" \
     --ownership recommended \
     "$component_dir/$app_component"
   # A true payload-free package runs scripts but intentionally leaves no
@@ -203,18 +213,18 @@ build_one() {
     --install-location / \
     --scripts "$cli_scripts" \
     --identifier com.wardmos.shotquill.cli \
-    --version "$VERSION" \
+    --version "$BUILD_VERSION" \
     "$component_dir/$cli_component"
   pkgbuild \
     --root "$uninstaller_root" \
     --install-location /Library/PrivilegedHelperTools \
     --identifier com.wardmos.shotquill.uninstaller \
-    --version "$VERSION" \
+    --version "$BUILD_VERSION" \
     --ownership recommended \
     "$component_dir/$uninstaller_component"
 
   python packaging/macos/pkg_distribution.py \
-    --version "$VERSION" \
+    --version "$BUILD_VERSION" \
     --app-package "$app_component" \
     --cli-package "$cli_component" \
     --uninstaller-package "$uninstaller_component" \

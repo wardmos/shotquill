@@ -103,6 +103,10 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Build .app + PKGs (arm64, x86_64, universal2)
+        env:
+          # Keep release PKGs newer than any earlier smoke build of the same
+          # product version, including builds installed through Homebrew.
+          SHOTQUILL_BUILD_VERSION: ${{ github.run_id }}
         run: bash packaging/macos/build_pkg.sh "${{ github.ref_name }}"
       - name: Exercise universal2 PKG install and uninstall
         run: bash packaging/macos/smoke_pkg.sh dist/ShotQuill-*-universal2.pkg

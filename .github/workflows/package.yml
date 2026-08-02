@@ -62,8 +62,8 @@ jobs:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           short_sha="${SOURCE_SHA:0:7}"
-          # PackageKit and CFBundleVersion expect a numeric dotted version.
-          version="v0.0.0"
+          product_version="$(python -c 'import shotquill; print(shotquill.__version__)')"
+          version="v$product_version"
           artifact_suffix="-$short_sha"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "artifact_suffix=$artifact_suffix" >> "$GITHUB_OUTPUT"
@@ -71,6 +71,9 @@ jobs:
         # universal2 only: it needs universal2 wheels for every binary dep, so
         # it is the strictest of the three arches — the thinned arm64/x86_64
         # release slices can't fail independently of it.
+        env:
+          # Repository-wide and monotonic across smoke and release workflows.
+          SHOTQUILL_BUILD_VERSION: ${{ github.run_id }}
         run: bash packaging/macos/build_pkg.sh "${{ steps.smoke.outputs.version }}" universal2
       - name: Exercise universal2 PKG install and uninstall
         run: bash packaging/macos/smoke_pkg.sh dist/ShotQuill-*-universal2.pkg

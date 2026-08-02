@@ -163,6 +163,16 @@ def test_pkg_builder_replaces_the_dmg_container():
     assert 'codesign --force --sign - "$cli_scripts/postinstall"' in script
 
 
+def test_pkg_builder_separates_product_version_from_monotonic_build_version():
+    script = _BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'BUILD_VERSION="${SHOTQUILL_BUILD_VERSION:-$VERSION}"' in script
+    assert "CFBundleShortVersionString $VERSION" in script
+    assert "CFBundleVersion $BUILD_VERSION" in script
+    assert script.count('--version "$BUILD_VERSION"') == 4
+    assert 'local pkg="dist/ShotQuill-$VERSION-$arch.pkg"' in script
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="macOS build script requires Bash")
 @pytest.mark.parametrize(
     ("version", "arch", "message"),
@@ -181,6 +191,20 @@ def test_pkg_builder_rejects_unsafe_inputs_before_building(version, arch, messag
 
     assert result.returncode == 2
     assert message in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS build script requires Bash")
+def test_pkg_builder_rejects_unsafe_build_version_before_building():
+    result = subprocess.run(
+        ["bash", str(_BUILD_SCRIPT), "0.1.0", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "SHOTQUILL_BUILD_VERSION": "1.2.3;unsafe"},
+    )
+
+    assert result.returncode == 2
+    assert "unsafe package build version" in result.stderr
 
 
 def test_app_component_is_fixed_to_applications():
@@ -353,6 +377,15 @@ def test_package_and_release_workflows_share_macos_smoke_scripts():
         source = workflow.read_text(encoding="utf-8")
         assert "packaging/macos/smoke_pkg.sh" in source
         assert "packaging/macos/smoke_cask.sh" in source
+        assert "SHOTQUILL_BUILD_VERSION: ${{ github.run_id }}" in source
+
+
+def test_package_smoke_uses_the_product_version_instead_of_a_zero_version():
+    source = _PACKAGE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "import shotquill; print(shotquill.__version__)" in source
+    assert 'version="v$product_version"' in source
+    assert 'version="v0.0.0"' not in source
 
 
 def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
@@ -380,6 +413,12 @@ def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
     assert "-showChoiceChangesXML" in source
     assert "assert_default_cli_selected" in source
     assert '-applyChoiceChangesXML "$DEFAULT_CHOICES"' in source
+    assert "seed_older_brew_app" in source
+    assert "CFBundleVersion 0.1.0" in source
+    assert "stale-smoke-payload" in source
+    assert 'test "$installed_hash" = "$PACKAGED_EXECUTABLE_HASH"' in source
+    assert 'test "$receipt_version" = "$PACKAGED_BUILD_VERSION"' in source
+    assert "uninstall --dry-run" in source
     assert "ROOT_STAGE_ACL" in source
     assert "stat -f '%d:%i' \"$staged\"" in source
     assert '/bin/mv -n "$path" "$staged"' in source
