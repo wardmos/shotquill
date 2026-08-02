@@ -272,6 +272,7 @@ def test_cli_postinstall_uses_atomic_no_replace_and_generation_checked_rollback(
     assert "unlinkat(bin_fd, entry->name" not in source
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS package script requires Bash")
 def test_cli_package_scripts_have_valid_bash_syntax():
     result = subprocess.run(
         ["bash", "-n", str(_CLI_PREINSTALL)],
@@ -282,6 +283,7 @@ def test_cli_package_scripts_have_valid_bash_syntax():
     assert result.returncode == 0, f"{_CLI_PREINSTALL}: {result.stderr}"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS release scripts require Bash")
 @pytest.mark.parametrize(
     "script",
     (_TAP_SCRIPT, _PKG_SMOKE_SCRIPT, _CASK_SMOKE_SCRIPT),
@@ -296,6 +298,7 @@ def test_macos_release_scripts_have_valid_bash_syntax(script):
     assert result.returncode == 0, f"{script}: {result.stderr}"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS release scripts require Bash")
 def test_tap_script_can_render_the_exact_cask_without_publishing(tmp_path):
     output = tmp_path / "Casks" / "shotquill.rb"
     result = subprocess.run(
@@ -316,6 +319,7 @@ def test_tap_script_can_render_the_exact_cask_without_publishing(tmp_path):
     assert '"$helper" --cli-coordinator' in cask
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS release scripts require Bash")
 @pytest.mark.parametrize(
     ("version", "arm_sha", "intel_sha"),
     (

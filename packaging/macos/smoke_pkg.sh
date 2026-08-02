@@ -156,7 +156,7 @@ test "$CLI_POSTINSTALL_COUNT" = "1"
 CLI_POSTINSTALL="$(/usr/bin/find "$EXPANDED" -type f -name postinstall -print)"
 test -x "$CLI_POSTINSTALL"
 /usr/bin/file "$CLI_POSTINSTALL" | /usr/bin/grep -q 'Mach-O universal binary'
-/usr/bin/lipo -verify_arch arm64 x86_64 "$CLI_POSTINSTALL"
+/usr/bin/lipo "$CLI_POSTINSTALL" -verify_arch arm64 x86_64
 /usr/bin/codesign --verify --strict --all-architectures "$CLI_POSTINSTALL"
 for helper_arch in arm64 x86_64; do
   /usr/bin/xcrun vtool -show-build -arch "$helper_arch" "$CLI_POSTINSTALL" \
