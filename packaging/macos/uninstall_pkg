@@ -978,8 +978,8 @@ case "${1:-}" in
       validate_generation_value "$generation" || die "invalid install generation"
     done
     [ "$9" = "en" ] || [ "$9" = "zh" ] || die "invalid UI language"
-    [ "$11" = "direct" ] || die "invalid GUI install channel"
-    validate_receipt_mask "$12" || die "invalid receipt uninstall scope"
+    [ "${11}" = "direct" ] || die "invalid GUI install channel"
+    validate_receipt_mask "${12}" || die "invalid receipt uninstall scope"
     require_direct_channel
     GUI_COORDINATOR_ACTIVE=1
     GUI_COORDINATOR_LANGUAGE="$9"
@@ -987,7 +987,8 @@ case "${1:-}" in
     GUI_COORDINATOR_EXPECTED_APP="$4"
     trap gui_coordinator_exit EXIT
     if run_gui_coordinator \
-      "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12"; then
+      "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" \
+      "${10}" "${11}" "${12}"; then
       coordinator_status=0
     else
       coordinator_status=$?

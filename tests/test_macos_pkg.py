@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -419,6 +420,8 @@ def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
     assert 'test "$installed_hash" = "$PACKAGED_EXECUTABLE_HASH"' in source
     assert 'test "$receipt_version" = "$PACKAGED_BUILD_VERSION"' in source
     assert "uninstall --dry-run" in source
+    assert "assert_gui_coordinator_arguments" in source
+    assert "invalid coordinator handshake directory" in source
     assert "ROOT_STAGE_ACL" in source
     assert "stat -f '%d:%i' \"$staged\"" in source
     assert '/bin/mv -n "$path" "$staged"' in source
@@ -513,3 +516,10 @@ def test_pkg_uninstall_helper_has_valid_bash_syntax():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_pkg_uninstall_helper_braces_multi_digit_positional_parameters():
+    script = _UNINSTALL_HELPER.read_text(encoding="utf-8")
+
+    assert re.findall(r"\$[1-9][0-9]+", script) == []
+    assert '"${10}" "${11}" "${12}"' in script

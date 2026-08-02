@@ -292,6 +292,48 @@ seed_older_brew_app() {
   /usr/bin/sudo /bin/test -f "$stale_marker"
 }
 
+assert_gui_coordinator_arguments() {
+  local binding_version app_generation helper_generation
+  local shotquill_generation squill_generation launch_agent_generation extra
+  local invalid_handshake="$SMOKE_ROOT/not-a-valid-handshake"
+  local stderr_file="$SMOKE_ROOT/gui-coordinator.stderr"
+
+  read -r \
+    binding_version \
+    app_generation \
+    helper_generation \
+    shotquill_generation \
+    squill_generation \
+    launch_agent_generation \
+    extra \
+    <<< "$("$INSTALLED_HELPER" --inspect-direct owned owned owned)"
+  test "$binding_version" = "v2"
+  test -z "${extra:-}"
+
+  # Exercise all twelve positional parameters using the installed helper, but
+  # stop at a deliberately invalid private handshake path before readiness,
+  # authorization, or deletion. Bash requires braces for ${10} and above.
+  if "$INSTALLED_HELPER" \
+    --gui-coordinator \
+    "$$" \
+    "$CURRENT_UID" \
+    "$app_generation" \
+    "$helper_generation" \
+    "$shotquill_generation" \
+    "$squill_generation" \
+    "$launch_agent_generation" \
+    en \
+    "$invalid_handshake" \
+    direct \
+    r111 \
+    2> "$stderr_file"; then
+    echo "GUI coordinator accepted an invalid handshake path" >&2
+    return 1
+  fi
+  /usr/bin/grep -q "invalid coordinator handshake directory" "$stderr_file"
+  ! /usr/bin/grep -q "invalid GUI install channel" "$stderr_file"
+}
+
 assert_no_existing_install
 
 /usr/sbin/installer -showChoiceChangesXML -pkg "$PKG" -target / > "$DEFAULT_CHOICES"
@@ -391,6 +433,7 @@ for command in shotquill squill; do
   root_link_target_matches "/usr/local/bin/$command" "$EXPECTED_TARGET"
   track_cli_probe "$command" "$EXPECTED_TARGET"
 done
+assert_gui_coordinator_arguments
 /usr/local/bin/shotquill uninstall --dry-run > "$SMOKE_ROOT/uninstall-plan.txt"
 /usr/bin/grep -q "/Applications/ShotQuill.app" "$SMOKE_ROOT/uninstall-plan.txt"
 
