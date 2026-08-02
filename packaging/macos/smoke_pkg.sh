@@ -38,10 +38,22 @@ track_cli_probe() {
   local expected_target="$2"
   local path="/usr/local/bin/$command"
   local identity actual_target
-  [ -L "$path" ] || return 1
-  actual_target="$(/usr/bin/readlink -n "$path")" || return 1
-  [ "$actual_target" = "$expected_target" ] || return 1
-  identity="$(/usr/bin/stat -f '%d:%i' "$path")" || return 1
+  if [ ! -L "$path" ]; then
+    echo "CLI probe is not a symbolic link: $path" >&2
+    return 1
+  fi
+  if ! actual_target="$(/usr/bin/readlink -n "$path")"; then
+    echo "cannot read CLI probe target: $path" >&2
+    return 1
+  fi
+  if [ "$actual_target" != "$expected_target" ]; then
+    echo "unexpected CLI probe target: $path -> $actual_target" >&2
+    return 1
+  fi
+  if ! identity="$(/usr/bin/stat -f '%d:%i' "$path")"; then
+    echo "cannot read CLI probe identity: $path" >&2
+    return 1
+  fi
   case "$command" in
     shotquill)
       SHOTQUILL_PROBE_IDENTITY="$identity"

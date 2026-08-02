@@ -363,6 +363,8 @@ def test_pkg_smoke_refuses_existing_installs_and_removes_only_tracked_links():
     assert 'pkgutil --pkg-info "$receipt"' in source
     assert "SHOTQUILL_PROBE_IDENTITY" in source
     assert "SQUILL_PROBE_IDENTITY" in source
+    assert "CLI probe is not a symbolic link" in source
+    assert "cannot read CLI probe identity" in source
     assert "ROOT_STAGE_ACL" in source
     assert "stat -f '%d:%i' \"$staged\"" in source
     assert '/bin/mv -n "$path" "$staged"' in source
