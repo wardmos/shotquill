@@ -21,6 +21,6 @@ pyinstaller-hooks-contrib==2026.6
 # binding pyproject.toml declares.
 pyobjc-core==12.2.1
 pyobjc-framework-Cocoa==12.2.1
-pyobjc-framework-Quartz==12.2
+pyobjc-framework-Quartz==12.2.1
 pyobjc-framework-ScreenCaptureKit==12.2
 pyobjc-framework-Vision==12.2
