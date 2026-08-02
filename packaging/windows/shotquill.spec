@@ -26,7 +26,7 @@ _icon = _ico if os.path.exists(_ico) else None
 # would otherwise pull in the whole Qt stack (WebEngine, QML, 3D, Charts,
 # Multimedia, ...) — hundreds of MB the app never touches. Drop the unused Qt
 # modules, the macOS-only backends/pyobjc, and the Unix-only DBus/Network bits.
-# Mirrors the macOS DMG excludes.
+# Mirrors the macOS PKG excludes.
 excludes = [
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick",
     "PySide6.QtWebChannel", "PySide6.QtWebSockets", "PySide6.QtNetworkAuth", "PySide6.QtHttpServer",

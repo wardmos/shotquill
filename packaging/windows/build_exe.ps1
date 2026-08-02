@@ -17,7 +17,7 @@
 #                     bundle ships ONE copy instead of two (see shotquill.spec).
 #
 # NOTE: this script has not been validated on a real Windows runner yet — it
-# mirrors the macOS DMG build's PyInstaller invocation and Qt-module pruning.
+# mirrors the macOS PKG build's PyInstaller invocation and Qt-module pruning.
 # The CI Windows job (.github/workflows) is where it gets exercised; treat a
 # green run there as the source of truth.
 #
@@ -58,7 +58,7 @@ pyinstaller --noconfirm --clean packaging\windows\shotquill.spec
 # Trim payload --exclude-module can't reach (it works per-module, not per-file).
 # PyInstaller's PySide6 hook copies whole plugin subtrees and Qt translations
 # regardless of which Qt modules survive; nothing on ShotQuill's path loads them.
-# Mirrors the macOS DMG prune and the Linux prune_bundle.py keep policy.
+# Mirrors the macOS PKG prune and the Linux prune_bundle.py keep policy.
 $qt = Join-Path 'dist\shotquill' '_internal\PySide6\Qt'
 if (-not (Test-Path $qt)) { $qt = Join-Path 'dist\shotquill' 'PySide6\Qt' }  # layout varies by PyInstaller
 

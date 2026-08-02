@@ -564,6 +564,34 @@ def test_permission_rows_hidden_on_linux(qtbot, config, monkeypatch):
     assert dialog._input_permission is None
 
 
+def test_uninstall_button_is_macos_only_and_emits_without_closing(qtbot, config, monkeypatch):
+    from shotquill.i18n import t
+    from shotquill.ui import settings as settings_module
+
+    monkeypatch.setattr(settings_module.sys, "platform", "darwin")
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    emitted = []
+    dialog.uninstall_requested.connect(lambda: emitted.append(True))
+
+    assert dialog._uninstall_button.text() == t("settings.uninstall")
+    dialog._uninstall_button.click()
+
+    assert emitted == [True]
+    assert dialog.isVisible()
+
+
+def test_uninstall_button_is_hidden_off_macos(qtbot, config, monkeypatch):
+    from shotquill.ui import settings as settings_module
+
+    monkeypatch.setattr(settings_module.sys, "platform", "linux")
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._uninstall_button is None
+
+
 def test_permission_changeEvent_is_a_noop_on_linux(qtbot, config, monkeypatch):
     # Without the rows there's nothing to refresh on activation — make sure
     # the activation handler doesn't try to dereference ``None`` (the

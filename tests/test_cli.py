@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -152,6 +153,89 @@ def test_help_documents_exit_codes(capsys, argv):
         cli.main(argv)
     assert excinfo.value.code == 0
     assert "exit codes:" in capsys.readouterr().out
+
+
+def _direct_uninstall_plan():
+    from shotquill import uninstall
+
+    helper = Path(uninstall.UNINSTALL_HELPER_PATH)
+    return uninstall.UninstallPlan(
+        channel=uninstall.InstallChannel.PKG,
+        can_execute=True,
+        remove_paths=(Path(uninstall.APP_PATH),),
+        forget_receipts=(uninstall.APP_RECEIPT,),
+        brew_command=None,
+        helper_path=helper,
+        warnings=(),
+        generation=uninstall.InstallGeneration(
+            app=f"1:2:{'a' * 64}",
+            helper=f"3:4:{'b' * 64}",
+            shotquill="preserve",
+            squill="preserve",
+            launch_agent="missing",
+        ),
+    )
+
+
+def test_uninstall_dry_run_prints_plan_without_executing(monkeypatch, capsys):
+    from shotquill import uninstall
+
+    plan = _direct_uninstall_plan()
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", lambda: plan)
+    executed = []
+    monkeypatch.setattr(uninstall, "execute_cli_uninstall", lambda _plan: executed.append(_plan))
+
+    assert cli.main(["uninstall", "--dry-run"]) == 0
+    assert executed == []
+    assert "Install channel: pkg" in capsys.readouterr().out
+
+
+def test_uninstall_noninteractive_is_rejected(monkeypatch, capsys):
+    from shotquill import uninstall
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", _direct_uninstall_plan)
+
+    assert cli.main(["uninstall"]) == 2
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_uninstall_yes_dispatches_the_channel_plan(monkeypatch):
+    from shotquill import uninstall
+
+    plan = _direct_uninstall_plan()
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", lambda: plan)
+    executed = []
+    monkeypatch.setattr(
+        uninstall,
+        "execute_cli_uninstall",
+        lambda candidate: executed.append(candidate) or 0,
+    )
+
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert executed == [plan]
+
+
+def test_uninstall_yes_still_requires_a_terminal(monkeypatch, capsys):
+    from shotquill import uninstall
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", _direct_uninstall_plan)
+
+    assert cli.main(["uninstall", "--yes"]) == 2
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_uninstall_is_unavailable_off_macos(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+
+    assert cli.main(["uninstall", "--dry-run"]) == headless.EXIT_UNSUPPORTED
+    assert "macOS" in capsys.readouterr().err
 
 
 # --- capture: targets -------------------------------------------------------

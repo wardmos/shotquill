@@ -5,7 +5,7 @@ Produces a 1024x1024 PNG matching the brand mark (blue rounded tile + white
 capture/pen glyph), following Apple's icon grid (~10% transparent margin around
 the tile).
 
-The committed ``icon.png`` is what ``build_dmg.sh`` converts into ``.icns`` with
+The committed ``icon.png`` is what ``build_pkg.sh`` converts into ``.icns`` with
 macOS' native ``sips``/``iconutil``, so the build never depends on fonts being
 present on the build machine. Re-run this only to regenerate the artwork::
 

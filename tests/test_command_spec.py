@@ -50,6 +50,15 @@ def test_commands_exposes_the_registry_and_mcp_is_a_subset():
     assert all(c.mcp_name is not None for c in mcp_cmds)
 
 
+def test_uninstall_is_cli_only():
+    uninstall = next(
+        command for command in command_spec.commands() if command.cli_path == ("uninstall",)
+    )
+
+    assert uninstall.mcp_name is None
+    assert uninstall not in command_spec.mcp_commands()
+
+
 # --- argparse generation for param shapes the live registry doesn't exercise -
 
 

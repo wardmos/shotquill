@@ -13,12 +13,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # workflow_dispatch can be launched from a branch in the Actions UI. Stop
+  # before creating a release unless the selected ref is a PackageKit-safe tag.
+  validate-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$RELEASE_REF_TYPE" != "tag" ] || [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: releases require a vX.Y.Z tag, got $RELEASE_REF_TYPE $RELEASE_TAG" >&2
+            exit 2
+          fi
+
   # Gate: never cut a release from a commit that fails the checks CI runs. A tag
   # can land on any commit, and workflow_dispatch could otherwise bypass a red CI
   # entirely. Split out of the macOS build so the platform builds (which all
   # `needs: gate`) run in parallel instead of chaining behind one another. Kept
   # on macOS so the gate exercises the same OS the .app is built on.
   gate:
+    needs: validate-release
     runs-on: macos-14
     timeout-minutes: 20
     steps:
@@ -56,11 +73,14 @@ jobs:
           generate_release_notes: true
 
   build-macos:
-    # The .app + per-arch DMGs, plus the Homebrew tap bump. Runs in parallel with
-    # build-linux now that the gate and the Release shell are their own jobs.
+    # The .app + per-arch PKGs. Runs in parallel with build-linux now that the
+    # gate and the Release shell are their own jobs.
     needs: [gate, create-release]
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
+    outputs:
+      arm_sha: ${{ steps.sha.outputs.arm_sha }}
+      intel_sha: ${{ steps.sha.outputs.intel_sha }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -82,31 +102,39 @@ jobs:
             pip freeze | grep -iE '^(pyinstaller|pyside6|shiboken6|pyobjc)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Build .app + DMGs (arm64, x86_64, universal2)
-        run: bash packaging/macos/build_dmg.sh "${{ github.ref_name }}"
+      - name: Build .app + PKGs (arm64, x86_64, universal2)
+        env:
+          # Keep release PKGs newer than any earlier smoke build of the same
+          # product version, including builds installed through Homebrew.
+          SHOTQUILL_BUILD_VERSION: ${{ github.run_id }}
+        run: bash packaging/macos/build_pkg.sh "${{ github.ref_name }}"
+      - name: Exercise universal2 PKG install and uninstall
+        run: bash packaging/macos/smoke_pkg.sh dist/ShotQuill-*-universal2.pkg
       - name: Compute SHA256
         id: sha
         run: |
           cd dist
           # Sidecar checksum files (shasum -c compatible) shipped with the release.
-          for dmg in ShotQuill-*.dmg; do
-            shasum -a 256 "$dmg" > "$dmg.sha256"
+          for pkg in ShotQuill-*.pkg; do
+            shasum -a 256 "$pkg" > "$pkg.sha256"
           done
-          echo "arm_sha=$(awk '{print $1}' ShotQuill-*-arm64.dmg.sha256)" >> "$GITHUB_OUTPUT"
-          echo "intel_sha=$(awk '{print $1}' ShotQuill-*-x86_64.dmg.sha256)" >> "$GITHUB_OUTPUT"
-      - name: Add DMGs to the release
+          echo "arm_sha=$(awk '{print $1}' ShotQuill-*-arm64.pkg.sha256)" >> "$GITHUB_OUTPUT"
+          echo "intel_sha=$(awk '{print $1}' ShotQuill-*-x86_64.pkg.sha256)" >> "$GITHUB_OUTPUT"
+      - name: Validate generated Homebrew cask
+        run: |
+          bash packaging/macos/smoke_cask.sh \
+            "${{ github.ref_name }}" \
+            "${{ steps.sha.outputs.arm_sha }}" \
+            "${{ steps.sha.outputs.intel_sha }}"
+      - name: Add PKGs to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
           files: |
-            dist/ShotQuill-*.dmg
-            dist/ShotQuill-*.dmg.sha256
-      - name: Update Homebrew tap
-        env:
-          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-        run: bash packaging/macos/update_tap.sh "${{ github.ref_name }}" "${{ steps.sha.outputs.arm_sha }}" "${{ steps.sha.outputs.intel_sha }}"
+            dist/ShotQuill-*.pkg
+            dist/ShotQuill-*.pkg.sha256
 
   publish-pypi:
     # `pipx install shotquill` / `pip install shotquill` — the primary channel
@@ -286,3 +314,16 @@ jobs:
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           draft: false
+
+  # Update the cask only after the Release is public, so Homebrew never points
+  # at assets that are still hidden in a draft.
+  update-homebrew:
+    needs: [build-macos, publish-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: bash packaging/macos/update_tap.sh "${{ github.ref_name }}" "${{ needs.build-macos.outputs.arm_sha }}" "${{ needs.build-macos.outputs.intel_sha }}"

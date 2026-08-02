@@ -1,6 +1,6 @@
 name: Package smoke
 
-# Validates that the macOS bundle/DMG and the Linux AppImage still build,
+# Validates that the macOS bundle/PKG and the Linux AppImage still build,
 # without cutting a release. Runs on PRs that touch packaging, on pushes to
 # main (so post-merge main always has a built-from-main smoke artifact, even
 # if a PR slipped through without triggering this), and on demand.
@@ -62,24 +62,31 @@ jobs:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           short_sha="${SOURCE_SHA:0:7}"
-          version="v0.0.0-smoke-$short_sha"
+          product_version="$(python -c 'import shotquill; print(shotquill.__version__)')"
+          version="v$product_version"
           artifact_suffix="-$short_sha"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "artifact_suffix=$artifact_suffix" >> "$GITHUB_OUTPUT"
-      - name: Build .app + DMG (smoke)
+      - name: Build .app + PKG (smoke)
         # universal2 only: it needs universal2 wheels for every binary dep, so
         # it is the strictest of the three arches — the thinned arm64/x86_64
-        # release slices can't fail independently of it. UDZO because the smoke
-        # DMG is a 7-day throwaway artifact; zlib compresses much faster than
-        # the LZMA default releases ship with.
+        # release slices can't fail independently of it.
         env:
-          SHOTQUILL_DMG_FORMAT: UDZO
-        run: bash packaging/macos/build_dmg.sh "${{ steps.smoke.outputs.version }}" universal2
-      - name: Upload DMG artifact
+          # Repository-wide and monotonic across smoke and release workflows.
+          SHOTQUILL_BUILD_VERSION: ${{ github.run_id }}
+        run: bash packaging/macos/build_pkg.sh "${{ steps.smoke.outputs.version }}" universal2
+      - name: Exercise universal2 PKG install and uninstall
+        run: bash packaging/macos/smoke_pkg.sh dist/ShotQuill-*-universal2.pkg
+      - name: Validate generated Homebrew cask
+        run: |
+          arm_sha="$(printf 'a%.0s' {1..64})"
+          intel_sha="$(printf 'b%.0s' {1..64})"
+          bash packaging/macos/smoke_cask.sh v0.0.0 "$arm_sha" "$intel_sha"
+      - name: Upload PKG artifact
         uses: actions/upload-artifact@v7
         with:
-          name: shotquill-dmg-smoke${{ steps.smoke.outputs.artifact_suffix }}
-          path: dist/ShotQuill-*.dmg
+          name: shotquill-pkg-smoke${{ steps.smoke.outputs.artifact_suffix }}
+          path: dist/ShotQuill-*.pkg
           if-no-files-found: error
           retention-days: 7
 
