@@ -67,7 +67,7 @@ jobs:
     steps:
       - name: Create draft GitHub Release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           draft: true
           generate_release_notes: true
@@ -128,7 +128,7 @@ jobs:
             "${{ steps.sha.outputs.intel_sha }}"
       - name: Add PKGs to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
@@ -218,7 +218,7 @@ jobs:
           done
       - name: Add AppImage to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
@@ -291,7 +291,7 @@ jobs:
           "$h  $(Split-Path $zip -Leaf)" | Out-File -Encoding ascii -NoNewline "$zip.sha256"
       - name: Add the Windows bundle to the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           # Keep it a draft; publish-release flips it live once every bundle is in.
           draft: true
@@ -311,7 +311,7 @@ jobs:
     steps:
       - name: Publish the release
         # Pinned to a commit SHA (supply-chain hardening); v3.0.0 (Node 24 runtime).
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           draft: false
 
