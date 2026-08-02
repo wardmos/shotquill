@@ -47,7 +47,8 @@ hash_file() {
 
 hash_link_target() {
   local output digest
-  output="$(/usr/bin/readlink -n "$1" | /usr/bin/shasum -a 256)" \
+  # Include readlink's presentation newline as a canonical target delimiter.
+  output="$(/usr/bin/readlink "$1" | /usr/bin/shasum -a 256)" \
     || die "cannot hash link target $1"
   digest="${output%% *}"
   [[ "$digest" =~ ^[0-9a-f]+$ ]] && [ "${#digest}" -eq 64 ] \
@@ -89,11 +90,16 @@ link_matches() {
   local actual expected marker
   marker=$'\034'
   [ -L "$path" ] || return 1
-  # BSD readlink appends a presentation newline unless -n is supplied. The
-  # marker prevents command substitution from trimming newlines that are part
-  # of the literal target itself.
-  actual="$(/usr/bin/readlink -n "$path" 2>/dev/null; /usr/bin/printf '\034')"
-  expected="$EXPECTED_EXECUTABLE$marker"
+  # Preserve readlink's presentation newline ahead of a non-newline marker.
+  # A literal newline in the target therefore remains distinguishable from
+  # the fixed expected target even after command substitution.
+  actual="$(
+    /usr/bin/readlink "$path" 2>/dev/null
+    readlink_status=$?
+    /usr/bin/printf '\034'
+    exit "$readlink_status"
+  )" || return 1
+  expected="$EXPECTED_EXECUTABLE"$'\n'"$marker"
   [ "$actual" = "$expected" ]
 }
 

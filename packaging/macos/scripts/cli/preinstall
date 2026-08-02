@@ -13,12 +13,12 @@ link_matches() {
   marker=$'\034'
   [ -L "$path" ] || return 1
   actual="$(
-    /usr/bin/readlink -n "$path" 2>/dev/null
+    /usr/bin/readlink "$path" 2>/dev/null
     readlink_status=$?
     /usr/bin/printf '\034'
     exit "$readlink_status"
   )" || return 1
-  [ "$actual" = "$expected_target$marker" ]
+  [ "$actual" = "$expected_target"$'\n'"$marker" ]
 }
 
 for command in shotquill squill; do

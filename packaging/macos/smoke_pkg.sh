@@ -19,6 +19,34 @@ SHOTQUILL_PROBE_TARGET=""
 SQUILL_PROBE_IDENTITY=""
 SQUILL_PROBE_TARGET=""
 
+encoded_link_target() {
+  local path="$1"
+  local readlink_status
+  /usr/bin/readlink "$path" 2>/dev/null
+  readlink_status=$?
+  /usr/bin/printf '\034'
+  return "$readlink_status"
+}
+
+encoded_root_link_target() {
+  local path="$1"
+  local readlink_status
+  /usr/bin/sudo /usr/bin/readlink "$path" 2>/dev/null
+  readlink_status=$?
+  /usr/bin/printf '\034'
+  return "$readlink_status"
+}
+
+link_target_matches() {
+  local path="$1"
+  local expected_target="$2"
+  local actual_target marker
+  marker=$'\034'
+  [ -L "$path" ] || return 1
+  actual_target="$(encoded_link_target "$path")" || return 1
+  [ "$actual_target" = "$expected_target"$'\n'"$marker" ]
+}
+
 clear_cli_probe() {
   case "$1" in
     shotquill)
@@ -37,17 +65,18 @@ track_cli_probe() {
   local command="$1"
   local expected_target="$2"
   local path="/usr/local/bin/$command"
-  local identity actual_target
+  local identity actual_target marker
+  marker=$'\034'
   if [ ! -L "$path" ]; then
     echo "CLI probe is not a symbolic link: $path" >&2
     return 1
   fi
-  if ! actual_target="$(/usr/bin/readlink -n "$path")"; then
+  if ! actual_target="$(encoded_link_target "$path")"; then
     echo "cannot read CLI probe target: $path" >&2
     return 1
   fi
-  if [ "$actual_target" != "$expected_target" ]; then
-    echo "unexpected CLI probe target: $path -> $actual_target" >&2
+  if [ "$actual_target" != "$expected_target"$'\n'"$marker" ]; then
+    echo "unexpected CLI probe target: $path" >&2
     return 1
   fi
   if ! identity="$(/usr/bin/stat -f '%d:%i' "$path")"; then
@@ -69,7 +98,8 @@ track_cli_probe() {
 
 remove_cli_probe() {
   local command="$1"
-  local expected_identity expected_target path staged staged_identity staged_target
+  local expected_identity expected_target path staged staged_identity staged_target marker
+  marker=$'\034'
   case "$command" in
     shotquill)
       expected_identity="$SHOTQUILL_PROBE_IDENTITY"
@@ -104,9 +134,9 @@ remove_cli_probe() {
     return 1
   fi
   staged_identity="$(/usr/bin/sudo /usr/bin/stat -f '%d:%i' "$staged")" || return 1
-  staged_target="$(/usr/bin/sudo /usr/bin/readlink -n "$staged")" || return 1
+  staged_target="$(encoded_root_link_target "$staged")" || return 1
   if [ "$staged_identity" = "$expected_identity" ] \
-    && [ "$staged_target" = "$expected_target" ]; then
+    && [ "$staged_target" = "$expected_target"$'\n'"$marker" ]; then
     /usr/bin/sudo /bin/rm "$staged" || return 1
     clear_cli_probe "$command"
     return 0
@@ -241,7 +271,7 @@ if /usr/bin/sudo "$CLI_POSTINSTALL" component.pkg / /; then
   exit 1
 fi
 test ! -e /usr/local/bin/shotquill && test ! -L /usr/local/bin/shotquill
-test "$(/usr/bin/readlink -n /usr/local/bin/squill)" = /another/tool
+link_target_matches /usr/local/bin/squill /another/tool
 CLI_STAGE_RESIDUE=(/private/tmp/.shotquill-cli-install.*)
 test "${#CLI_STAGE_RESIDUE[@]}" -eq 0
 remove_cli_probe squill
@@ -282,7 +312,7 @@ for receipt in \
 done
 for command in shotquill squill; do
   test -L "/usr/local/bin/$command"
-  test "$(/usr/bin/readlink -n "/usr/local/bin/$command")" = "$EXPECTED_TARGET"
+  link_target_matches "/usr/local/bin/$command" "$EXPECTED_TARGET"
   track_cli_probe "$command" "$EXPECTED_TARGET"
 done
 
@@ -297,7 +327,7 @@ track_cli_probe shotquill /another/tool
 test ! -e /Applications/ShotQuill.app
 test ! -e "$INSTALLED_HELPER"
 test -L /usr/local/bin/shotquill
-test "$(/usr/bin/readlink -n /usr/local/bin/shotquill)" = /another/tool
+link_target_matches /usr/local/bin/shotquill /another/tool
 test ! -e /usr/local/bin/squill && test ! -L /usr/local/bin/squill
 clear_cli_probe squill
 for receipt in \
