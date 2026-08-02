@@ -196,7 +196,7 @@ build_one() {
 
   # Parse the finished package once so malformed Distribution XML cannot become
   # a release artifact even if productbuild accepted it.
-  installer -showChoicesXML -pkg "$pkg" >/dev/null
+  installer -showChoicesXML -pkg "$pkg" -target / >/dev/null
   echo "Built $pkg"
 }
 

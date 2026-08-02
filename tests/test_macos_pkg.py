@@ -127,6 +127,7 @@ def test_pkg_builder_replaces_the_dmg_container():
     assert "ShotQuill-$VERSION-$arch.pkg" in script
     assert "hdiutil" not in script
     assert "SHOTQUILL_DMG_FORMAT" not in script
+    assert 'installer -showChoicesXML -pkg "$pkg" -target /' in script
     assert "--install-location /Applications" in script
     assert "--install-location /usr/local/bin" in script
     assert '"$cli_root/shotquill"' in script
