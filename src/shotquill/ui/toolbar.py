@@ -43,7 +43,6 @@ _TOOLS: list[tuple[str, Tool, str]] = [
     ("tool.line", Tool.LINE, "line"),
     ("tool.pen", Tool.PEN, "pen"),
     ("tool.highlighter", Tool.HIGHLIGHTER, "highlighter"),
-    ("tool.area_highlight", Tool.AREA_HIGHLIGHT, "area_highlight"),
     ("tool.mosaic", Tool.MOSAIC, "mosaic"),
     ("tool.text", Tool.TEXT, "text"),
 ]
@@ -145,6 +144,7 @@ def create_toolbar(
     toolbar.setMovable(False)
     group = QActionGroup(toolbar)
     group.setExclusive(True)
+    tool_actions: list[QAction] = []
 
     for key, tool, icon in _TOOLS:
         action = QAction(sized_icon(icon), t(key), toolbar)
@@ -152,9 +152,21 @@ def create_toolbar(
         action.setChecked(tool == Tool.SELECT)
         action.triggered.connect(lambda _checked=False, bound=tool: canvas.set_tool(bound))
         group.addAction(action)
+        tool_actions.append(action)
         toolbar.addAction(action)
 
+    toolbar.tool_actions = tuple(tool_actions)
+
     toolbar.addSeparator()
+
+    # Shape and appearance are independent: this style toggle sits with color
+    # and size, outside the mutually exclusive drawing-tool group above.
+    highlight_action = QAction(sized_icon("shape_highlight"), t("toolbar.highlight"), toolbar)
+    highlight_action.setCheckable(True)
+    highlight_action.setChecked(canvas.shape_highlight_enabled())
+    highlight_action.toggled.connect(canvas.set_shape_highlight_enabled)
+    toolbar.addAction(highlight_action)
+    toolbar.highlight_action = highlight_action
 
     # The macOS native colour panel can remain behind the frameless always-on-top
     # editor.  Never combine that panel with window modality: an invisible modal

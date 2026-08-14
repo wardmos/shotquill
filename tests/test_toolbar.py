@@ -42,39 +42,46 @@ def _toolbar(qtbot, style=None, **callbacks):
 
 def test_toolbar_has_a_checkable_action_per_tool(qtbot):
     _canvas_, toolbar = _toolbar(qtbot)
-    checkable = [a for a in toolbar.actions() if a.isCheckable()]
-    assert len(checkable) == len(_TOOLS)
+    assert len(toolbar.tool_actions) == len(_TOOLS)
     # Select is the default checked tool.
-    checked = [a for a in checkable if a.isChecked()]
+    checked = [action for action in toolbar.tool_actions if action.isChecked()]
     assert len(checked) == 1
 
 
 def test_tool_actions_are_mutually_exclusive(qtbot):
-    canvas, toolbar = _toolbar(qtbot)
-    checkable = [a for a in toolbar.actions() if a.isCheckable()]
+    _canvas_, toolbar = _toolbar(qtbot)
     # Triggering the second tool action unchecks the first (exclusive group).
-    checkable[1].trigger()
-    assert sum(a.isChecked() for a in checkable) == 1
+    toolbar.tool_actions[1].trigger()
+    assert sum(action.isChecked() for action in toolbar.tool_actions) == 1
 
 
 def test_tool_action_switches_canvas_tool(qtbot):
     canvas, toolbar = _toolbar(qtbot)
-    # _TOOLS order maps 1:1 to the checkable actions; index 1 is RECT.
-    rect_action = [a for a in toolbar.actions() if a.isCheckable()][1]
+    # _TOOLS order maps 1:1 to tool_actions; index 1 is RECT.
+    rect_action = toolbar.tool_actions[1]
     assert _TOOLS[1][1] is Tool.RECT
+
     rect_action.trigger()
-    canvas.set_tool(Tool.RECT)  # sanity; trigger already routed through the lambda
-    canvas.set_tool(_TOOLS[1][1])
+
+    assert canvas.tool() is Tool.RECT
 
 
-def test_toolbar_exposes_area_highlight_tool(qtbot):
+def test_toolbar_groups_highlight_style_with_color_without_changing_shape_tool(qtbot):
     canvas, toolbar = _toolbar(qtbot)
-    action = next(action for action in toolbar.actions() if action.text() == "Highlight area")
+    ellipse_action = next(action for action in toolbar.tool_actions if action.text() == "Ellipse")
+    ellipse_action.trigger()
 
-    action.trigger()
+    highlight = toolbar.highlight_action
+    color = next(action for action in toolbar.actions() if action.text() == "Color")
+    assert highlight not in toolbar.tool_actions
+    assert toolbar.actions().index(highlight) + 1 == toolbar.actions().index(color)
+    assert not highlight.isChecked()
 
-    assert action.isChecked()
-    assert canvas.tool() is Tool.AREA_HIGHLIGHT
+    highlight.trigger()
+
+    assert highlight.isChecked()
+    assert canvas.shape_highlight_enabled()
+    assert canvas.tool() is Tool.ELLIPSE
 
 
 def test_width_spinbox_reflects_and_updates_canvas(qtbot):

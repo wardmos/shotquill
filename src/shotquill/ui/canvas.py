@@ -53,7 +53,7 @@ _DEFAULT_COLOR = "#ff3b30"
 _DEFAULT_WIDTH = 4
 _DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
-_AREA_HIGHLIGHT_ALPHA = 96
+_SHAPE_HIGHLIGHT_ALPHA = 96
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
@@ -179,6 +179,7 @@ class AnnotationCanvas(QGraphicsView):
         self._color = QColor(_DEFAULT_COLOR)
         self._width = _DEFAULT_WIDTH
         self._font_size = _DEFAULT_FONT_SIZE
+        self._shape_highlight_enabled = False
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
         self._last_hit_item: QGraphicsItem | None = None
@@ -258,6 +259,12 @@ class AnnotationCanvas(QGraphicsView):
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
+
+    def shape_highlight_enabled(self) -> bool:
+        return self._shape_highlight_enabled
+
+    def set_shape_highlight_enabled(self, enabled: bool) -> None:
+        self._shape_highlight_enabled = bool(enabled)
 
     def set_width(self, width: int) -> None:
         self._width = max(1, int(width))
@@ -475,10 +482,17 @@ class AnnotationCanvas(QGraphicsView):
         pen.setJoinStyle(Qt.RoundJoin)
         return pen
 
-    def _area_highlight_brush(self) -> QBrush:
+    def _shape_highlight_brush(self) -> QBrush:
         color = QColor(self._color)
-        color.setAlpha(_AREA_HIGHLIGHT_ALPHA)
+        color.setAlpha(_SHAPE_HIGHLIGHT_ALPHA)
         return QBrush(color)
+
+    def _apply_shape_style(self, item: QGraphicsRectItem | QGraphicsEllipseItem) -> None:
+        if self._shape_highlight_enabled:
+            item.setPen(QPen(Qt.NoPen))
+            item.setBrush(self._shape_highlight_brush())
+        else:
+            item.setPen(self._pen())
 
     def keyPressEvent(self, event) -> None:
         if (
@@ -548,16 +562,11 @@ class AnnotationCanvas(QGraphicsView):
             item = path_item
         elif tool == Tool.RECT:
             rect_item = QGraphicsRectItem(QRectF(self._start, self._start))
-            rect_item.setPen(self._pen())
-            item = rect_item
-        elif tool == Tool.AREA_HIGHLIGHT:
-            rect_item = QGraphicsRectItem(QRectF(self._start, self._start))
-            rect_item.setPen(QPen(Qt.NoPen))
-            rect_item.setBrush(self._area_highlight_brush())
+            self._apply_shape_style(rect_item)
             item = rect_item
         elif tool == Tool.ELLIPSE:
             ellipse_item = QGraphicsEllipseItem(QRectF(self._start, self._start))
-            ellipse_item.setPen(self._pen())
+            self._apply_shape_style(ellipse_item)
             item = ellipse_item
         elif tool == Tool.LINE:
             line_item = QGraphicsLineItem(QLineF(self._start, self._start))
@@ -595,7 +604,7 @@ class AnnotationCanvas(QGraphicsView):
             self._path.lineTo(pos)
             self._last_path_pos = QPointF(pos)
             self._temp_item.setPath(self._path)
-        elif tool in (Tool.RECT, Tool.ELLIPSE, Tool.AREA_HIGHLIGHT):
+        elif tool in (Tool.RECT, Tool.ELLIPSE):
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))

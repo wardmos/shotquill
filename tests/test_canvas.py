@@ -306,7 +306,6 @@ def test_pixelate_preserves_dimensions():
         Tool.ARROW,
         Tool.PEN,
         Tool.HIGHLIGHTER,
-        Tool.AREA_HIGHLIGHT,
     ],
 )
 def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
@@ -320,33 +319,36 @@ def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     assert canvas.undo_stack().count() == 1
 
 
-def test_area_highlight_drag_creates_translucent_color_fill(qtbot):
-    from PySide6.QtWidgets import QGraphicsRectItem
+@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ELLIPSE])
+def test_shape_highlight_style_creates_translucent_color_fill(qtbot, tool):
+    from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
     canvas = _canvas(qtbot)
     canvas.set_color(QColor("#ffd60a"))
-    canvas.set_tool(Tool.AREA_HIGHLIGHT)
+    canvas.set_shape_highlight_enabled(True)
+    canvas.set_tool(tool)
     viewport = canvas.viewport()
 
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
     qtbot.mouseMove(viewport, pos=QPoint(80, 60))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
 
-    item = next(i for i in _annotation_items(canvas) if isinstance(i, QGraphicsRectItem))
+    item_type = QGraphicsRectItem if tool is Tool.RECT else QGraphicsEllipseItem
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, item_type))
     fill = item.brush().color()
     assert item.pen().style() == Qt.NoPen
     assert fill.name() == "#ffd60a"
     assert 0 < fill.alpha() < 255
-    assert item.rect().width() > 0
-    assert item.rect().height() > 0
+    assert canvas.undo_stack().count() == 1
 
 
-def test_area_highlight_is_rendered_into_export(qtbot):
+def test_shape_highlight_style_is_rendered_into_export(qtbot):
     from PySide6.QtWidgets import QGraphicsRectItem
 
     canvas = _canvas(qtbot)
     canvas.set_color(QColor("yellow"))
-    canvas.set_tool(Tool.AREA_HIGHLIGHT)
+    canvas.set_shape_highlight_enabled(True)
+    canvas.set_tool(Tool.RECT)
     viewport = canvas.viewport()
 
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
@@ -358,24 +360,22 @@ def test_area_highlight_is_rendered_into_export(qtbot):
     assert canvas.export_image().pixelColor(sample) != canvas.background_image().pixelColor(sample)
 
 
-def test_area_highlight_is_boxed_while_highlighter_stays_freehand(qtbot):
-    from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsRectItem
+def test_shape_highlight_style_can_be_disabled_for_outline_shapes(qtbot):
+    from PySide6.QtWidgets import QGraphicsEllipseItem
 
     canvas = _canvas(qtbot)
+    canvas.set_shape_highlight_enabled(True)
+    canvas.set_shape_highlight_enabled(False)
+    canvas.set_tool(Tool.ELLIPSE)
     viewport = canvas.viewport()
 
-    canvas.set_tool(Tool.HIGHLIGHTER)
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
     qtbot.mouseMove(viewport, pos=QPoint(80, 60))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
 
-    canvas.set_tool(Tool.AREA_HIGHLIGHT)
-    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
-    qtbot.mouseMove(viewport, pos=QPoint(70, 50))
-    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(70, 50))
-
-    assert any(isinstance(i, QGraphicsPathItem) for i in _annotation_items(canvas))
-    assert any(isinstance(i, QGraphicsRectItem) for i in _annotation_items(canvas))
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, QGraphicsEllipseItem))
+    assert item.pen().style() != Qt.NoPen
+    assert item.brush().style() == Qt.NoBrush
 
 
 def test_freehand_skips_redundant_move_points(qtbot):
