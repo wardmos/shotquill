@@ -66,21 +66,21 @@ def test_tool_action_switches_canvas_tool(qtbot):
     assert canvas.tool() is Tool.RECT
 
 
-def test_toolbar_groups_highlight_style_with_color_without_changing_shape_tool(qtbot):
+def test_toolbar_groups_spotlight_style_with_color_without_changing_shape_tool(qtbot):
     canvas, toolbar = _toolbar(qtbot)
     ellipse_action = next(action for action in toolbar.tool_actions if action.text() == "Ellipse")
     ellipse_action.trigger()
 
-    highlight = toolbar.highlight_action
+    spotlight = toolbar.spotlight_action
     color = next(action for action in toolbar.actions() if action.text() == "Color")
-    assert highlight not in toolbar.tool_actions
-    assert toolbar.actions().index(highlight) + 1 == toolbar.actions().index(color)
-    assert not highlight.isChecked()
+    assert spotlight not in toolbar.tool_actions
+    assert toolbar.actions().index(spotlight) + 1 == toolbar.actions().index(color)
+    assert not spotlight.isChecked()
 
-    highlight.trigger()
+    spotlight.trigger()
 
-    assert highlight.isChecked()
-    assert canvas.shape_highlight_enabled()
+    assert spotlight.isChecked()
+    assert canvas.shape_spotlight_enabled()
     assert canvas.tool() is Tool.ELLIPSE
 
 

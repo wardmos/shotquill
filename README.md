@@ -65,9 +65,9 @@ extract text, copy, save, or pin the result without breaking your flow.
   - **Full screen** (`⌥S`) — every display at once, instantly.
 - **Configurable after-capture flow** — open the annotation editor by default, or
   make captures hands-free by auto-saving, auto-copying, or both.
-- **Annotation editor** — rectangles and ellipses with outline or translucent
-  highlight styles, arrows, lines, freehand pen, highlighter, text, and **mosaic
-  pixelation** for visual obfuscation. Mosaic
+- **Annotation editor** — rectangle/ellipse spotlights that dim everything
+  outside the selected regions, plus arrows, lines, freehand pen, highlighter,
+  text, and **mosaic pixelation** for visual obfuscation. Mosaic
   removes the original per-pixel detail from the exported image but retains
   block-average information; use the solid-fill CLI / blocklist controls for
   high-risk secrets instead.
@@ -263,8 +263,8 @@ When both auto-output toggles are off (or whenever you want to mark a shot up),
 the editor opens with a toolbar:
 
 - **Tools:** select, rectangle, ellipse, arrow, line, pen, highlighter, mosaic,
-  and text; shape highlighting, color, and stroke width are separate style
-  controls, alongside undo / redo.
+  and text; spotlight is a separate shape style that keeps selected regions
+  unchanged while dimming the outside, alongside color, width, and undo / redo.
 - **Copy Text** runs OCR on the capture and copies the recognized text.
 - **Pin** floats the annotated shot on top of the desktop.
 

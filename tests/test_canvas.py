@@ -113,7 +113,7 @@ def _draw_rect(qtbot, canvas):
 
 
 def _annotation_items(canvas):
-    return [item for item in canvas.scene().items() if item.zValue() > -1000]
+    return canvas._annotation_items()
 
 
 def test_move_items_command_round_trips_position(qtbot):
@@ -319,53 +319,120 @@ def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     assert canvas.undo_stack().count() == 1
 
 
-@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ELLIPSE])
-def test_shape_highlight_style_creates_translucent_color_fill(qtbot, tool):
-    from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
+def _draw_spotlight(qtbot, canvas, tool, start=(15, 15), end=(80, 60)):
+    from shotquill.ui.items.spotlight import SpotlightRegionItem
 
-    canvas = _canvas(qtbot)
-    canvas.set_color(QColor("#ffd60a"))
-    canvas.set_shape_highlight_enabled(True)
+    canvas.set_shape_spotlight_enabled(True)
     canvas.set_tool(tool)
     viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(*start))
+    qtbot.mouseMove(viewport, pos=QPoint(*end))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(*end))
+    return max(
+        (item for item in _annotation_items(canvas) if isinstance(item, SpotlightRegionItem)),
+        key=lambda item: item.zValue(),
+    )
 
-    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
-    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
-    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
 
-    item_type = QGraphicsRectItem if tool is Tool.RECT else QGraphicsEllipseItem
-    item = next(i for i in _annotation_items(canvas) if isinstance(i, item_type))
-    fill = item.brush().color()
-    assert item.pen().style() == Qt.NoPen
-    assert fill.name() == "#ffd60a"
-    assert 0 < fill.alpha() < 255
+@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ELLIPSE])
+def test_spotlight_keeps_shape_bright_and_dims_outside(qtbot, tool):
+    canvas = _canvas(qtbot)
+    canvas.set_color(QColor("red"))  # spotlight dimming is independent of annotation color
+    item = _draw_spotlight(qtbot, canvas, tool)
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+    inside = item.mapToScene(item.rect().center()).toPoint()
+    outside = QPoint(3, 3)
+
+    assert exported.pixelColor(inside) == source.pixelColor(inside)
+    dimmed = exported.pixelColor(outside)
+    original = source.pixelColor(outside)
+    assert dimmed.value() < original.value()
+    assert dimmed.red() == dimmed.green() == dimmed.blue()
     assert canvas.undo_stack().count() == 1
 
 
-def test_shape_highlight_style_is_rendered_into_export(qtbot):
-    from PySide6.QtWidgets import QGraphicsRectItem
+def test_ellipse_spotlight_dims_bounding_box_corners(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.ELLIPSE)
+    rect = item.mapRectToScene(item.rect())
+    corner = QPoint(int(rect.left() + 2), int(rect.top() + 2))
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+
+    assert exported.pixelColor(corner).value() < source.pixelColor(corner).value()
+
+
+def test_multiple_spotlight_regions_all_stay_bright(qtbot):
+    canvas = _canvas(qtbot, 160, 100)
+    first = _draw_spotlight(qtbot, canvas, Tool.RECT, (10, 20), (55, 70))
+    second = _draw_spotlight(qtbot, canvas, Tool.ELLIPSE, (95, 20), (145, 70))
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+    first_center = first.mapToScene(first.rect().center()).toPoint()
+    second_center = second.mapToScene(second.rect().center()).toPoint()
+    outside = QPoint(75, 10)
+
+    assert exported.pixelColor(first_center) == source.pixelColor(first_center)
+    assert exported.pixelColor(second_center) == source.pixelColor(second_center)
+    assert exported.pixelColor(outside).value() < source.pixelColor(outside).value()
+
+
+def test_spotlight_add_undo_redo_updates_dimming(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.RECT)
+    outside = QPoint(3, 3)
+    source = canvas.background_image()
+    stack = canvas.undo_stack()
+
+    stack.undo()
+    assert canvas.export_image().pixelColor(outside) == source.pixelColor(outside)
+
+    stack.redo()
+    inside = item.mapToScene(item.rect().center()).toPoint()
+    exported = canvas.export_image()
+    assert exported.pixelColor(inside) == source.pixelColor(inside)
+    assert exported.pixelColor(outside).value() < source.pixelColor(outside).value()
+
+
+def test_moving_spotlight_region_moves_clear_area_and_is_undoable(qtbot):
+    from PySide6.QtCore import QPointF
 
     canvas = _canvas(qtbot)
-    canvas.set_color(QColor("yellow"))
-    canvas.set_shape_highlight_enabled(True)
-    canvas.set_tool(Tool.RECT)
+    item = _draw_spotlight(qtbot, canvas, Tool.RECT, (15, 20), (70, 60))
+    source = canvas.background_image()
+    old_center = item.mapToScene(item.rect().center()).toPoint()
+    old_only = item.mapToScene(QPointF(item.rect().left() + 5, item.rect().center().y())).toPoint()
+    start = canvas.mapFromScene(item.mapToScene(item.rect().center()))
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
     viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=start)
+    qtbot.mouseMove(viewport, pos=start + QPoint(15, 0))
+    qtbot.mouseMove(viewport, pos=start + QPoint(25, 0))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=start + QPoint(25, 0))
 
-    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
-    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
-    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+    new_center = item.mapToScene(item.rect().center()).toPoint()
+    exported = canvas.export_image()
+    assert new_center != old_center
+    assert exported.pixelColor(old_only).value() < source.pixelColor(old_only).value()
+    assert exported.pixelColor(new_center) == source.pixelColor(new_center)
 
-    item = next(i for i in _annotation_items(canvas) if isinstance(i, QGraphicsRectItem))
-    sample = item.rect().center().toPoint()
-    assert canvas.export_image().pixelColor(sample) != canvas.background_image().pixelColor(sample)
+    canvas.undo_stack().undo()
+    restored = canvas.export_image()
+    assert restored.pixelColor(old_only) == source.pixelColor(old_only)
 
 
-def test_shape_highlight_style_can_be_disabled_for_outline_shapes(qtbot):
+def test_shape_spotlight_style_can_be_disabled_for_outline_shapes(qtbot):
     from PySide6.QtWidgets import QGraphicsEllipseItem
 
     canvas = _canvas(qtbot)
-    canvas.set_shape_highlight_enabled(True)
-    canvas.set_shape_highlight_enabled(False)
+    canvas.set_shape_spotlight_enabled(True)
+    canvas.set_shape_spotlight_enabled(False)
     canvas.set_tool(Tool.ELLIPSE)
     viewport = canvas.viewport()
 

@@ -51,10 +51,10 @@ def test_default_language_is_a_supported_language():
 
 def test_translate_switches_language():
     assert i18n.t("menu.smart") == "Capture"
-    assert i18n.t("toolbar.highlight") == "Highlight"
+    assert i18n.t("toolbar.spotlight") == "Spotlight"
     i18n.set_language("zh")
     assert i18n.t("menu.smart") == "截图"
-    assert i18n.t("toolbar.highlight") == "高亮"
+    assert i18n.t("toolbar.spotlight") == "聚光"
     assert i18n.t("toolbar.font_size").strip() == "字号"
 
 

@@ -147,7 +147,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "tool.mosaic": {"en": "Mosaic", "zh": "马赛克"},
     "tool.text": {"en": "Text", "zh": "文字"},
     # Toolbar controls
-    "toolbar.highlight": {"en": "Highlight", "zh": "高亮"},
+    "toolbar.spotlight": {"en": "Spotlight", "zh": "聚光"},
     "toolbar.color": {"en": "Color", "zh": "颜色"},
     "toolbar.width": {"en": "Width ", "zh": "粗细 "},
     "toolbar.font_size": {"en": "Font size ", "zh": "字号 "},

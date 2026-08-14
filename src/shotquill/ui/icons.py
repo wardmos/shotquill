@@ -121,19 +121,21 @@ def _draw_highlighter(p: QPainter) -> None:
     p.restore()
 
 
-def _draw_shape_highlight(p: QPainter) -> None:
-    # A dashed drag boundary around the translucent region it creates.
+def _draw_spotlight(p: QPainter) -> None:
+    # Dark outer bands surrounding a clear circular focus region.
+    outer = QRectF(4.5, 5, 15, 14)
+    focus = QRectF(8, 8, 8, 8)
+    p.drawRoundedRect(outer, 1.5, 1.5)
+    shade = p.pen().color()
     p.save()
-    outline = QPen(p.pen())
-    outline.setStyle(Qt.DashLine)
-    p.setPen(outline)
-    p.drawRoundedRect(QRectF(4.5, 5, 15, 14), 1.5, 1.5)
-    fill = outline.color()
-    fill.setAlpha(110)
     p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(fill))
-    p.drawRoundedRect(QRectF(7, 8, 10, 8), 1, 1)
+    p.setBrush(QBrush(shade))
+    p.drawRect(QRectF(5, 5.5, 14, 2.5))
+    p.drawRect(QRectF(5, 16, 14, 2.5))
+    p.drawRect(QRectF(5, 8, 3, 8))
+    p.drawRect(QRectF(16, 8, 3, 8))
     p.restore()
+    p.drawEllipse(focus)
 
 
 def _draw_mosaic(p: QPainter) -> None:
@@ -243,7 +245,7 @@ _GLYPHS: dict[str, Callable[[QPainter], None]] = {
     "line": _draw_line,
     "pen": _draw_pen,
     "highlighter": _draw_highlighter,
-    "shape_highlight": _draw_shape_highlight,
+    "spotlight": _draw_spotlight,
     "mosaic": _draw_mosaic,
     "text": _draw_text,
     "color": _draw_color,

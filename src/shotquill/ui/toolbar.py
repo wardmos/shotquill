@@ -159,14 +159,14 @@ def create_toolbar(
 
     toolbar.addSeparator()
 
-    # Shape and appearance are independent: this style toggle sits with color
-    # and size, outside the mutually exclusive drawing-tool group above.
-    highlight_action = QAction(sized_icon("shape_highlight"), t("toolbar.highlight"), toolbar)
-    highlight_action.setCheckable(True)
-    highlight_action.setChecked(canvas.shape_highlight_enabled())
-    highlight_action.toggled.connect(canvas.set_shape_highlight_enabled)
-    toolbar.addAction(highlight_action)
-    toolbar.highlight_action = highlight_action
+    # Shape and appearance are independent: spotlight sits with color and size,
+    # outside the mutually exclusive drawing-tool group above.
+    spotlight_action = QAction(sized_icon("spotlight"), t("toolbar.spotlight"), toolbar)
+    spotlight_action.setCheckable(True)
+    spotlight_action.setChecked(canvas.shape_spotlight_enabled())
+    spotlight_action.toggled.connect(canvas.set_shape_spotlight_enabled)
+    toolbar.addAction(spotlight_action)
+    toolbar.spotlight_action = spotlight_action
 
     # The macOS native colour panel can remain behind the frameless always-on-top
     # editor.  Never combine that panel with window modality: an invisible modal
