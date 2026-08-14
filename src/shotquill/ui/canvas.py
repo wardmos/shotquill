@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QCursor,
     QFont,
@@ -52,6 +53,7 @@ _DEFAULT_COLOR = "#ff3b30"
 _DEFAULT_WIDTH = 4
 _DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
+_AREA_HIGHLIGHT_ALPHA = 96
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
@@ -473,6 +475,11 @@ class AnnotationCanvas(QGraphicsView):
         pen.setJoinStyle(Qt.RoundJoin)
         return pen
 
+    def _area_highlight_brush(self) -> QBrush:
+        color = QColor(self._color)
+        color.setAlpha(_AREA_HIGHLIGHT_ALPHA)
+        return QBrush(color)
+
     def keyPressEvent(self, event) -> None:
         if (
             event.key() in (Qt.Key_Backspace, Qt.Key_Delete)
@@ -543,6 +550,11 @@ class AnnotationCanvas(QGraphicsView):
             rect_item = QGraphicsRectItem(QRectF(self._start, self._start))
             rect_item.setPen(self._pen())
             item = rect_item
+        elif tool == Tool.AREA_HIGHLIGHT:
+            rect_item = QGraphicsRectItem(QRectF(self._start, self._start))
+            rect_item.setPen(QPen(Qt.NoPen))
+            rect_item.setBrush(self._area_highlight_brush())
+            item = rect_item
         elif tool == Tool.ELLIPSE:
             ellipse_item = QGraphicsEllipseItem(QRectF(self._start, self._start))
             ellipse_item.setPen(self._pen())
@@ -583,7 +595,7 @@ class AnnotationCanvas(QGraphicsView):
             self._path.lineTo(pos)
             self._last_path_pos = QPointF(pos)
             self._temp_item.setPath(self._path)
-        elif tool in (Tool.RECT, Tool.ELLIPSE):
+        elif tool in (Tool.RECT, Tool.ELLIPSE, Tool.AREA_HIGHLIGHT):
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))

@@ -67,6 +67,16 @@ def test_tool_action_switches_canvas_tool(qtbot):
     canvas.set_tool(_TOOLS[1][1])
 
 
+def test_toolbar_exposes_area_highlight_tool(qtbot):
+    canvas, toolbar = _toolbar(qtbot)
+    action = next(action for action in toolbar.actions() if action.text() == "Highlight area")
+
+    action.trigger()
+
+    assert action.isChecked()
+    assert canvas.tool() is Tool.AREA_HIGHLIGHT
+
+
 def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     canvas, toolbar = _toolbar(qtbot)
     assert toolbar.width_spin.value() == 4

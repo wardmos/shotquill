@@ -300,7 +300,14 @@ def test_pixelate_preserves_dimensions():
 
 @pytest.mark.parametrize(
     "tool",
-    [Tool.ELLIPSE, Tool.LINE, Tool.ARROW, Tool.PEN, Tool.HIGHLIGHTER],
+    [
+        Tool.ELLIPSE,
+        Tool.LINE,
+        Tool.ARROW,
+        Tool.PEN,
+        Tool.HIGHLIGHTER,
+        Tool.AREA_HIGHLIGHT,
+    ],
 )
 def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     canvas = _canvas(qtbot)
@@ -311,6 +318,64 @@ def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     qtbot.mouseMove(viewport, pos=QPoint(80, 60))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
     assert canvas.undo_stack().count() == 1
+
+
+def test_area_highlight_drag_creates_translucent_color_fill(qtbot):
+    from PySide6.QtWidgets import QGraphicsRectItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_color(QColor("#ffd60a"))
+    canvas.set_tool(Tool.AREA_HIGHLIGHT)
+    viewport = canvas.viewport()
+
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, QGraphicsRectItem))
+    fill = item.brush().color()
+    assert item.pen().style() == Qt.NoPen
+    assert fill.name() == "#ffd60a"
+    assert 0 < fill.alpha() < 255
+    assert item.rect().width() > 0
+    assert item.rect().height() > 0
+
+
+def test_area_highlight_is_rendered_into_export(qtbot):
+    from PySide6.QtWidgets import QGraphicsRectItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_color(QColor("yellow"))
+    canvas.set_tool(Tool.AREA_HIGHLIGHT)
+    viewport = canvas.viewport()
+
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, QGraphicsRectItem))
+    sample = item.rect().center().toPoint()
+    assert canvas.export_image().pixelColor(sample) != canvas.background_image().pixelColor(sample)
+
+
+def test_area_highlight_is_boxed_while_highlighter_stays_freehand(qtbot):
+    from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsRectItem
+
+    canvas = _canvas(qtbot)
+    viewport = canvas.viewport()
+
+    canvas.set_tool(Tool.HIGHLIGHTER)
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+
+    canvas.set_tool(Tool.AREA_HIGHLIGHT)
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
+    qtbot.mouseMove(viewport, pos=QPoint(70, 50))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(70, 50))
+
+    assert any(isinstance(i, QGraphicsPathItem) for i in _annotation_items(canvas))
+    assert any(isinstance(i, QGraphicsRectItem) for i in _annotation_items(canvas))
 
 
 def test_freehand_skips_redundant_move_points(qtbot):

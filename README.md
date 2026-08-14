@@ -66,7 +66,8 @@ extract text, copy, save, or pin the result without breaking your flow.
 - **Configurable after-capture flow** — open the annotation editor by default, or
   make captures hands-free by auto-saving, auto-copying, or both.
 - **Annotation editor** — rectangles, ellipses, arrows, lines, freehand pen,
-  highlighter, text, and **mosaic pixelation** for visual obfuscation. Mosaic
+  highlighter, drag-to-select area highlighting, text, and **mosaic pixelation**
+  for visual obfuscation. Mosaic
   removes the original per-pixel detail from the exported image but retains
   block-average information; use the solid-fill CLI / blocklist controls for
   high-risk secrets instead.
@@ -261,8 +262,8 @@ auto-copy, or both:
 When both auto-output toggles are off (or whenever you want to mark a shot up),
 the editor opens with a toolbar:
 
-- **Tools:** select, rectangle, ellipse, arrow, line, pen, highlighter, mosaic,
-  text — with adjustable color and stroke width, plus undo / redo.
+- **Tools:** select, rectangle, ellipse, arrow, line, pen, highlighter, area
+  highlight, mosaic, text — with adjustable color and stroke width, plus undo / redo.
 - **Copy Text** runs OCR on the capture and copies the recognized text.
 - **Pin** floats the annotated shot on top of the desktop.
 

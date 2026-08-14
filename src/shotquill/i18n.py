@@ -144,6 +144,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "tool.line": {"en": "Line", "zh": "直线"},
     "tool.pen": {"en": "Pen", "zh": "画笔"},
     "tool.highlighter": {"en": "Highlighter", "zh": "荧光笔"},
+    "tool.area_highlight": {"en": "Highlight area", "zh": "区域高亮"},
     "tool.mosaic": {"en": "Mosaic", "zh": "马赛克"},
     "tool.text": {"en": "Text", "zh": "文字"},
     # Toolbar controls

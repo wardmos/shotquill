@@ -43,6 +43,7 @@ _TOOLS: list[tuple[str, Tool, str]] = [
     ("tool.line", Tool.LINE, "line"),
     ("tool.pen", Tool.PEN, "pen"),
     ("tool.highlighter", Tool.HIGHLIGHTER, "highlighter"),
+    ("tool.area_highlight", Tool.AREA_HIGHLIGHT, "area_highlight"),
     ("tool.mosaic", Tool.MOSAIC, "mosaic"),
     ("tool.text", Tool.TEXT, "text"),
 ]

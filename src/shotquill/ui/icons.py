@@ -121,6 +121,21 @@ def _draw_highlighter(p: QPainter) -> None:
     p.restore()
 
 
+def _draw_area_highlight(p: QPainter) -> None:
+    # A dashed drag boundary around the translucent region it creates.
+    p.save()
+    outline = QPen(p.pen())
+    outline.setStyle(Qt.DashLine)
+    p.setPen(outline)
+    p.drawRoundedRect(QRectF(4.5, 5, 15, 14), 1.5, 1.5)
+    fill = outline.color()
+    fill.setAlpha(110)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QBrush(fill))
+    p.drawRoundedRect(QRectF(7, 8, 10, 8), 1, 1)
+    p.restore()
+
+
 def _draw_mosaic(p: QPainter) -> None:
     # Checkerboard: the outline plus alternating filled cells.
     p.drawRect(QRectF(5, 5, 14, 14))
@@ -228,6 +243,7 @@ _GLYPHS: dict[str, Callable[[QPainter], None]] = {
     "line": _draw_line,
     "pen": _draw_pen,
     "highlighter": _draw_highlighter,
+    "area_highlight": _draw_area_highlight,
     "mosaic": _draw_mosaic,
     "text": _draw_text,
     "color": _draw_color,
