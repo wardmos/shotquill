@@ -10,6 +10,8 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
+from shotquill.ui.items.rounded_rect import rounded_rect_path
+
 _DIM_ALPHA = 150
 
 
@@ -66,12 +68,15 @@ class SpotlightOverlayItem(QGraphicsItem):
 
 
 class SpotlightRegionItem(QGraphicsPathItem):
-    """An invisible movable rectangle/ellipse that cuts a hole in the dim mask."""
+    """An invisible movable shape that cuts a hole in the shared dim mask."""
 
-    def __init__(self, overlay: SpotlightOverlayItem, *, ellipse: bool) -> None:
+    def __init__(
+        self, overlay: SpotlightOverlayItem, *, ellipse: bool = False, rounded: bool = False
+    ) -> None:
         super().__init__()
         self._overlay_ref = weakref.ref(overlay)
         self._ellipse = ellipse
+        self._rounded = rounded
         self._rect = QRectF()
         overlay.add_region(self)
 
@@ -83,6 +88,8 @@ class SpotlightRegionItem(QGraphicsPathItem):
         path = QPainterPath()
         if self._ellipse:
             path.addEllipse(self._rect)
+        elif self._rounded:
+            path = rounded_rect_path(self._rect)
         else:
             path.addRect(self._rect)
         self.setPath(path)

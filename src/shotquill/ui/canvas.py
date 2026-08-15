@@ -41,6 +41,7 @@ from shotquill.ui._debug import crop_log
 from shotquill.ui.geometry import crop_edge_hits
 from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
+from shotquill.ui.items.rounded_rect import RoundedRectItem
 from shotquill.ui.items.spotlight import SpotlightOverlayItem, SpotlightRegionItem
 from shotquill.ui.tools import Tool
 
@@ -53,6 +54,7 @@ _DEFAULT_COLOR = "#ff3b30"
 _DEFAULT_WIDTH = 4
 _DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
+_SHAPE_TOOLS = (Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE)
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
@@ -559,14 +561,18 @@ class AnnotationCanvas(QGraphicsView):
             path_item = QGraphicsPathItem(self._path)
             path_item.setPen(self._pen(highlighter=tool == Tool.HIGHLIGHTER))
             item = path_item
-        elif tool in (Tool.RECT, Tool.ELLIPSE):
+        elif tool in _SHAPE_TOOLS:
             if self._shape_spotlight_enabled:
                 shape_item = SpotlightRegionItem(
                     self._spotlight_overlay,
                     ellipse=tool == Tool.ELLIPSE,
+                    rounded=tool == Tool.ROUNDED_RECT,
                 )
             elif tool == Tool.RECT:
                 shape_item = QGraphicsRectItem()
+                shape_item.setPen(self._pen())
+            elif tool == Tool.ROUNDED_RECT:
+                shape_item = RoundedRectItem()
                 shape_item.setPen(self._pen())
             else:
                 shape_item = QGraphicsEllipseItem()
@@ -609,7 +615,7 @@ class AnnotationCanvas(QGraphicsView):
             self._path.lineTo(pos)
             self._last_path_pos = QPointF(pos)
             self._temp_item.setPath(self._path)
-        elif tool in (Tool.RECT, Tool.ELLIPSE):
+        elif tool in _SHAPE_TOOLS:
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))
@@ -758,7 +764,7 @@ class AnnotationCanvas(QGraphicsView):
 
     @staticmethod
     def _is_negligible(item: QGraphicsItem) -> bool:
-        if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+        if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, RoundedRectItem)):
             rect = item.rect()
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
         if isinstance(item, QGraphicsLineItem):  # also covers ArrowItem

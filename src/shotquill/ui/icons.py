@@ -66,7 +66,11 @@ def _draw_select(p: QPainter) -> None:
 
 
 def _draw_rect(p: QPainter) -> None:
-    p.drawRoundedRect(QRectF(4.5, 6, 15, 12), 1.5, 1.5)
+    p.drawRect(QRectF(4.5, 6, 15, 12))
+
+
+def _draw_rounded_rect(p: QPainter) -> None:
+    p.drawRoundedRect(QRectF(4.5, 6, 15, 12), 4, 4)
 
 
 def _draw_ellipse(p: QPainter) -> None:
@@ -240,6 +244,7 @@ def _draw_save(p: QPainter) -> None:
 _GLYPHS: dict[str, Callable[[QPainter], None]] = {
     "select": _draw_select,
     "rect": _draw_rect,
+    "rounded_rect": _draw_rounded_rect,
     "ellipse": _draw_ellipse,
     "arrow": _draw_arrow,
     "line": _draw_line,

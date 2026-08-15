@@ -66,6 +66,21 @@ def test_tool_action_switches_canvas_tool(qtbot):
     assert canvas.tool() is Tool.RECT
 
 
+def test_rounded_rectangle_sits_between_rectangle_and_ellipse(qtbot):
+    canvas, toolbar = _toolbar(qtbot)
+    labels = [action.text() for action in toolbar.tool_actions]
+    rect_index = labels.index("Rectangle")
+
+    assert labels[rect_index : rect_index + 3] == [
+        "Rectangle",
+        "Rounded rectangle",
+        "Ellipse",
+    ]
+
+    toolbar.tool_actions[rect_index + 1].trigger()
+    assert canvas.tool() is Tool.ROUNDED_RECT
+
+
 def test_toolbar_groups_spotlight_style_with_color_without_changing_shape_tool(qtbot):
     canvas, toolbar = _toolbar(qtbot)
     ellipse_action = next(action for action in toolbar.tool_actions if action.text() == "Ellipse")

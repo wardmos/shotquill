@@ -38,6 +38,7 @@ RESERVED_SHORTCUTS: tuple[QKeySequence.StandardKey, ...] = (
 _TOOLS: list[tuple[str, Tool, str]] = [
     ("tool.select", Tool.SELECT, "select"),
     ("tool.rect", Tool.RECT, "rect"),
+    ("tool.rounded_rect", Tool.ROUNDED_RECT, "rounded_rect"),
     ("tool.ellipse", Tool.ELLIPSE, "ellipse"),
     ("tool.arrow", Tool.ARROW, "arrow"),
     ("tool.line", Tool.LINE, "line"),
@@ -70,7 +71,7 @@ _ICON_SIZES: dict[str, int] = {
     "text": ICON_SIZE,
 }
 
-# Pack the bar tighter than the platform default: with sixteen buttons the
+# Pack the bar tighter than the platform default: with many buttons the
 # per-button padding plus the inter-item spacing and fat separators add up,
 # and once the row no longer fits the shot's width Qt hides the overflow
 # behind an extension chevron the user has to click open. Zeroing the

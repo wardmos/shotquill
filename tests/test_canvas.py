@@ -270,9 +270,10 @@ def test_delete_key_removes_single_annotation_without_selection(qtbot):
     assert item.scene() is canvas.scene()
 
 
-def test_tiny_click_is_discarded(qtbot):
+@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE])
+def test_tiny_click_is_discarded(qtbot, tool):
     canvas = _canvas(qtbot)
-    canvas.set_tool(Tool.RECT)
+    canvas.set_tool(tool)
     viewport = canvas.viewport()
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(20, 20))
@@ -301,6 +302,7 @@ def test_pixelate_preserves_dimensions():
 @pytest.mark.parametrize(
     "tool",
     [
+        Tool.ROUNDED_RECT,
         Tool.ELLIPSE,
         Tool.LINE,
         Tool.ARROW,
@@ -319,6 +321,23 @@ def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     assert canvas.undo_stack().count() == 1
 
 
+def test_rounded_rectangle_tool_creates_a_rounded_outline(qtbot):
+    from shotquill.ui.items.rounded_rect import RoundedRectItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.ROUNDED_RECT)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, RoundedRectItem))
+    assert not item.path().contains(item.rect().topLeft())
+    assert item.path().contains(item.rect().center())
+    assert item.pen().style() != Qt.NoPen
+    assert canvas.undo_stack().count() == 1
+
+
 def _draw_spotlight(qtbot, canvas, tool, start=(15, 15), end=(80, 60)):
     from shotquill.ui.items.spotlight import SpotlightRegionItem
 
@@ -334,7 +353,7 @@ def _draw_spotlight(qtbot, canvas, tool, start=(15, 15), end=(80, 60)):
     )
 
 
-@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ELLIPSE])
+@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE])
 def test_spotlight_keeps_shape_bright_and_dims_outside(qtbot, tool):
     canvas = _canvas(qtbot)
     canvas.set_color(QColor("red"))  # spotlight dimming is independent of annotation color
@@ -363,6 +382,20 @@ def test_ellipse_spotlight_dims_bounding_box_corners(qtbot):
     exported = canvas.export_image()
 
     assert exported.pixelColor(corner).value() < source.pixelColor(corner).value()
+
+
+def test_rounded_rectangle_spotlight_dims_rounded_corners(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.ROUNDED_RECT)
+    rect = item.mapRectToScene(item.rect())
+    corner = QPoint(int(rect.left() + 2), int(rect.top() + 2))
+    center = rect.center().toPoint()
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+
+    assert exported.pixelColor(corner).value() < source.pixelColor(corner).value()
+    assert exported.pixelColor(center) == source.pixelColor(center)
 
 
 def test_multiple_spotlight_regions_all_stay_bright(qtbot):
