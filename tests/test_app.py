@@ -10,16 +10,20 @@ touching real system frameworks.
 """
 
 import sys
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QProcess, Qt, Signal  # noqa: E402
 from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill import app as app_module  # noqa: E402
 from shotquill import blocklist as bl  # noqa: E402
+from shotquill import debug_log, paths  # noqa: E402
 from shotquill.capture.base import CaptureResult, Rect, WindowInfo  # noqa: E402
+from shotquill.permissions import PermissionStatus  # noqa: E402
 
 
 def _build_app(qapp, fakes):
@@ -48,8 +52,8 @@ def test_build_icon_attaches_multiple_sizes_on_linux(qapp, monkeypatch):
 def test_build_icon_marks_macos_template(qapp, monkeypatch):
     # macOS reads the tray icon as a *template* (only alpha matters; the menu
     # bar tints opaque pixels white-on-dark / dark-on-light). Without the mask
-    # flag the icon would render as a black tile that's invisible on a dark
-    # menu bar — a regression that's silent in tests but jarring on Mac.
+    # flag the icon would render as raw black pixels, which is wrong in both
+    # light and dark menu bars.
     monkeypatch.setattr(app_module.sys, "platform", "darwin")
     icon = app_module._build_icon()
     assert icon.isMask() is True
@@ -57,7 +61,7 @@ def test_build_icon_marks_macos_template(qapp, monkeypatch):
 
 def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
     # Non-Mac desktops (Linux/X11 tray) don't tint masks: marking the icon as
-    # a template here would leave a black tile with a transparent "S" — i.e.
+    # a template here would leave a black tile with transparent glyphs — i.e.
     # the very bug the multi-size Linux branch was added to avoid.
     monkeypatch.setattr(app_module.sys, "platform", "linux")
     icon = app_module._build_icon()
@@ -66,7 +70,7 @@ def test_build_icon_does_not_mark_template_off_macos(qapp, monkeypatch):
 
 def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
     # The renderer derives padding / radius / glyph height from ``size`` so
-    # small tray panels still get a readable "S" instead of a near-empty tile.
+    # small tray panels still get a readable mark instead of a near-empty tile.
     # Check the extremes the icon factory actually asks for (16 and 64) and
     # confirm each produces a non-empty pixmap with some opaque pixels.
     from PySide6.QtCore import Qt
@@ -75,9 +79,9 @@ def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
         pixmap = app_module._render_tray_pixmap(size, is_mac=False)
         assert pixmap.size().width() == size
         assert pixmap.size().height() == size
-        # Sample the centre pixel: the "S" sits there and is painted white,
-        # so the alpha must be non-zero. (Fully transparent centre would
-        # mean either the tile or the glyph went missing.)
+        # Sample the centre pixel: the mark sits there, so the alpha must be
+        # non-zero. (Fully transparent centre would mean either the tile or the
+        # glyph went missing.)
         centre = pixmap.toImage().pixelColor(size // 2, size // 2)
         assert centre.alpha() > 0
         # And not the placeholder transparent fill.
@@ -85,7 +89,7 @@ def test_render_tray_pixmap_keeps_glyph_legible_at_small_sizes(qapp):
 
 
 def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
-    # The Linux/X11 tray path can't tint masks, so the "S" must be painted
+    # The Linux/X11 tray path can't tint masks, so the mark must be painted
     # directly — verify by scanning for any white-ish pixel. A regression
     # that left the glyph unpainted (or painted it black on black) would
     # leave only a featureless black tile that's invisible against a dark
@@ -104,7 +108,37 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
                 break
         if found_white:
             break
-    assert found_white, "expected the 'S' glyph to be painted white somewhere on the tile"
+    assert found_white, "expected the tray glyph to be painted white somewhere on the tile"
+
+
+def test_render_tray_pixmap_linux_keeps_mark_inside_viewfinder(qapp):
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    white_pixels = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                white_pixels.append((x, y))
+    assert white_pixels
+    _left, bottom = max(white_pixels, key=lambda point: point[1])
+    assert bottom <= 49
+
+
+def test_render_tray_pixmap_linux_keeps_central_mark_compact(qapp):
+    pixmap = app_module._render_tray_pixmap(64, is_mac=False)
+    image = pixmap.toImage()
+    centre_pixels = []
+    for y in range(image.height()):
+        for x in range(31, 35):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 0 and (pixel.red() + pixel.green() + pixel.blue()) / 3 > 200:
+                centre_pixels.append((x, y))
+    assert centre_pixels
+    top = min(y for _x, y in centre_pixels)
+    bottom = max(y for _x, y in centre_pixels)
+    assert top >= 25
+    assert bottom <= 47
 
 
 @pytest.mark.skipif(
@@ -112,39 +146,32 @@ def test_render_tray_pixmap_linux_paints_glyph_white(qapp):
     reason="Qt offscreen glyph rasterization on Windows doesn't punch the template hole; "
     "the macOS template path is exercised on macOS/Linux",
 )
-def test_render_tray_pixmap_macos_knocks_glyph_out_of_mask(qapp):
-    # macOS reads the icon as a *template*: every opaque pixel is tinted by
-    # AppKit, every transparent pixel passes through. The "S" is rendered
-    # with ``CompositionMode_DestinationOut`` so the glyph carves a
-    # transparent hole through the black tile — the menu-bar colour shines
-    # through there. A regression that swapped the composition mode (e.g.
-    # painted black-on-black) would still produce a black tile but with no
-    # punched-out "S", so the icon would read as a solid square. Detect by
-    # confirming there's at least one fully-transparent pixel *inside* the
-    # tile boundary: only the knock-out path produces that.
+def test_render_tray_pixmap_macos_uses_inverted_template_mask(qapp):
+    # macOS reads the icon as a template: opaque pixels become the status-bar
+    # glyph, transparent pixels disappear. The macOS path should therefore draw
+    # the capture/pen mark itself, not an opaque rounded tile with the mark cut
+    # out of it.
     pixmap = app_module._render_tray_pixmap(64, is_mac=True)
     image = pixmap.toImage()
-    # Scan the middle band where the glyph sits (avoid the rounded corners,
-    # which are also transparent regardless of the composition mode).
-    found_hole = False
-    for y in range(16, 48):
-        for x in range(16, 48):
-            if image.pixelColor(x, y).alpha() == 0:
-                found_hole = True
-                break
-        if found_hole:
-            break
-    assert found_hole, "macOS template must punch the 'S' out of the black tile"
-    # The macOS path never paints white — only black with knock-outs — so any
-    # white pixel anywhere means the wrong branch ran.
+    opaque = []
     for y in range(image.height()):
         for x in range(image.width()):
             pixel = image.pixelColor(x, y)
             if pixel.alpha() > 0:
+                opaque.append((x, y))
                 assert (pixel.red(), pixel.green(), pixel.blue()) == (0, 0, 0), (
                     "macOS template path must paint only black; found "
                     f"({pixel.red()},{pixel.green()},{pixel.blue()}) at ({x},{y})"
                 )
+    assert opaque
+    left, top = min(x for x, _y in opaque), min(y for _x, y in opaque)
+    right, bottom = max(x for x, _y in opaque), max(y for _x, y in opaque)
+    assert 4 <= left <= 8
+    assert 6 <= top <= 10
+    assert 55 <= right <= 59
+    assert 53 <= bottom <= 57
+    assert image.pixelColor(32, 32).alpha() > 0
+    assert image.pixelColor(2, 2).alpha() == 0
 
 
 def test_render_tray_pixmap_keeps_glyph_inside_tile_bounds(qapp):
@@ -275,6 +302,9 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
     # must both notify the user AND open the right System Settings pane (so the
     # user has a one-tap path to fix it without hunting through preferences).
     monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        app_module.permissions, "screen_capture_status", lambda: PermissionStatus.GRANTED
+    )
     _capturer, hotkeys, _autostart = fakes
     hotkeys.raise_permission_error = True
     opened = []
@@ -290,6 +320,60 @@ def test_apply_hotkeys_opens_input_monitoring_when_permission_missing(
 
     assert opened == [True]
     assert messages
+    app.shutdown()
+
+
+def test_startup_prompts_screen_recording_before_input_monitoring(qapp, config, fakes, monkeypatch):
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_permission_error = True
+    opened = []
+    messages = []
+    monkeypatch.setattr(
+        app_module.permissions, "screen_capture_status", lambda: PermissionStatus.DENIED
+    )
+    monkeypatch.setattr(
+        app_module.permissions, "open_screen_capture_pane", lambda: opened.append("screen")
+    )
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append("input")
+    )
+    monkeypatch.setattr(
+        app_module.QSystemTrayIcon, "showMessage", lambda *args: messages.append(args)
+    )
+
+    app = _build_app(qapp, fakes)
+
+    assert opened == ["screen"]
+    assert hotkeys.bindings == {}
+    body = " ".join(str(part) for message in messages for part in message)
+    assert "Screen Recording" in body
+    app.shutdown()
+
+
+def test_startup_prompts_input_monitoring_after_screen_recording_is_granted(
+    qapp, config, fakes, monkeypatch
+):
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    _capturer, hotkeys, _autostart = fakes
+    hotkeys.raise_permission_error = True
+    status = PermissionStatus.DENIED
+    opened = []
+    monkeypatch.setattr(app_module.permissions, "screen_capture_status", lambda: status)
+    monkeypatch.setattr(
+        app_module.permissions, "open_screen_capture_pane", lambda: opened.append("screen")
+    )
+    monkeypatch.setattr(
+        app_module.permissions, "open_input_monitoring_pane", lambda: opened.append("input")
+    )
+    monkeypatch.setattr(app_module.QSystemTrayIcon, "showMessage", lambda *args: None)
+
+    app = _build_app(qapp, fakes)
+    status = PermissionStatus.GRANTED
+    app._retry_pending_permissions(Qt.ApplicationState.ApplicationActive)
+
+    assert opened == ["screen", "input"]
+    assert set(hotkeys.bindings) == {"<alt>+a", "<alt>+s"}
     app.shutdown()
 
 
@@ -357,6 +441,77 @@ def test_grab_returns_none_on_capture_failure(qapp, config, fakes):
     app.shutdown()
 
 
+def test_grab_takes_qimage_fast_path_when_nothing_blocked(qapp, config, fakes, monkeypatch):
+    # No blocklist hit on screen: _grab must take the QImage straight from the
+    # backend (capture_fullscreen_image) and never touch the CaptureResult bytes
+    # round-trip — the copies that thrash swap under memory pressure.
+    from PySide6.QtGui import QImage
+
+    capturer, _hotkeys, _autostart = fakes
+    sentinel = QImage(7, 5, QImage.Format.Format_RGBA8888)
+    seen = []
+    capturer.capture_fullscreen_image = lambda exclude=frozenset(): seen.append(exclude) or sentinel
+    monkeypatch.setattr(
+        capturer,
+        "capture_fullscreen",
+        lambda exclude_window_ids=frozenset(): pytest.fail("bytes round-trip used, not fast path"),
+    )
+    app = _build_app(qapp, fakes)
+    assert app._grab(bl.Blocklist()) is sentinel
+    assert seen == [frozenset()]
+    app.shutdown()
+
+
+def test_grab_fast_path_writes_completion_debug_log(qapp, config, fakes, monkeypatch, tmp_path):
+    from PySide6.QtGui import QImage
+
+    log = tmp_path / "debug.log"
+    config.set_debug_mode(True)
+    monkeypatch.setattr(paths, "debug_log_path", lambda: log)
+    capturer, _hotkeys, _autostart = fakes
+    sentinel = QImage(7, 5, QImage.Format.Format_RGBA8888)
+    capturer.capture_fullscreen_image = lambda exclude=frozenset(): sentinel
+
+    app = _build_app(qapp, fakes)
+    app._current_debug_id = "capture-test"
+    assert app._grab(bl.Blocklist()) is sentinel
+    for handler in debug_log._debug_handlers(debug_log.get_logger()):
+        handler.flush()
+
+    text = log.read_text(encoding="utf-8")
+    assert "op=capture-test" in text
+    assert "backend=qimage_fast" in text
+    app.shutdown()
+    debug_log.configure(None)
+
+
+def test_grab_falls_back_when_backend_has_no_fast_path(qapp, config, fakes):
+    # A duck-typed capturer without capture_fullscreen_image (the shared fake)
+    # must still work — _grab falls through to the CaptureResult route.
+    capturer, _hotkeys, _autostart = fakes
+    assert not hasattr(capturer, "capture_fullscreen_image")
+    app = _build_app(qapp, fakes)
+    image = app._grab(bl.Blocklist())
+    assert image is not None
+    assert (image.width(), image.height()) == (4, 3)  # the fake's bytes grab
+    app.shutdown()
+
+
+def test_grab_with_supplied_blocked_skips_window_enumeration(qapp, config, fakes):
+    # When the caller hands _grab the on-screen blocklisted windows it already
+    # resolved (the smart overlay), _grab must not enumerate the window list a
+    # second time, even with a non-empty blocklist.
+    capturer, _hotkeys, _autostart = fakes
+    enumerations = []
+    capturer.list_windows = lambda: enumerations.append(1) or []
+    rules = bl.Blocklist((bl.BlockRule(bundle_id="com.example.blocked"),))
+    app = _build_app(qapp, fakes)
+    image = app._grab(rules, blocked=[])
+    assert image is not None
+    assert enumerations == []  # blocked supplied → no second enumeration
+    app.shutdown()
+
+
 def test_sync_autostart_follows_config(qapp, config, fakes):
     config.set_autostart(True)
     _capturer, _hotkeys, autostart = fakes
@@ -414,7 +569,9 @@ def test_capture_window_image_delivers_capture(qapp, config, fakes, monkeypatch)
     app = _build_app(qapp, fakes)
     delivered = []
     monkeypatch.setattr(
-        app, "_deliver_capture", lambda image, origin=None: delivered.append((image, origin))
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((image, origin)),
     )
     origin = QRect(10, 20, 4, 3)
     app._capture_window_image(42, origin)
@@ -422,6 +579,35 @@ def test_capture_window_image_delivers_capture(qapp, config, fakes, monkeypatch)
     image, got_origin = delivered[0]
     assert (image.width(), image.height()) == (4, 3)
     assert got_origin == origin
+    app.shutdown()
+
+
+def test_capture_window_image_delivers_non_adjustable_backdrop_context(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._smart_screenshot = QImage(40, 30, QImage.Format.Format_ARGB32)
+    app._smart_geometry = QRect(0, 0, 40, 30)
+    delivered = []
+    monkeypatch.setattr(
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((origin, region)),
+    )
+
+    origin = QRect(10, 20, 4, 3)
+    app._capture_window_image(42, origin)
+
+    assert len(delivered) == 1
+    got_origin, region = delivered[0]
+    assert got_origin == origin
+    assert region is not None
+    assert region.screenshot is app._smart_screenshot
+    assert region.geometry == app._smart_geometry
+    assert region.adjustable is False
     app.shutdown()
 
 
@@ -437,7 +623,9 @@ def test_capture_window_image_notifies_on_failure(qapp, config, fakes, monkeypat
     capturer.fail = True
     delivered = []
     notified = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     monkeypatch.setattr(app, "_notify", notified.append)
     app._capture_window_image(42, QRect(0, 0, 4, 3))
     assert delivered == []
@@ -557,7 +745,9 @@ def test_capture_window_image_redacts_blocked_overlap_on_framebuffer_backend(
         99: WindowInfo(99, "1Password", "", Rect(10, 20, 4, 3), bundle_id="com.1password.1password")
     }
     delivered = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     app._capture_window_image(42, QRect(10, 20, 4, 3))  # allowed target, blocked overlap
     assert len(delivered) == 1
     assert delivered[0].pixelColor(0, 0).red() == 0  # redacted to black
@@ -576,7 +766,9 @@ def test_capture_window_image_keeps_capture_on_surface_backend(qapp, config, fak
         99: WindowInfo(99, "1Password", "", Rect(10, 20, 4, 3), bundle_id="com.1password.1password")
     }
     delivered = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     app._capture_window_image(42, QRect(10, 20, 4, 3))
     assert len(delivered) == 1
     assert delivered[0].pixelColor(0, 0).red() == 255  # untouched
@@ -661,6 +853,149 @@ def test_smart_capture_survives_list_windows_unsupported(qapp, config, fakes, mo
     app.shutdown()
 
 
+def test_wayland_smart_capture_uses_portal_picker(qapp, config, fakes, monkeypatch):
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    monkeypatch.setattr(
+        capturer,
+        "list_windows",
+        lambda: (_ for _ in ()).throw(AssertionError("should not enumerate windows")),
+    )
+    picked = []
+
+    def _interactive():
+        picked.append(True)
+        return CaptureResult(
+            width=8,
+            height=6,
+            scale=2.0,
+            pixels=bytes([255] * 8 * 6 * 4),
+            origin_x=100,
+            origin_y=50,
+        )
+
+    monkeypatch.setattr(capturer, "capture_interactive", _interactive)
+    app = _build_app(qapp, fakes)
+    delivered = []
+
+    def _deliver(image, origin=None, **_kwargs):
+        delivered.append((image, origin))
+
+    monkeypatch.setattr(app, "_deliver_capture", _deliver)
+
+    app._capture_smart()
+
+    assert picked == [True]
+    assert delivered and delivered[0][0].size().width() == 8
+    assert delivered[0][1] is None
+    assert not any(isinstance(window, app_module.SmartOverlay) for window in app._windows)
+    app.shutdown()
+
+
+def test_wayland_smart_capture_refuses_blocklist_before_picker(qapp, config, fakes, monkeypatch):
+    from shotquill import blocklist as bl
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    picked, notified = [], []
+    monkeypatch.setattr(capturer, "capture_interactive", lambda: picked.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._capture_smart()
+
+    assert picked == []
+    assert notified and "blocklist" in notified[-1].lower()
+    app.shutdown()
+
+
+def test_wayland_smart_capture_refuses_allowlist_before_picker(qapp, config, fakes, monkeypatch):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    al.save(al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),)))
+    capturer, _hotkeys, _autostart = fakes
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    picked, notified = [], []
+    monkeypatch.setattr(capturer, "capture_interactive", lambda: picked.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._capture_smart()
+
+    assert picked == []
+    assert notified and "allowlist" in notified[-1].lower()
+    app.shutdown()
+
+
+def test_fullscreen_capture_refuses_blocklist_when_windows_unavailable(
+    qapp, config, fakes, monkeypatch
+):
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    grabbed, delivered, notified = [], [], []
+    monkeypatch.setattr(capturer, "capture_fullscreen", lambda *a, **k: grabbed.append(True))
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_fullscreen()
+    assert grabbed == [] and delivered == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
+def test_smart_capture_refuses_blocklist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    bl.save(bl.Blocklist((bl.BlockRule(name="password"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a, **k: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
+def test_smart_capture_refuses_allowlist_when_windows_unavailable(qapp, config, fakes, monkeypatch):
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+    from shotquill.headless import CapabilityUnsupported
+
+    al.save(al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),)))
+    capturer, _hotkeys, _autostart = fakes
+
+    def _raise(*_args, **_kwargs):
+        raise CapabilityUnsupported("list_windows", "Wayland does not allow window enumeration")
+
+    monkeypatch.setattr(capturer, "list_windows", _raise)
+    app = _build_app(qapp, fakes)
+    grabbed, notified = [], []
+    monkeypatch.setattr(app, "_grab", lambda *a, **k: grabbed.append(True))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._capture_smart()
+    assert grabbed == []
+    assert notified and "can't inspect windows" in notified[-1]
+    app.shutdown()
+
+
 # --- allowlist enforcement on the GUI path ----------------------------------
 
 
@@ -738,6 +1073,37 @@ def test_smart_region_delivers_when_allowlist_disabled(qapp, config, fakes, monk
     app._smart_screenshot, app._smart_geometry = QImage(), QRect()
     app._smart_region_selected(QImage(), QRect(0, 0, 2, 2))
     assert len(delivered) == 1
+    app.shutdown()
+
+
+def test_smart_region_marks_context_not_adjustable_when_adjust_disabled(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    config.set_region_adjust(False)
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+    delivered = []
+    monkeypatch.setattr(
+        app,
+        "_deliver_capture",
+        lambda image, origin=None, region=None: delivered.append((origin, region)),
+    )
+    app._smart_screenshot = QImage(4, 3, QImage.Format.Format_ARGB32)
+    app._smart_geometry = QRect(0, 0, 4, 3)
+
+    app._smart_region_selected(QImage(2, 2, QImage.Format.Format_ARGB32), QRect(0, 0, 2, 2))
+
+    assert len(delivered) == 1
+    origin, region = delivered[0]
+    assert origin == QRect(0, 0, 2, 2)
+    assert region is not None
+    assert region.geometry == QRect(0, 0, 4, 3)
+    assert region.adjustable is False
     app.shutdown()
 
 
@@ -820,7 +1186,9 @@ def test_capture_window_image_redacts_not_allowed_overlap_on_framebuffer_backend
     # 42 (the allowed target) is captured; 99 is not on the allowlist and overlaps.
     app._not_allowed_windows = {99: WindowInfo(99, "Safari", "", Rect(10, 20, 4, 3))}
     delivered = []
-    monkeypatch.setattr(app, "_deliver_capture", lambda image, origin=None: delivered.append(image))
+    monkeypatch.setattr(
+        app, "_deliver_capture", lambda image, origin=None, region=None: delivered.append(image)
+    )
     app._capture_window_image(42, QRect(10, 20, 4, 3))
     assert len(delivered) == 1
     assert delivered[0].pixelColor(0, 0).red() == 0  # the non-allowed overlap is redacted
@@ -924,12 +1292,13 @@ def test_region_capture_hands_the_editor_a_region_context(qapp, config, fakes, m
     assert region is not None
     assert (region.screenshot.width(), region.screenshot.height()) == (4, 3)
     assert region.geometry == qapp.primaryScreen().virtualGeometry()
+    assert region.adjustable is True
     app.shutdown()
 
 
 def test_open_editor_honours_region_adjust_setting(qapp, config, fakes):
-    # Turning the Settings toggle off must strip the region context, so the
-    # editor opens with a frozen crop (no arrow-key adjustment).
+    # Turning the Settings toggle off must keep the spotlight backdrop context
+    # but freeze the crop (no arrow-key adjustment).
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
 
@@ -943,11 +1312,14 @@ def test_open_editor_honours_region_adjust_setting(qapp, config, fakes):
     app._open_editor(image, QRect(0, 0, 4, 3), region)
     adjustable = [w for w in app._windows if isinstance(w, EditorCoreMixin)][-1]
     assert adjustable._region is not None
+    assert adjustable.crop_adjustable() is True
 
     config.set_region_adjust(False)
     app._open_editor(image, QRect(0, 0, 4, 3), region)
     frozen = [w for w in app._windows if isinstance(w, EditorCoreMixin)][-1]
-    assert frozen._region is None
+    assert frozen._region is not None
+    assert frozen._region.adjustable is False
+    assert frozen.crop_adjustable() is False
 
     adjustable.close()
     frozen.close()
@@ -985,8 +1357,357 @@ def test_capturer_gets_cursor_preference_from_config(qapp, config, fakes):
 class _FakeSettingsDialog(QDialog):
     """Stands in for SettingsDialog: a plain QDialog that ignores the config."""
 
+    uninstall_requested = Signal()
+
     def __init__(self, cfg):
         super().__init__()
+
+
+class _FakeSignal:
+    def __init__(self):
+        self._callbacks = []
+
+    def connect(self, callback):
+        self._callbacks.append(callback)
+
+    def emit(self, *args):
+        for callback in tuple(self._callbacks):
+            callback(*args)
+
+
+class _FakeUninstallProcess:
+    ProcessError = QProcess.ProcessError
+    ExitStatus = QProcess.ExitStatus
+    instances = []
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.finished = _FakeSignal()
+        self.errorOccurred = _FakeSignal()
+        self.program = None
+        self.arguments = None
+        self.started = False
+        self.stderr = b""
+        self.error_text = "could not start"
+        self.deleted = False
+        self.terminated = False
+        self.killed = False
+        self.instances.append(self)
+
+    def setProgram(self, program):
+        self.program = program
+
+    def setArguments(self, arguments):
+        self.arguments = arguments
+
+    def start(self):
+        self.started = True
+
+    def readAllStandardError(self):
+        return self.stderr
+
+    def errorString(self):
+        return self.error_text
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def deleteLater(self):
+        self.deleted = True
+
+
+def _bound_direct_uninstall_plan(*, app_path=True):
+    from shotquill import uninstall
+
+    digest = "a" * 64
+    app_generation = f"1:2:{digest}" if app_path else "missing"
+    return uninstall.UninstallPlan(
+        channel=uninstall.InstallChannel.PKG,
+        can_execute=True,
+        remove_paths=(Path(uninstall.APP_PATH),) if app_path else (),
+        forget_receipts=(uninstall.APP_RECEIPT,),
+        brew_command=None,
+        helper_path=Path(uninstall.UNINSTALL_HELPER_PATH),
+        warnings=(),
+        generation=uninstall.InstallGeneration(
+            app=app_generation,
+            helper=f"3:4:{'b' * 64}",
+            shotquill="preserve",
+            squill="preserve",
+            launch_agent="missing",
+        ),
+    )
+
+
+def test_open_settings_connects_uninstall_request(qapp, config, fakes, monkeypatch):
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    requested = []
+    monkeypatch.setattr(app, "_request_uninstall", lambda: requested.append(True))
+
+    app._open_settings()
+    app._settings_dialog.uninstall_requested.emit()
+
+    assert requested == [True]
+    app.shutdown()
+
+
+def test_uninstall_channel_probe_does_not_block_the_gui_thread(
+    qapp, qtbot, config, fakes, monkeypatch
+):
+    import threading
+
+    from shotquill import uninstall
+
+    app = _build_app(qapp, fakes)
+    plan = _bound_direct_uninstall_plan()
+    started = threading.Event()
+    release = threading.Event()
+
+    def inspect():
+        started.set()
+        assert release.wait(2)
+        return plan
+
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", inspect)
+    presented = []
+    monkeypatch.setattr(app, "_present_uninstall_plan", presented.append)
+
+    app._request_uninstall()
+
+    assert started.wait(1)
+    assert app._uninstall_probe_running is True
+    assert presented == []
+    release.set()
+    qtbot.waitUntil(lambda: presented == [plan])
+    assert app._uninstall_probe_running is False
+    app.shutdown()
+
+
+def test_cancelled_uninstall_probe_ignores_its_eventual_result(
+    qapp, qtbot, config, fakes, monkeypatch
+):
+    import threading
+
+    from shotquill import uninstall
+
+    app = _build_app(qapp, fakes)
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    def inspect():
+        started.set()
+        assert release.wait(2)
+        completed.set()
+        return object()
+
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", inspect)
+    presented = []
+    monkeypatch.setattr(app, "_present_uninstall_plan", presented.append)
+
+    app._request_uninstall()
+    assert started.wait(1)
+    app._cancel_uninstall_probe()
+    assert app._uninstall_probe_running is False
+    release.set()
+
+    assert completed.wait(1)
+    qtbot.wait(20)
+    assert presented == []
+    app.shutdown()
+
+
+def test_direct_pkg_uninstall_confirmation_launches_helper_and_quits(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    autostart_before = fakes[2].last
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+
+    process = _FakeUninstallProcess.instances[0]
+    assert process.program == "/usr/bin/env"
+    assert process.arguments[:1] == ["-i"]
+    assert "--launch-gui-coordinator" in process.arguments
+    assert process.started is True
+    assert app._quit_action.isEnabled() is False
+    assert all(action.isEnabled() is False for action in app._capture_actions)
+    launch_timer = app._uninstall_launch_timer
+    assert launch_timer.isActive() is True
+    assert quit_requested == []
+
+    app._request_quit()
+    assert quit_requested == []
+
+    process.finished.emit(0, QProcess.ExitStatus.NormalExit)
+
+    assert quit_requested == [True]
+    assert app._quit_action.isEnabled() is False
+    assert all(action.isEnabled() is False for action in app._capture_actions)
+    assert launch_timer.isActive() is False
+    assert process.deleted is True
+    assert fakes[2].last is autostart_before
+    app.shutdown()
+
+
+def test_cancelled_pkg_uninstall_keeps_the_app_running(qapp, config, fakes, monkeypatch):
+    app = _build_app(qapp, fakes)
+    autostart_before = fakes[2].last
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: False)
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+
+    assert app._uninstall_process is None
+    assert quit_requested == []
+    assert fakes[2].last is autostart_before
+    app.shutdown()
+
+
+def test_failed_pkg_coordinator_start_keeps_app_and_autostart(qapp, config, fakes, monkeypatch):
+    app = _build_app(qapp, fakes)
+    autostart_before = fakes[2].last
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    errors = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+    process = _FakeUninstallProcess.instances[0]
+    process.stderr = b"shotquill-uninstall: coordinator failed to start\n"
+    process.finished.emit(1, QProcess.ExitStatus.NormalExit)
+
+    assert errors
+    assert quit_requested == []
+    assert app._quit_action.isEnabled() is True
+    assert all(action.isEnabled() is True for action in app._capture_actions)
+    assert fakes[2].last is autostart_before
+    app.shutdown()
+
+
+def test_timed_out_pkg_coordinator_is_terminated_and_restores_interaction(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    errors = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+    quit_requested = []
+    monkeypatch.setattr(app._app, "quit", lambda: quit_requested.append(True))
+
+    app._present_uninstall_plan(plan)
+    process = _FakeUninstallProcess.instances[0]
+    app._uninstall_launch_timed_out()
+
+    assert process.terminated is True
+    assert app._uninstall_process is process
+    assert app._quit_action.isEnabled() is False
+    kill_timer = app._uninstall_kill_timer
+    assert kill_timer.isActive() is True
+
+    process.finished.emit(15, QProcess.ExitStatus.CrashExit)
+
+    assert errors
+    assert "timed out" in errors[0][0][2]
+    assert quit_requested == []
+    assert app._uninstall_process is None
+    assert app._quit_action.isEnabled() is True
+    assert all(action.isEnabled() is True for action in app._capture_actions)
+    assert kill_timer.isActive() is False
+    assert process.deleted is True
+    app.shutdown()
+
+
+def test_timed_out_pkg_coordinator_is_killed_if_term_does_not_finish(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    plan = _bound_direct_uninstall_plan()
+    monkeypatch.setattr(app, "_confirm_uninstall", lambda _preview: True)
+    _FakeUninstallProcess.instances.clear()
+    monkeypatch.setattr(app_module, "QProcess", _FakeUninstallProcess)
+    errors = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+
+    app._present_uninstall_plan(plan)
+    process = _FakeUninstallProcess.instances[0]
+    app._uninstall_launch_timed_out()
+    app._kill_timed_out_uninstall_launcher()
+
+    assert process.terminated is True
+    assert process.killed is True
+    assert errors
+    assert app._uninstall_process is None
+    assert app._quit_action.isEnabled() is True
+    assert all(action.isEnabled() is True for action in app._capture_actions)
+    assert process.deleted is False
+    process.finished.emit(15, QProcess.ExitStatus.CrashExit)
+    assert process.deleted is True
+    app.shutdown()
+
+
+def test_unsafe_homebrew_plan_never_shows_uninstall_command(qapp, config, fakes, monkeypatch):
+    from shotquill import uninstall
+
+    app = _build_app(qapp, fakes)
+    plan = uninstall.UninstallPlan(
+        channel=uninstall.InstallChannel.HOMEBREW,
+        can_execute=False,
+        remove_paths=(),
+        forget_receipts=(),
+        brew_command=None,
+        helper_path=None,
+        warnings=("Refusing an unrelated app.",),
+    )
+    warnings = []
+    instructions = []
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "information",
+        lambda *args, **kwargs: instructions.append((args, kwargs)),
+    )
+
+    app._present_uninstall_plan(plan)
+
+    assert warnings
+    assert instructions == []
+    app.shutdown()
 
 
 def test_open_settings_syncs_capturer_cursor_preference(qapp, config, fakes, monkeypatch):
@@ -1058,6 +1779,23 @@ def test_smart_capture_shelves_open_settings_until_overlay_closes(qapp, config, 
     overlay.close()  # every accept/cancel path ends in close()
     qapp.sendPostedEvents(None, QEvent.DeferredDelete)  # let WA_DeleteOnClose land
     assert dialog.isVisible()  # restored, not closed: edits survive
+    app.shutdown()
+
+
+def test_smart_capture_releases_fullscreen_snapshot_when_overlay_closes(qapp, config, fakes):
+    from PySide6.QtCore import QEvent
+
+    app = _build_app(qapp, fakes)
+    app._capture_smart()
+    assert app._smart_screenshot is not None
+    assert app._smart_geometry is not None
+
+    overlay = next(w for w in app._windows if isinstance(w, app_module.SmartOverlay))
+    overlay.close()
+    qapp.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    assert app._smart_screenshot is None
+    assert app._smart_geometry is None
     app.shutdown()
 
 

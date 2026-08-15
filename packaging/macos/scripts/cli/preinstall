@@ -1,0 +1,32 @@
+#!/bin/bash
+# Refuse to take over command names owned by another installation.
+set -eu
+
+target_volume="${3:-/}"
+volume_prefix="${target_volume%/}"
+command_dir="$volume_prefix/usr/local/bin"
+expected_target="/Applications/ShotQuill.app/Contents/MacOS/ShotQuill"
+
+link_matches() {
+  local path="$1"
+  local actual marker
+  marker=$'\034'
+  [ -L "$path" ] || return 1
+  actual="$(
+    /usr/bin/readlink -n "$path" 2>/dev/null
+    readlink_status=$?
+    /usr/bin/printf '\034'
+    exit "$readlink_status"
+  )" || return 1
+  [ "$actual" = "$expected_target$marker" ]
+}
+
+for command in shotquill squill; do
+  path="$command_dir/$command"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    if ! link_matches "$path"; then
+      echo "error: refusing to replace existing $path" >&2
+      exit 1
+    fi
+  fi
+done

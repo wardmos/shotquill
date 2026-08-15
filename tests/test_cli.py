@@ -14,10 +14,11 @@ import json
 import os
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
-from shotquill import audit, cli, headless, paths
+from shotquill import audit, cli, debug_log, headless, paths
 from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, WindowInfo
 
 PNG_MAGIC = b"\x89PNG"
@@ -93,6 +94,11 @@ def _audit_entries(log) -> list[dict]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
+def _flush_debug_log() -> None:
+    for handler in debug_log._debug_handlers(debug_log.get_logger()):
+        handler.flush()
+
+
 # --- dispatch ---------------------------------------------------------------
 
 
@@ -102,6 +108,30 @@ def test_no_args_launches_gui(monkeypatch):
 
     monkeypatch.setattr(app_module, "run", lambda: 42)
     assert cli.main([]) == 42
+
+
+def test_cli_debug_uses_persisted_config(config, monkeypatch, tmp_path):
+    log = tmp_path / "debug.log"
+    config.set_debug_mode(True)
+    monkeypatch.delenv(debug_log.ENV_DEBUG, raising=False)
+    monkeypatch.setattr(paths, "debug_log_path", lambda: log)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--version"])
+    assert excinfo.value.code == 0
+    _flush_debug_log()
+
+    assert "cli main command=--version" in log.read_text(encoding="utf-8")
+    debug_log.configure(None)
+
+
+def test_cli_debug_argv_summary_omits_values():
+    command, argc, flags = cli._argv_summary(
+        ["capture", "--app", "Private App", "--title=Secret Title", "--output", "/tmp/private.png"]
+    )
+    assert command == "capture"
+    assert argc == 6
+    assert flags == ["--app", "--output", "--title"]
 
 
 def test_version_flag_exits_zero():
@@ -123,6 +153,89 @@ def test_help_documents_exit_codes(capsys, argv):
         cli.main(argv)
     assert excinfo.value.code == 0
     assert "exit codes:" in capsys.readouterr().out
+
+
+def _direct_uninstall_plan():
+    from shotquill import uninstall
+
+    helper = Path(uninstall.UNINSTALL_HELPER_PATH)
+    return uninstall.UninstallPlan(
+        channel=uninstall.InstallChannel.PKG,
+        can_execute=True,
+        remove_paths=(Path(uninstall.APP_PATH),),
+        forget_receipts=(uninstall.APP_RECEIPT,),
+        brew_command=None,
+        helper_path=helper,
+        warnings=(),
+        generation=uninstall.InstallGeneration(
+            app=f"1:2:{'a' * 64}",
+            helper=f"3:4:{'b' * 64}",
+            shotquill="preserve",
+            squill="preserve",
+            launch_agent="missing",
+        ),
+    )
+
+
+def test_uninstall_dry_run_prints_plan_without_executing(monkeypatch, capsys):
+    from shotquill import uninstall
+
+    plan = _direct_uninstall_plan()
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", lambda: plan)
+    executed = []
+    monkeypatch.setattr(uninstall, "execute_cli_uninstall", lambda _plan: executed.append(_plan))
+
+    assert cli.main(["uninstall", "--dry-run"]) == 0
+    assert executed == []
+    assert "Install channel: pkg" in capsys.readouterr().out
+
+
+def test_uninstall_noninteractive_is_rejected(monkeypatch, capsys):
+    from shotquill import uninstall
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", _direct_uninstall_plan)
+
+    assert cli.main(["uninstall"]) == 2
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_uninstall_yes_dispatches_the_channel_plan(monkeypatch):
+    from shotquill import uninstall
+
+    plan = _direct_uninstall_plan()
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", lambda: plan)
+    executed = []
+    monkeypatch.setattr(
+        uninstall,
+        "execute_cli_uninstall",
+        lambda candidate: executed.append(candidate) or 0,
+    )
+
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert executed == [plan]
+
+
+def test_uninstall_yes_still_requires_a_terminal(monkeypatch, capsys):
+    from shotquill import uninstall
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    monkeypatch.setattr(uninstall, "prepare_uninstall_plan", _direct_uninstall_plan)
+
+    assert cli.main(["uninstall", "--yes"]) == 2
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_uninstall_is_unavailable_off_macos(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+
+    assert cli.main(["uninstall", "--dry-run"]) == headless.EXIT_UNSUPPORTED
+    assert "macOS" in capsys.readouterr().err
 
 
 # --- capture: targets -------------------------------------------------------
@@ -767,6 +880,9 @@ def test_ocr_unsupported_exits_4(monkeypatch, capsys):
 
     monkeypatch.setattr(headless, "get_recognizer", _nope)
     assert cli.main(["ocr", "whatever.png"]) == headless.EXIT_UNSUPPORTED
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "squill: ocr is not available: requires macOS Vision" in err
 
 
 def test_ocr_captures_when_no_path(fake_recognizer, fake_capturer, capsys, isolated_audit):

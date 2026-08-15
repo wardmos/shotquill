@@ -16,7 +16,12 @@ and an OTLP/JSON projection, all on the local machine.
 | `shotquill_flight_recorder.py` | **Provider-neutral.** The adapter: `describe_action()` / `ActionMap` map an action to a frame; `FlightRecorder` drives the `squill session` CLI over a run. Does not import any model SDK. |
 | `desktop.py` | **Provider-neutral.** Driving the desktop: `Outcome`, the `ComputerExecutor` protocol, and `DryRunExecutor` (real screenshots, logged actions). |
 | `agent.py` | **Anthropic-specific.** A runnable Claude computer-use loop that reuses the two modules above. |
-| `agent_openai.py` | **OpenAI-specific.** A runnable Responses API / `computer_use_preview` loop with the same recorder and executor seam. |
+| `agent_openai.py` | **OpenAI-specific.** A runnable Responses API / `computer_use_preview` loop for the legacy preview interface, with the same recorder and executor seam. |
+
+> **OpenAI compatibility note:** `agent_openai.py` intentionally demonstrates
+> the legacy `computer-use-preview` / `computer_use_preview` request shape. For
+> new integrations, use the GA `computer` tool described in OpenAI's
+> [computer-use guide](https://developers.openai.com/api/docs/guides/tools-computer-use#migration-from-computer-use-preview).
 
 ## Provider split
 
@@ -40,9 +45,9 @@ with the recorder, the `squill session` contract, redaction, and `desktop.py`
 untouched. An action in neither `rules` nor `observations` is skipped (an unknown
 action is treated as an observation, not recorded blind).
 
-Only the loop module is vendor-specific by choice:
-[decisions.md D4](../../../shotquill_docs/decisions.md) made Claude computer use
-the *reference* runtime for v1; other providers are a deliberate follow-on.
+Only the loop module is vendor-specific by choice. Claude computer use is the
+reference runtime; additional providers plug into the same recorder/executor
+seam without changing ShotQuill's recording contract.
 
 ## How it records (and why through the CLI)
 

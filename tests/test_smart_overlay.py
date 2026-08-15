@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
+from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
 from shotquill.ui.smart_overlay import SmartOverlay  # noqa: E402
@@ -155,6 +156,25 @@ def test_tiny_move_counts_as_click_not_drag(qtbot):
     assert windows == [42]
 
 
+def test_crossing_drag_threshold_repaints_the_whole_overlay(qtbot, monkeypatch):
+    overlay = _overlay(qtbot, windows=_windows())
+    refreshes = []
+    monkeypatch.setattr(overlay, "_refresh", lambda dirty=None: refreshes.append(dirty))
+
+    _press(overlay, 10, 10)
+    refreshes.clear()  # Ignore the full repaint requested by the initial press.
+
+    _move(overlay, 20, 20, buttons=Qt.LeftButton)
+
+    assert overlay._dragging is True
+    # Entering region mode changes the backdrop outside the selection too, so
+    # the transition cannot be safely limited to the old/new selection bounds.
+    assert refreshes == [None]
+
+    _move(overlay, 21, 21, buttons=Qt.LeftButton)
+    assert refreshes[-1] is not None  # Subsequent moves keep the fast dirty path.
+
+
 def test_highlight_switch_waits_for_pointer_rest(qtbot):
     overlay = _overlay(qtbot, windows=_windows(), hover_switch_delay_ms=3000)
 
@@ -275,6 +295,22 @@ def test_escape_cancels(qtbot):
     assert cancelled == [True]
 
 
+def test_escape_cancels_when_an_overlay_child_dialog_has_focus(qtbot):
+    # Application-level filtering must see Escape before a child dialog consumes
+    # it for reject(), otherwise the dialog closes but screenshot mode survives.
+    overlay = _overlay(qtbot)
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(True))
+    overlay.show()
+    dialog = QDialog(overlay)
+    dialog.show()
+
+    qtbot.keyClick(dialog, Qt.Key_Escape)
+
+    assert cancelled == [True]
+    assert not overlay.isVisible()
+
+
 def test_paint_before_interaction_does_not_crash(qtbot):
     overlay = _overlay(qtbot, windows=_windows())
     overlay.resize(100, 50)
@@ -375,6 +411,48 @@ def test_painted_window_uses_unoccluded_preview_pixels(qtbot):
     overlay._on_preview_ready(7, _screenshot(100, 100, "red"))
     after = overlay.grab().toImage().pixelColor(220, 180)
     assert (after.red(), after.green(), after.blue()) == (255, 0, 0)
+
+
+def test_preview_cache_is_bounded(qtbot):
+    windows = [
+        WindowInfo(window_id=i, owner=f"Demo {i}", title="", bounds=Rect(i * 10, 0, 10, 10))
+        for i in range(4)
+    ]
+    overlay = _overlay(qtbot, windows=windows)
+
+    for window in windows:
+        overlay._on_preview_ready(window.window_id, _screenshot(10, 10, "red"))
+
+    assert len(overlay._previews) <= 3
+    assert 0 not in overlay._previews
+    assert set(overlay._previews) == {1, 2, 3}
+
+
+def test_close_releases_controller_cycle_and_pixel_buffers(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), window_preview=lambda wid: _screenshot())
+    overlay._on_preview_ready(42, _screenshot(10, 10, "red"))
+
+    class _Controller:
+        def __init__(self, brain):
+            self._brain = brain
+            self.released = False
+
+        def release(self):
+            self.released = True
+            self._brain = None
+
+    controller = _Controller(overlay)
+    overlay._controller = controller
+
+    overlay.close()
+
+    assert controller.released is True
+    assert controller._brain is None
+    assert getattr(overlay, "_controller", None) is None
+    assert overlay._previews == {}
+    assert overlay._windows == []
+    assert overlay._screenshot.isNull()
+    assert overlay._pixmap.isNull()
 
 
 def test_pointed_window_gets_hairline_before_highlight_switches(qtbot):
@@ -704,6 +782,34 @@ def test_present_goes_fullscreen_on_wayland(qtbot, monkeypatch):
     monkeypatch.setattr(overlay, "showFullScreen", lambda: calls.append("fullscreen"))
     overlay.present()
     assert calls == ["fullscreen"]
+
+
+def test_present_overlay_uses_fullscreen_controller_on_multi_output_wayland(qtbot, monkeypatch):
+    # A Wayland fullscreen surface is per-output, so multi-monitor sessions need
+    # one fullscreen view per screen instead of one virtual-desktop top-level.
+    from shotquill.ui import smart_overlay
+
+    overlay = _overlay(qtbot)
+    calls = []
+
+    class _Controller:
+        def __init__(self, brain, *, fullscreen=False):
+            calls.append(("controller", brain is overlay, fullscreen))
+
+        def present(self):
+            calls.append(("present",))
+
+    class _App:
+        def screens(self):
+            return [object(), object()]
+
+    monkeypatch.setattr(smart_overlay, "_compositor_prefers_fullscreen", lambda: True)
+    monkeypatch.setattr(smart_overlay.sys, "platform", "linux")
+    monkeypatch.setattr(smart_overlay, "SmartOverlayController", _Controller)
+    monkeypatch.setattr(overlay, "present", lambda: calls.append(("single",)))
+    smart_overlay.present_overlay(overlay, _App())
+    assert calls == [("controller", True, True), ("present",)]
+    assert overlay._escape_guard._installed is True
 
 
 # --- CropAdjustOverlay: drag edges/corners to fine-tune an existing crop -----

@@ -66,7 +66,11 @@ def _draw_select(p: QPainter) -> None:
 
 
 def _draw_rect(p: QPainter) -> None:
-    p.drawRoundedRect(QRectF(4.5, 6, 15, 12), 1.5, 1.5)
+    p.drawRect(QRectF(4.5, 6, 15, 12))
+
+
+def _draw_rounded_rect(p: QPainter) -> None:
+    p.drawRoundedRect(QRectF(4.5, 6, 15, 12), 4, 4)
 
 
 def _draw_ellipse(p: QPainter) -> None:
@@ -119,6 +123,23 @@ def _draw_highlighter(p: QPainter) -> None:
     p.setPen(band)
     p.drawLine(QPointF(5.5, 20.2), QPointF(14.5, 20.2))
     p.restore()
+
+
+def _draw_spotlight(p: QPainter) -> None:
+    # Dark outer bands surrounding a clear circular focus region.
+    outer = QRectF(4.5, 5, 15, 14)
+    focus = QRectF(8, 8, 8, 8)
+    p.drawRoundedRect(outer, 1.5, 1.5)
+    shade = p.pen().color()
+    p.save()
+    p.setPen(Qt.NoPen)
+    p.setBrush(QBrush(shade))
+    p.drawRect(QRectF(5, 5.5, 14, 2.5))
+    p.drawRect(QRectF(5, 16, 14, 2.5))
+    p.drawRect(QRectF(5, 8, 3, 8))
+    p.drawRect(QRectF(16, 8, 3, 8))
+    p.restore()
+    p.drawEllipse(focus)
 
 
 def _draw_mosaic(p: QPainter) -> None:
@@ -223,11 +244,13 @@ def _draw_save(p: QPainter) -> None:
 _GLYPHS: dict[str, Callable[[QPainter], None]] = {
     "select": _draw_select,
     "rect": _draw_rect,
+    "rounded_rect": _draw_rounded_rect,
     "ellipse": _draw_ellipse,
     "arrow": _draw_arrow,
     "line": _draw_line,
     "pen": _draw_pen,
     "highlighter": _draw_highlighter,
+    "spotlight": _draw_spotlight,
     "mosaic": _draw_mosaic,
     "text": _draw_text,
     "color": _draw_color,

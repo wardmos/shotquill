@@ -52,13 +52,16 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QRegion,
 )
 from PySide6.QtWidgets import QWidget
 
 from shotquill.config import DEFAULT_HOVER_SWITCH_DELAY_MS, HOVER_SWITCH_NEVER
 from shotquill.i18n import t
+from shotquill.ui.capture_escape import CaptureEscapeGuard
 from shotquill.ui.geometry import (
     crop_edge_hits,
+    loupe_anchor,
     move_rect_within,
     rect_containing,
     resize_selection,
@@ -67,7 +70,13 @@ from shotquill.ui.geometry import (
     selection_rect,
     window_at_point,
 )
-from shotquill.ui.loupe import paint_loupe
+from shotquill.ui.loupe import (
+    LOUPE_H,
+    LOUPE_LABEL_H,
+    LOUPE_OFFSET,
+    LOUPE_W,
+    paint_loupe,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -85,6 +94,10 @@ _DRAG_THRESHOLD = 4
 # How long the pointer must rest on a window before its un-occluded preview is
 # fetched — sweeping across windows must not fire a capture per window passed.
 _PREVIEW_DELAY_MS = 120
+# Keep only a few un-occluded window previews: each entry is a QPixmap that may
+# be a full-size window surface, so sweeping across many windows must not retain
+# every one until the overlay closes.
+_MAX_WINDOW_PREVIEWS = 3
 # Keyboard cursor nudging: arrows or WASD move the *real* pointer one logical
 # point per press (Shift steps by 10) so a drag can start, follow, and end on
 # an exact pixel — the loupe magnifies, but the hand still has to hit the
@@ -114,6 +127,7 @@ _NUDGE_MODIFIERS = Qt.ShiftModifier | Qt.KeypadModifier
 # it, and the drawn size of each handle square — both in logical points.
 _HANDLE_GRAB = 12.0
 _HANDLE_SIZE = 8.0
+_DIRTY_PAD = 8.0
 
 
 def _compositor_prefers_fullscreen() -> bool:
@@ -214,11 +228,13 @@ class SmartOverlay(QWidget):
         self._previews: dict[int, QPixmap | None] = {}
         self._preview_busy = False
         self._closed = False
+        self._escape_guard = CaptureEscapeGuard(self, self._cancel)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(_PREVIEW_DELAY_MS)
         self._preview_timer.timeout.connect(self._request_preview)
         self._preview_ready.connect(self._on_preview_ready)
+        self._dirty_region: QRegion | None = None
 
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
@@ -252,6 +268,10 @@ class SmartOverlay(QWidget):
         self.activateWindow()
         self.setFocus()
 
+    def showEvent(self, event) -> None:
+        self._escape_guard.enable()
+        super().showEvent(event)
+
     def changeEvent(self, event) -> None:
         # If something steals focus while the overlay is up — a hot corner firing
         # Mission Control / App Exposé, Cmd-Tab, a click elsewhere — cancel
@@ -269,11 +289,83 @@ class SmartOverlay(QWidget):
 
     # --- painting ---------------------------------------------------------
 
-    def _refresh(self) -> None:
+    def _refresh(self, dirty: QRegion | QRectF | QRect | None = None) -> None:
         # Repaint this widget (the single-window path) and signal the
         # multi-screen controller, if any, to repaint every per-screen view.
-        self.update()
+        if dirty is None:
+            self._dirty_region = None
+            self.update()
+        else:
+            region = dirty if isinstance(dirty, QRegion) else self._region_from_rect(dirty)
+            clipped = region.intersected(QRegion(self.rect()))
+            if clipped.isEmpty():
+                return
+            self._dirty_region = clipped
+            self.update(clipped)
         self.changed.emit()
+
+    @staticmethod
+    def _region_from_rect(rect: QRectF | QRect, *, pad: float = _DIRTY_PAD) -> QRegion:
+        qrect = QRectF(rect).adjusted(-pad, -pad, pad, pad).toAlignedRect()
+        return QRegion(qrect) if not qrect.isEmpty() else QRegion()
+
+    @staticmethod
+    def _union_regions(*regions: QRegion | None) -> QRegion | None:
+        out = QRegion()
+        for region in regions:
+            if region is None or region.isEmpty():
+                continue
+            out = out.united(region)
+        return out if not out.isEmpty() else None
+
+    def _screen_rect_at(self, pos: QPointF) -> QRectF:
+        bounds = rect_containing(self._monitors, pos.x(), pos.y())
+        if bounds is None:
+            return QRectF(self.rect())
+        bx, by, bw, bh = bounds
+        return QRectF(bx, by, bw, bh)
+
+    def _loupe_rect_at(self, pos: QPointF) -> QRectF:
+        ax, ay = loupe_anchor(
+            pos.x(),
+            pos.y(),
+            LOUPE_W,
+            LOUPE_H + LOUPE_LABEL_H,
+            self.width(),
+            self.height(),
+            LOUPE_OFFSET,
+        )
+        return QRectF(ax, ay, LOUPE_W, LOUPE_H + LOUPE_LABEL_H)
+
+    def _cursor_dirty_region(self, pos: QPointF | None) -> QRegion | None:
+        if pos is None:
+            return None
+        cx, cy = pos.x(), pos.y()
+        screen = self._screen_rect_at(pos)
+        guides = self._union_regions(
+            self._region_from_rect(QRectF(screen.left(), cy - 2, screen.width(), 4)),
+            self._region_from_rect(QRectF(cx - 2, screen.top(), 4, screen.height())),
+        )
+        cursor = QRectF(cx - 16, cy - 16, 32, 32)
+        return self._union_regions(
+            guides,
+            self._region_from_rect(cursor),
+            self._region_from_rect(self._loupe_rect_at(pos)),
+        )
+
+    def _window_dirty_region(self, hover: int | None, *, label: bool = False) -> QRegion | None:
+        if hover is None or hover >= len(self._boxes):
+            return None
+        bx, by, bw, bh = self._boxes[hover]
+        rect = QRectF(bx, by, bw, bh)
+        if label:
+            rect = rect.adjusted(0, -32, 0, 0)
+        return self._region_from_rect(rect)
+
+    def _selection_dirty_region(self, selection: QRect | QRectF | None) -> QRegion | None:
+        if selection is None:
+            return None
+        return self._region_from_rect(QRectF(selection).adjusted(0, -28, 0, 0))
 
     def paintEvent(self, event) -> None:
         self._paint_all(QPainter(self))
@@ -473,15 +565,38 @@ class SmartOverlay(QWidget):
     def _pointer_moved(self, pos: QPointF) -> None:
         # Shared by real mouse moves and keyboard nudges (which apply the move
         # locally as well as warping the OS cursor — see _nudge_cursor).
+        old_cursor = self._cursor
+        old_selection = (
+            self._selection() if self._origin is not None and self._current is not None else None
+        )
+        old_hover = self._hover
+        old_pending = self._pending_hover
         self._cursor = pos
         if self._origin is not None:
             self._current = pos
+            started_drag = False
             if not self._dragging:
                 dx = pos.x() - self._origin.x()
                 dy = pos.y() - self._origin.y()
                 if (dx * dx + dy * dy) ** 0.5 > _DRAG_THRESHOLD:
                     self._dragging = True
-            self._refresh()
+                    started_drag = True
+            if started_drag:
+                # Crossing the drag threshold changes the whole overlay from a
+                # full-screen/window highlight to a dim backdrop with only the
+                # selection lit. A dirty-region repaint would leave the old
+                # highlight in the untouched area, producing bright/dark trails
+                # around the selection on backing stores that honour partial
+                # updates (notably the per-screen macOS overlay windows).
+                self._refresh()
+                return
+            dirty = self._union_regions(
+                self._selection_dirty_region(old_selection),
+                self._selection_dirty_region(self._selection()),
+                self._cursor_dirty_region(old_cursor),
+                self._cursor_dirty_region(pos),
+            )
+            self._refresh(dirty)
             return
         hover = window_at_point(self._boxes, pos.x(), pos.y())
         previous = self._pending_hover
@@ -496,8 +611,22 @@ class SmartOverlay(QWidget):
             # The timer is not restarted while the candidate stays the same,
             # so moving around inside one window still commits it.
             self._hover_timer.start()
-        # The loupe follows every move, so repaint unconditionally.
-        self._refresh()
+        if (old_hover is None and self._pending_hover is not None) or (
+            old_pending is not None and self._pending_hover is None and self._hover is None
+        ):
+            # Full-screen highlight <-> window highlight changes the dimming over
+            # the whole desktop. Everything else can be updated locally.
+            self._refresh()
+            return
+        dirty = self._union_regions(
+            self._cursor_dirty_region(old_cursor),
+            self._cursor_dirty_region(pos),
+            self._window_dirty_region(old_pending),
+            self._window_dirty_region(self._pending_hover),
+            self._window_dirty_region(old_hover, label=True),
+            self._window_dirty_region(self._hover, label=True),
+        )
+        self._refresh(dirty)
 
     def _commit_hover(self) -> None:
         self._hover = self._pending_hover
@@ -547,6 +676,7 @@ class SmartOverlay(QWidget):
         # A null image marks a failed fetch; remember it so it isn't retried and
         # painting keeps using the frozen screenshot for that window.
         self._previews[window_id] = None if image.isNull() else QPixmap.fromImage(image)
+        self._trim_preview_cache()
         if self._hover is not None and self._windows[self._hover].window_id == window_id:
             self._refresh()
         else:
@@ -554,12 +684,37 @@ class SmartOverlay(QWidget):
             # now-hovered window (if any) so it isn't starved by the busy gate.
             self._schedule_preview()
 
+    def _trim_preview_cache(self) -> None:
+        """Drop the oldest preview entries, keeping the current hover if possible."""
+        if len(self._previews) <= _MAX_WINDOW_PREVIEWS:
+            return
+        current_id = self._windows[self._hover].window_id if self._hover is not None else None
+        while len(self._previews) > _MAX_WINDOW_PREVIEWS:
+            for cached_id in list(self._previews):
+                if cached_id != current_id:
+                    self._previews.pop(cached_id, None)
+                    break
+            else:
+                self._previews.pop(next(iter(self._previews)), None)
+
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # No new preview fetches once the overlay is going away; an in-flight
         # worker may still finish, but its result is dropped above.
         self._closed = True
         self._hover_timer.stop()
         self._preview_timer.stop()
+        controller = getattr(self, "_controller", None)
+        if hasattr(self, "_controller"):
+            delattr(self, "_controller")
+        if controller is not None:
+            release = getattr(controller, "release", None)
+            if callable(release):
+                release()
+        self._previews.clear()
+        self._windows = []
+        self._screenshot = QImage()
+        self._pixmap = QPixmap()
         super().closeEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -962,6 +1117,16 @@ class _ScreenOverlay(QWidget):
         painter.translate(-self._offset)
         self._brain._paint_all(painter)
 
+    def update_from_brain(self, dirty: QRegion | None) -> None:
+        if dirty is None:
+            self.update()
+            return
+        local = dirty.translated(
+            -int(round(self._offset.x())), -int(round(self._offset.y()))
+        ).intersected(QRegion(self.rect()))
+        if not local.isEmpty():
+            self.update(local)
+
     def mouseMoveEvent(self, event) -> None:
         self._brain._pointer_moved(self._to_brain(event.position()))
 
@@ -1034,8 +1199,9 @@ class SmartOverlayController:
         return [v for v in self._views if shiboken6.isValid(v)]
 
     def _repaint_views(self) -> None:
+        dirty = self._brain._dirty_region
         for view in self._live_views():
-            view.update()
+            view.update_from_brain(dirty)
 
     def _finish(self, *args) -> None:
         if self._finished:
@@ -1047,7 +1213,15 @@ class SmartOverlayController:
     def _close_views(self) -> None:
         for view in self._live_views():
             view.close()
+            view._on_focus_change = None
+            view._brain = None
         self._views = []
+
+    def release(self) -> None:
+        """Break references to the overlay brain and its per-screen views."""
+        self._finished = True
+        self._close_views()
+        self._brain = None
 
     def _on_focus_change(self) -> None:
         # Cancel if focus left every one of our views (a hot corner, Cmd-Tab, a
@@ -1089,10 +1263,14 @@ def present_overlay(overlay: SmartOverlay, app) -> None:
     if sys.platform == "darwin":
         controller = SmartOverlayController(overlay)
         overlay._controller = controller  # share the brain's lifetime
+        # The controller presents view windows while its shared brain stays
+        # hidden, so showEvent cannot enable the session guard for this path.
+        overlay._escape_guard.enable()
         controller.present()
     elif _compositor_prefers_fullscreen() and len(app.screens()) > 1:
         controller = SmartOverlayController(overlay, fullscreen=True)
         overlay._controller = controller  # share the brain's lifetime
+        overlay._escape_guard.enable()
         controller.present()
     else:
         overlay.present()

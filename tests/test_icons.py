@@ -43,6 +43,13 @@ def test_unknown_glyph_name_raises():
         toolbar_icon("nonexistent")
 
 
+def test_rectangle_and_rounded_rectangle_glyphs_are_distinct(qtbot):
+    rect = toolbar_icon("rect").pixmap(24, 24).toImage()
+    rounded = toolbar_icon("rounded_rect").pixmap(24, 24).toImage()
+
+    assert bytes(rect.constBits()) != bytes(rounded.constBits())
+
+
 def test_thinner_stroke_paints_fewer_pixels(qtbot):
     # The stroke argument must actually reach the pen: a thinner stroke covers
     # less of the glyph, so it paints strictly fewer opaque pixels at one size.

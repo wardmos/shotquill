@@ -12,21 +12,33 @@ format, and UI language are editable in Settings.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtCore import QObject, QProcess, QRect, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QIcon,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog, QSystemTrayIcon
 
-from shotquill import __version__, headless, permissions, redact
+from shotquill import __version__, debug_log, headless, permissions, redact, uninstall
 from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
 from shotquill.capture.base import Rect
 from shotquill.config import Config, human_readable_hotkey
+from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
 from shotquill.headless import CapabilityUnsupported, get_capturer
 from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
@@ -41,18 +53,22 @@ from shotquill.ui.pinned import PinnedWindow
 from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
 
+_LOG = debug_log.get_logger(__name__)
+_UNINSTALL_LAUNCH_TIMEOUT_MS = 45_000
+_UNINSTALL_TERM_GRACE_MS = 2_000
+_UNINSTALL_TIMEOUT_DETAIL = "the protected uninstall launcher timed out"
+
 
 def _build_icon() -> QIcon:
     """Build the menu-bar / tray mark.
 
     On macOS we render a *template* image: monochrome, only the alpha channel
     matters, and macOS tints the opaque pixels to match the menu bar (white on
-    dark, dark on light) like its own status items — so the tile is solid black
-    with the "S" knocked out and flagged as a mask. Other desktops (Linux/X11
-    tray) don't tint a mask, which would leave a black tile with a transparent
-    glyph — invisible on dark panels — so there we draw a self-contained icon:
-    a black tile with the "S" painted in white. The colored Launchpad icon is a
-    separate ``.icns`` and is unaffected.
+    dark, dark on light) like its own status items — so only the capture/pen mark
+    is opaque and the surrounding tile is transparent. Other desktops (Linux/X11
+    tray) don't tint a mask, so there we draw a self-contained icon: a blue tile
+    with the mark painted in white. The colored Launchpad icon is a separate
+    ``.icns`` and is unaffected.
 
     For non-macOS tray icons we attach multiple pixel sizes (16/22/24/32/48/64)
     so Qt can pick the right one for a HiDPI panel; a single 64px pixmap would
@@ -73,37 +89,78 @@ def _build_icon() -> QIcon:
 
 
 def _render_tray_pixmap(size: int, *, is_mac: bool) -> QPixmap:
-    """Render the rounded-square "S" tray glyph at ``size``×``size`` pixels.
+    """Render the rounded-square capture/pen tray glyph at ``size``×``size`` pixels.
 
     The proportions (corner radius, tile padding, glyph height) are all derived
-    from ``size`` so smaller pixmaps stay legible — at 16px the glyph dominates
-    the tile, at 64px there is breathing room. macOS gets the "S" knocked out of
-    a black mask; everywhere else the glyph is painted white so the tile reads
-    on dark panels without relying on the desktop to tint it.
+    from ``size`` so smaller pixmaps stay legible. macOS gets an inverted
+    template mask: the mark is opaque and the tile is transparent. Everywhere
+    else the mark is painted white over a blue tile so it reads on dark panels
+    without relying on the desktop to tint it.
     """
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor("black"))
-    padding = max(1, round(size * 6 / 64))
-    radius = max(2, round(size * 14 / 64))
-    tile = size - 2 * padding
-    painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
+    tile_color = QColor("black") if is_mac else QColor("#087cf3")
+    mark_color = QColor("black") if is_mac else QColor("white")
+    if not is_mac:
+        painter.setBrush(tile_color)
+        padding = max(1, round(size * 6 / 64))
+        radius = max(2, round(size * 14 / 64))
+        tile = size - 2 * padding
+        painter.drawRoundedRect(padding, padding, tile, tile, radius, radius)
+
+    painter.scale(size / 64, size / 64)
+    if is_mac:
+        painter.translate(32, 32)
+        painter.scale(1.60, 1.60)
+        painter.translate(-32, -32)
+    pen = QPen(mark_color, 4.0)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+    _draw_tray_corners(painter)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(mark_color)
+    _draw_tray_nib(painter)
     if is_mac:
         painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
-        glyph_color = QColor("black")
+        painter.setBrush(QColor("black"))
     else:
-        glyph_color = QColor("white")
-    font = QFont()
-    font.setBold(True)
-    font.setPixelSize(max(8, round(size * 46 / 64)))
-    painter.setFont(font)
-    painter.setPen(glyph_color)
-    painter.drawText(pixmap.rect(), Qt.AlignCenter, "S")
+        painter.setBrush(tile_color)
+    painter.drawEllipse(31, 35, 3, 3)
+    painter.drawRect(32, 38, 1, 6)
     painter.end()
     return pixmap
+
+
+def _draw_tray_corners(painter: QPainter) -> None:
+    """Draw the four viewfinder corners on a 64×64 design grid."""
+    painter.drawLine(18, 19, 26, 19)
+    painter.drawLine(18, 19, 18, 27)
+    painter.drawLine(46, 19, 38, 19)
+    painter.drawLine(46, 19, 46, 27)
+    painter.drawLine(18, 45, 26, 45)
+    painter.drawLine(18, 45, 18, 37)
+    painter.drawLine(46, 45, 38, 45)
+    painter.drawLine(46, 45, 46, 37)
+
+
+def _draw_tray_nib(painter: QPainter) -> None:
+    """Draw the central pen nib on a 64×64 design grid."""
+    nib = QPainterPath()
+    nib.moveTo(29.3, 44.8)
+    nib.cubicTo(28.5, 40.0, 27.1, 37.2, 25.1, 34.8)
+    nib.cubicTo(27.1, 28.4, 31.7, 24.8, 39.5, 23.0)
+    nib.cubicTo(38.5, 28.4, 35.1, 31.6, 30.1, 33.6)
+    nib.cubicTo(32.9, 33.6, 35.9, 33.0, 38.1, 32.0)
+    nib.cubicTo(36.3, 35.4, 36.1, 38.6, 37.7, 41.6)
+    nib.cubicTo(35.3, 43.6, 34.1, 44.8, 33.3, 44.8)
+    nib.closeSubpath()
+    painter.drawPath(nib)
+    painter.drawRoundedRect(30, 44, 6, 2, 1, 1)
 
 
 class _HotkeyBridge(QObject):
@@ -129,6 +186,12 @@ class _ScrollSession:
     blocklist: object
 
 
+class _UninstallProbeBridge(QObject):
+    """Returns slow installer inspection results to the Qt thread."""
+
+    finished = Signal(int, object, object)
+
+
 class ShotquillApp(QObject):
     """Owns the tray icon, hotkeys, capturer, overlays, and editor windows.
 
@@ -143,6 +206,8 @@ class ShotquillApp(QObject):
         super().__init__()
         self._app = app
         self._config = Config()
+        debug_log.configure(self._config)
+        _LOG.debug("gui init platform=%s version=%s", sys.platform, __version__)
         set_language(self._config.language())
 
         # Platform backends behind the factory seams: macOS gets ScreenCaptureKit
@@ -156,6 +221,18 @@ class ShotquillApp(QObject):
         self._windows: list[object] = []  # keep overlays/editors alive
         self._settings_dialog: SettingsDialog | None = None
         self._settings_shelved = False  # Settings hidden while a capture runs
+        self._uninstall_probe_running = False
+        self._uninstall_probe_generation = 0
+        self._uninstall_probe_thread: threading.Thread | None = None
+        self._uninstall_process: QProcess | None = None
+        self._uninstall_launch_timer: QTimer | None = None
+        self._uninstall_kill_timer: QTimer | None = None
+        self._uninstall_launcher_timed_out = False
+        self._uninstall_progress: QProgressDialog | None = None
+        self._uninstall_interaction_suspended = False
+        self._capture_actions: tuple[QAction, ...] = ()
+        self._quit_action: QAction | None = None
+        self._pending_permission_prompt: str | None = None
         # Blocklisted windows on screen for the current smart-capture session
         # (id → window); refused on click, skipped in the hover preview.
         self._blocked_windows: dict[int, object] = {}
@@ -173,22 +250,28 @@ class ShotquillApp(QObject):
         # The live long-screenshot session, set up by _scrolling_region_selected and
         # driven by a QTimer tick; ``None`` when no scroll capture is in flight.
         self._scroll: _ScrollSession | None = None
+        self._current_debug_id: str | None = None
+        self._smart_debug_id: str | None = None
 
         self._bridge = _HotkeyBridge()
-        # Hotkeys are emitted from pynput's listener thread. Force queued delivery
-        # so capture code always runs on Qt's GUI thread, where widgets/windows are safe.
+        # Hotkey backends may emit from a platform callback thread. Force queued
+        # delivery so capture code always runs on Qt's GUI thread.
         self._bridge.smart_requested.connect(
             self._capture_smart, Qt.ConnectionType.QueuedConnection
         )
         self._bridge.fullscreen_requested.connect(
             self._capture_fullscreen, Qt.ConnectionType.QueuedConnection
         )
+        self._uninstall_probe_bridge = _UninstallProbeBridge(self)
+        self._uninstall_probe_bridge.finished.connect(self._uninstall_probe_finished)
 
         self._tray = QSystemTrayIcon(_build_icon(), self._app)
         self._tray.setToolTip("ShotQuill")
         self._rebuild_menu()
         self._tray.show()
-        self._apply_hotkeys()
+        self._app.applicationStateChanged.connect(self._retry_pending_permissions)
+        self._apply_permission_gated_hotkeys()
+        _LOG.debug("gui ready")
 
     def _hotkey_label(self, action: str) -> str:
         """Display string for a hotkey, or empty if the user disabled it."""
@@ -208,6 +291,10 @@ class ShotquillApp(QObject):
         fullscreen.triggered.connect(self._capture_fullscreen)
         scrolling = QAction(t("menu.scrolling"), menu)
         scrolling.triggered.connect(self._capture_scrolling)
+        captures_enabled = not self._uninstall_interaction_suspended
+        smart.setEnabled(captures_enabled)
+        fullscreen.setEnabled(captures_enabled)
+        scrolling.setEnabled(captures_enabled)
         open_folder = QAction(t("menu.open_folder"), menu)
         open_folder.triggered.connect(self._open_save_folder)
         settings = QAction(t("menu.settings"), menu)
@@ -215,7 +302,8 @@ class ShotquillApp(QObject):
         about = QAction(t("menu.about"), menu)
         about.triggered.connect(self._show_about)
         quit_action = QAction(t("menu.quit"), menu)
-        quit_action.triggered.connect(self._app.quit)
+        quit_action.setEnabled(self._uninstall_process is None)
+        quit_action.triggered.connect(self._request_quit)
 
         menu.addAction(smart)
         menu.addAction(fullscreen)
@@ -229,11 +317,47 @@ class ShotquillApp(QObject):
 
         self._tray.setContextMenu(menu)
         self._menu = menu  # keep a reference
+        self._capture_actions = (smart, fullscreen, scrolling)
+        self._quit_action = quit_action
 
-    def _apply_hotkeys(self) -> None:
-        # Note: no stop() here. Restarting the pynput listener while Qt runs
-        # crashes the process (SIGTRAP on the listener thread), so the manager
-        # keeps one listener alive and start() just swaps in the new bindings.
+    def _request_quit(self) -> None:
+        """Keep the app alive until the uninstall coordinator is ready."""
+        if self._uninstall_process is not None:
+            return
+        self._app.quit()
+
+    def _apply_permission_gated_hotkeys(self) -> None:
+        if self._needs_screen_recording_permission():
+            self._hotkeys.clear()
+            self._show_permission_prompt("screen_recording")
+            return
+        if self._apply_hotkeys():
+            self._pending_permission_prompt = None
+
+    def _needs_screen_recording_permission(self) -> bool:
+        if sys.platform != "darwin":
+            return False
+        return permissions.screen_capture_status() is permissions.PermissionStatus.DENIED
+
+    def _show_permission_prompt(self, permission: str) -> None:
+        if self._pending_permission_prompt == permission:
+            return
+        self._pending_permission_prompt = permission
+        if permission == "screen_recording":
+            self._notify(t("notify.capture_need_screen_recording"))
+            permissions.open_screen_capture_pane()
+        elif permission == "input_monitoring":
+            self._notify(t("notify.hotkeys_need_input_monitoring"))
+            permissions.open_input_monitoring_pane()
+
+    def _retry_pending_permissions(self, state: Qt.ApplicationState) -> None:
+        if state == Qt.ApplicationState.ApplicationActive and self._pending_permission_prompt:
+            self._apply_permission_gated_hotkeys()
+
+    def _apply_hotkeys(self) -> bool:
+        # Note: no stop() here. Backends handle re-applying settings internally:
+        # Carbon re-registers shortcuts, Wayland refreshes portal bindings, and
+        # pynput-backed platforms avoid unsafe listener restarts.
         self._hotkeys.clear()
         # The description is shown in the compositor's own shortcuts settings on
         # the Wayland (GlobalShortcuts portal) backend; the pynput backends ignore
@@ -245,19 +369,28 @@ class ShotquillApp(QObject):
         )
         for action, emit, label in actions:
             if self._config.hotkey_enabled(action):
+                _LOG.debug(
+                    "register hotkey action=%s combo=%s", action, self._config.hotkey(action)
+                )
                 self._hotkeys.register(self._config.hotkey(action), emit, description=label)
         try:
             self._hotkeys.start()
         except HotkeyUnavailable as exc:
             # The session refuses global grabs (e.g. Wayland). Nothing to grant
             # — surface the reason once and keep the tray menu working.
+            _LOG.exception("hotkeys unavailable reason=%s", exc.reason)
             self._notify(t("notify.hotkeys_unavailable").format(reason=exc.reason))
         except PermissionError:
-            self._notify(t("notify.hotkeys_need_input_monitoring"))
             # The deep-link is macOS-specific (an x-apple-systempreferences URL
             # opened via `open`); skip it elsewhere where it would be a no-op.
             if sys.platform == "darwin":
-                permissions.open_input_monitoring_pane()
+                self._show_permission_prompt("input_monitoring")
+            else:
+                self._notify(t("notify.hotkeys_need_input_monitoring"))
+            _LOG.exception("hotkey permission error")
+            return False
+        _LOG.debug("hotkeys active")
+        return True
 
     def _shelve_settings_dialog(self) -> None:
         """Hide an open (modeless) Settings window while a capture runs.
@@ -288,27 +421,43 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_fullscreen(self) -> None:
-        self._shelve_settings_dialog()
-        blocklist = self._load_blocklist_or_abort()
-        if blocklist is None:
-            self._unshelve_settings_dialog()
+        if self._uninstall_interaction_suspended:
             return
-        allowlist = self._load_allowlist_or_abort()
-        if allowlist is None:
-            self._unshelve_settings_dialog()
-            return
-        if allowlist:
-            # An allowlist restricts capture to specific apps, so a whole-screen
-            # grab cannot be honoured — refuse it (matching the CLI/MCP contract).
-            self._notify(t("notify.allowlist_whole_screen"))
-            self._unshelve_settings_dialog()
-            return
+        operation_id = debug_log.new_operation_id("capture")
+        previous = self._current_debug_id
+        self._current_debug_id = operation_id
         try:
-            screenshot = self._grab(blocklist)
+            _LOG.debug("op=%s capture_fullscreen start", operation_id)
+            self._shelve_settings_dialog()
+            blocklist = self._load_blocklist_or_abort()
+            if blocklist is None:
+                self._unshelve_settings_dialog()
+                return
+            allowlist = self._load_allowlist_or_abort()
+            if allowlist is None:
+                self._unshelve_settings_dialog()
+                return
+            if allowlist:
+                # An allowlist restricts capture to specific apps, so a whole-screen
+                # grab cannot be honoured — refuse it (matching the CLI/MCP contract).
+                self._notify(t("notify.allowlist_whole_screen"))
+                self._unshelve_settings_dialog()
+                _LOG.debug("op=%s capture_fullscreen refused allowlist_enabled=true", operation_id)
+                return
+            try:
+                screenshot = self._grab(blocklist)
+            finally:
+                self._unshelve_settings_dialog()
+            if screenshot is not None:
+                _LOG.debug(
+                    "op=%s capture_fullscreen deliver size=%sx%s",
+                    operation_id,
+                    screenshot.width(),
+                    screenshot.height(),
+                )
+                self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
         finally:
-            self._unshelve_settings_dialog()
-        if screenshot is not None:
-            self._deliver_capture(screenshot, self._app.primaryScreen().virtualGeometry())
+            self._current_debug_id = previous
 
     @Slot()
     def _capture_smart(self) -> None:
@@ -320,22 +469,51 @@ class ShotquillApp(QObject):
         self._open_smart_overlay(scrolling=True)
 
     def _open_smart_overlay(self, *, scrolling: bool) -> None:
+        if self._uninstall_interaction_suspended:
+            return
+        operation_id = debug_log.new_operation_id("capture")
+        self._current_debug_id = operation_id
+        self._smart_debug_id = operation_id
+        mode = "scrolling" if scrolling else "smart"
+        _LOG.debug("op=%s capture_%s start", operation_id, mode)
         self._shelve_settings_dialog()
         blocklist = self._load_blocklist_or_abort()
         if blocklist is None:
             self._unshelve_settings_dialog()
+            self._clear_smart_debug_id(operation_id)
+            self._current_debug_id = None
             return
         allowlist = self._load_allowlist_or_abort()
         if allowlist is None:
             self._unshelve_settings_dialog()
+            self._clear_smart_debug_id(operation_id)
+            self._current_debug_id = None
             return
         self._allowlist = allowlist
+        if self._is_wayland_platform():
+            try:
+                self._capture_wayland_interactive(blocklist, allowlist)
+            finally:
+                self._unshelve_settings_dialog()
+                self._clear_smart_debug_id(operation_id)
+                self._current_debug_id = None
+            return
         # Snapshot the window list *before* showing the overlay so our own
-        # window isn't a target. An empty/failed list is fine — the overlay
-        # then only offers full-screen and region modes.
+        # window isn't a target. An empty/failed list is fine only when no
+        # privacy policy needs window identity. If a blocklist/allowlist is in
+        # force, failing to enumerate means we cannot prove what is safe to show
+        # or redact, so fail closed rather than leak pixels on Wayland.
         try:
             windows = self._capturer.list_windows()
-        except Exception:
+            _LOG.debug("op=%s capture_smart windows count=%s", operation_id, len(windows))
+        except Exception as exc:
+            _LOG.exception("op=%s capture_smart list_windows failed", operation_id)
+            if blocklist or allowlist:
+                self._window_policy_unavailable(exc)
+                self._unshelve_settings_dialog()
+                self._clear_smart_debug_id(operation_id)
+                self._current_debug_id = None
+                return
             windows = []
         # Resolve which on-screen windows are blocklisted up front, so the click
         # and hover-preview paths can refuse / skip them without re-querying.
@@ -345,9 +523,14 @@ class ShotquillApp(QObject):
         self._not_allowed_windows = (
             {w.window_id: w for w in windows if not allowlist.is_allowed(w)} if allowlist else {}
         )
-        screenshot = self._grab(blocklist)
+        # Reuse the blocklisted windows we just resolved from this snapshot, so
+        # _grab doesn't enumerate the whole window list a second time.
+        screenshot = self._grab(blocklist, blocked=list(self._blocked_windows.values()))
         if screenshot is None:
             self._unshelve_settings_dialog()
+            _LOG.debug("op=%s capture_smart abort screenshot_unavailable", operation_id)
+            self._clear_smart_debug_id(operation_id)
+            self._current_debug_id = None
             return
         geometry = self._app.primaryScreen().virtualGeometry()
         self._smart_screenshot = screenshot
@@ -378,12 +561,61 @@ class ShotquillApp(QObject):
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
         overlay.destroyed.connect(self._unshelve_settings_dialog)
+        overlay.destroyed.connect(self._clear_smart_capture_state)
+        overlay.destroyed.connect(lambda: self._clear_smart_debug_id(operation_id))
         # present_overlay shows the overlay the way the platform needs: one
-        # stay-on-top window spanning the virtual desktop (X11), Wayland
-        # fullscreen, or — on macOS, where a single window sits under the menu
-        # bar and only covers one display — one menu-bar-level window per screen
-        # sharing this overlay as their brain.
+        # stay-on-top window spanning the virtual desktop (X11), or — on macOS,
+        # where a single window sits under the menu bar and only covers one
+        # display — one menu-bar-level window per screen sharing this overlay as
+        # their brain. Wayland returned above and uses the portal picker instead.
         present_overlay(overlay, self._app)
+        _LOG.debug(
+            "op=%s capture_smart overlay shown blocked=%s not_allowed=%s",
+            operation_id,
+            len(self._blocked_windows),
+            len(self._not_allowed_windows),
+        )
+        self._current_debug_id = None
+
+    def _is_wayland_platform(self) -> bool:
+        return self._app.platformName().lower().startswith("wayland")
+
+    def _capture_wayland_interactive(
+        self, blocklist: bl.Blocklist, allowlist: al.Allowlist
+    ) -> None:
+        """Use the compositor's portal picker for Wayland smart capture.
+
+        Wayland does not expose other apps' window geometry to clients, so the
+        in-process smart overlay cannot provide window highlight/direct picking
+        there. The portal can: the compositor owns the UI and returns the user's
+        chosen window, region, or screen as a still image.
+        """
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug("op=%s capture_smart wayland_interactive start", operation_id)
+        try:
+            result, _target, _matched = headless.perform_interactive_capture(
+                self._capturer, blocklist=blocklist, allowlist=allowlist, via="gui"
+            )
+        except headless.CaptureBlocked as exc:
+            self._notify(str(exc))
+            _LOG.debug("op=%s capture_smart wayland_interactive refused=%s", operation_id, exc)
+            return
+        except Exception as exc:
+            self._notify(t("notify.capture_failed").format(error=exc))
+            _LOG.exception("op=%s capture_smart wayland_interactive failed", operation_id)
+            return
+        image = result_to_qimage(result)
+        _LOG.debug(
+            "op=%s capture_smart wayland_interactive deliver size=%sx%s",
+            operation_id,
+            image.width(),
+            image.height(),
+        )
+        # The Screenshot portal returns the selected pixels but not their
+        # desktop rect. Passing a guessed origin would place the editor over the
+        # wrong spot for window/region picks, so let the framed editor size
+        # itself normally.
+        self._deliver_capture(image)
 
     def _window_preview_image(self, window_id: int) -> QImage | None:
         """One window's un-occluded pixels for the overlay's hover preview.
@@ -399,22 +631,32 @@ class ShotquillApp(QObject):
         try:
             return result_to_qimage(self._capturer.capture_window(window_id))
         except Exception:
+            _LOG.exception(
+                "op=%s window preview failed window_id=%s",
+                self._smart_debug_id,
+                window_id,
+            )
             return None
 
     def _smart_region_selected(self, image: QImage, rect: QRect) -> None:
         """Deliver a region crop, unless the allowlist forbids whole-screen grabs."""
         if self._allowlist:
             self._notify(t("notify.allowlist_whole_screen"))
+            _LOG.debug("op=%s smart_region refused allowlist_enabled=true", self._smart_debug_id)
             return
-        self._deliver_capture(
-            image, rect, region=RegionContext(self._smart_screenshot, self._smart_geometry)
-        )
+        _LOG.debug("op=%s smart_region deliver rect=%s", self._smart_debug_id, rect)
+        region = self._smart_backdrop_context(adjustable=self._config.region_adjust())
+        self._deliver_capture(image, rect, region=region)
 
     def _smart_fullscreen_selected(self) -> None:
         """Deliver the full-screen shot, unless the allowlist forbids it."""
         if self._allowlist:
             self._notify(t("notify.allowlist_whole_screen"))
+            _LOG.debug(
+                "op=%s smart_fullscreen refused allowlist_enabled=true", self._smart_debug_id
+            )
             return
+        _LOG.debug("op=%s smart_fullscreen deliver", self._smart_debug_id)
         self._deliver_capture(self._smart_screenshot, self._smart_geometry)
 
     def _scrolling_needs_region(self, *args) -> None:
@@ -502,21 +744,62 @@ class ShotquillApp(QObject):
             self._scroll = None
 
     def _capture_window_image(self, window_id: int, origin: QRect) -> None:
-        blocked = self._blocked_windows.get(window_id)
-        if blocked is not None:
-            self._notify(t("notify.capture_blocked").format(app=blocked.owner))
-            return
-        not_allowed = self._not_allowed_windows.get(window_id)
-        if not_allowed is not None:
-            self._notify(t("notify.capture_not_allowed").format(app=not_allowed.owner))
-            return
+        operation_id = self._smart_debug_id or debug_log.new_operation_id("capture")
+        previous = self._current_debug_id
+        self._current_debug_id = operation_id
         try:
-            result = self._capturer.capture_window(window_id)
-        except Exception as exc:
-            self._notify(t("notify.capture_failed").format(error=exc))
-            return
-        result = self._redact_window_overlaps(result, origin)
-        self._deliver_capture(result_to_qimage(result), origin)
+            _LOG.debug(
+                "op=%s capture_window start window_id=%s origin=%s",
+                operation_id,
+                window_id,
+                origin,
+            )
+            blocked = self._blocked_windows.get(window_id)
+            if blocked is not None:
+                self._notify(t("notify.capture_blocked").format(app=blocked.owner))
+                _LOG.debug(
+                    "op=%s capture_window refused blocklisted window_id=%s owner=%s",
+                    operation_id,
+                    window_id,
+                    blocked.owner,
+                )
+                return
+            not_allowed = self._not_allowed_windows.get(window_id)
+            if not_allowed is not None:
+                self._notify(t("notify.capture_not_allowed").format(app=not_allowed.owner))
+                _LOG.debug(
+                    "op=%s capture_window refused not_allowed window_id=%s owner=%s",
+                    operation_id,
+                    window_id,
+                    not_allowed.owner,
+                )
+                return
+            try:
+                result = self._capturer.capture_window(window_id)
+            except Exception as exc:
+                self._notify(t("notify.capture_failed").format(error=exc))
+                _LOG.exception("op=%s capture_window failed window_id=%s", operation_id, window_id)
+                return
+            result = self._redact_window_overlaps(result, origin)
+            _LOG.debug(
+                "op=%s capture_window deliver window_id=%s size=%sx%s",
+                operation_id,
+                window_id,
+                result.width,
+                result.height,
+            )
+            self._deliver_capture(
+                result_to_qimage(result),
+                origin,
+                region=self._smart_backdrop_context(adjustable=False),
+            )
+        finally:
+            self._current_debug_id = previous
+
+    def _smart_backdrop_context(self, *, adjustable: bool) -> RegionContext | None:
+        if self._smart_screenshot is None or self._smart_geometry is None:
+            return None
+        return RegionContext(self._smart_screenshot, self._smart_geometry, adjustable=adjustable)
 
     def _redact_window_overlaps(self, result, target: QRect):
         """Hide windows stacked over the target whose pixels must not leak, when
@@ -542,24 +825,64 @@ class ShotquillApp(QObject):
         result, _ = redact.redact_bounds(result, (target_rect.x, target_rect.y), overlaps)
         return result
 
-    def _grab(self, blocklist: bl.Blocklist) -> QImage | None:
+    def _grab(self, blocklist: bl.Blocklist, blocked: list | None = None) -> QImage | None:
         # Resolve which on-screen windows are blocklisted *before* capturing, so
         # the backend can omit them from the grab itself (macOS ScreenCaptureKit):
         # the window is then simply absent — what was behind it shows through and
         # windows on top stay intact — instead of a solid block. Whatever the
         # backend can't omit (the legacy path) is painted out afterwards.
-        blocked = self._blocked_on_screen(blocklist)
+        #
+        # ``blocked`` lets the smart overlay pass the on-screen blocklisted
+        # windows it already enumerated, so we don't walk the whole window list
+        # (a string of X11 round-trips) a second time.
+        if blocked is None:
+            blocked = self._blocked_on_screen(blocklist)
+            if blocked is None:
+                return None
         exclude_ids = frozenset(w.window_id for w in blocked)
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s grab fullscreen blocked=%s exclude_count=%s",
+            operation_id,
+            len(blocked),
+            len(exclude_ids),
+        )
         try:
+            fast_grab = getattr(self._capturer, "capture_fullscreen_image", None)
+            if not blocked and fast_grab is not None:
+                # Nothing to redact (the common case — no blocklist hit on
+                # screen): take the QImage straight from the backend, skipping
+                # the QImage→bytes→QImage round-trip of CaptureResult. Those are
+                # full-virtual-desktop copies, and allocating them is what
+                # thrashes swap — and costs seconds — when memory is tight.
+                # (getattr keeps duck-typed capturers without the fast path
+                # working — they just fall through to the CaptureResult route.)
+                image = fast_grab(exclude_ids)
+                _LOG.debug(
+                    "op=%s grab fullscreen complete backend=qimage_fast size=%sx%s",
+                    operation_id,
+                    image.width(),
+                    image.height(),
+                )
+                return image
             result = self._capturer.capture_fullscreen(exclude_window_ids=exclude_ids)
         except Exception as exc:
             self._notify(t("notify.capture_failed").format(error=exc))
+            _LOG.exception("op=%s grab fullscreen failed", operation_id)
             return None
         remaining = [w for w in blocked if w.window_id not in result.excluded_window_ids]
         if remaining:
+            _LOG.debug("op=%s grab fullscreen redacting remaining=%s", operation_id, len(remaining))
             result, _ = redact.redact_bounds(
                 result, (result.origin_x, result.origin_y), [w.bounds for w in remaining]
             )
+        _LOG.debug(
+            "op=%s grab fullscreen complete backend=capture_result size=%sx%s scale=%s",
+            operation_id,
+            result.width,
+            result.height,
+            result.scale,
+        )
         return result_to_qimage(result)
 
     def _load_blocklist_or_abort(self) -> bl.Blocklist | None:
@@ -580,6 +903,7 @@ class ShotquillApp(QObject):
             return bl.load()
         except bl.BlocklistError as exc:
             self._notify(t("notify.blocklist_unreadable").format(error=exc))
+            _LOG.exception("blocklist load failed")
             return None
 
     def _load_allowlist_or_abort(self) -> al.Allowlist | None:
@@ -594,21 +918,27 @@ class ShotquillApp(QObject):
             return al.load()
         except al.AllowlistError as exc:
             self._notify(t("notify.allowlist_unreadable").format(error=exc))
+            _LOG.exception("allowlist load failed")
             return None
 
-    def _blocked_on_screen(self, blocklist: bl.Blocklist) -> list:
+    def _window_policy_unavailable(self, error: Exception) -> None:
+        self._notify(t("notify.window_policy_unavailable").format(error=error))
+
+    def _blocked_on_screen(self, blocklist: bl.Blocklist) -> list | None:
         """Blocklisted windows currently on screen, so a blocked app never reaches
         the editor, clipboard, or a saved file — the same protection the CLI/MCP
         get, on the human path.
 
-        Empty when nothing is blocked or the windows can't be enumerated (macOS
-        always can; a backend that can't enumerate also can't redact)."""
+        Empty when nothing is blocked. ``None`` means an active blocklist could
+        not be enforced because the backend cannot enumerate windows."""
         if not blocklist:
             return []
         try:
             windows = self._capturer.list_windows()
-        except Exception:
-            return []
+        except Exception as exc:
+            _LOG.exception("blocked_on_screen list_windows failed")
+            self._window_policy_unavailable(exc)
+            return None
         return blocklist.blocked(windows)
 
     def _notify(self, message: str) -> None:
@@ -625,6 +955,15 @@ class ShotquillApp(QObject):
         # and skips the editor. With both auto toggles off, the editor opens —
         # placed over ``origin`` (the shot's on-screen rect) when known, with
         # ``region`` keeping a region capture's crop arrow-key adjustable there.
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s deliver_capture size=%sx%s origin=%s region=%s",
+            operation_id,
+            image.width(),
+            image.height(),
+            origin,
+            bool(region),
+        )
         self._signal_capture()
         if self._auto_output(image):
             return
@@ -642,6 +981,15 @@ class ShotquillApp(QObject):
         copy = self._config.auto_copy_after_capture()
         if not (save or copy):
             return False
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s auto_output save=%s copy=%s size=%sx%s",
+            operation_id,
+            save,
+            copy,
+            image.width(),
+            image.height(),
+        )
         if copy:
             from shotquill.output.clipboard import copy_qimage
 
@@ -653,6 +1001,7 @@ class ShotquillApp(QObject):
                 save_qimage(image, self._config.save_dir(), self._config.image_format())
             except OSError as exc:
                 self._notify(t("notify.save_failed").format(error=exc))
+                _LOG.exception("op=%s auto_save failed", operation_id)
                 return False
         return True
 
@@ -662,8 +1011,17 @@ class ShotquillApp(QObject):
         origin: QRect | None = None,
         region: RegionContext | None = None,
     ) -> None:
-        if not self._config.region_adjust():
-            region = None  # the user turned crop adjustment off in Settings
+        if region is not None and not self._config.region_adjust():
+            region = region._replace(adjustable=False)
+        operation_id = self._current_debug_id or self._smart_debug_id or "capture-unknown"
+        _LOG.debug(
+            "op=%s open_editor size=%sx%s origin=%s region=%s",
+            operation_id,
+            image.width(),
+            image.height(),
+            origin,
+            bool(region),
+        )
         editor = self._make_editor(image, origin, region)
         editor.pin_requested.connect(self._pin_image)
         self._track(editor)
@@ -710,6 +1068,7 @@ class ShotquillApp(QObject):
         try:
             self._autostart.set_enabled(self._config.autostart())
         except OSError:
+            _LOG.exception("autostart sync failed")
             pass  # non-fatal: launch-at-login is a convenience, not core function
 
     def _open_save_folder(self) -> None:
@@ -738,6 +1097,7 @@ class ShotquillApp(QObject):
             subprocess.run([opener, str(directory)], check=True, timeout=20)
         except (OSError, subprocess.SubprocessError) as exc:
             self._notify(t("notify.open_folder_failed").format(error=exc))
+            _LOG.exception("open save folder failed")
 
     def _open_settings(self) -> None:
         # Modeless on purpose. exec() would make the dialog application-modal,
@@ -752,16 +1112,299 @@ class ShotquillApp(QObject):
             return
         dialog = SettingsDialog(self._config)
         dialog.accepted.connect(self._apply_settings)
+        dialog.uninstall_requested.connect(self._request_uninstall)
         dialog.finished.connect(self._forget_settings_dialog)
         self._settings_dialog = dialog
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
 
+    def _request_uninstall(self) -> None:
+        """Route uninstall through Brew or the fixed direct-PKG helper."""
+        if self._uninstall_probe_running or self._uninstall_process is not None:
+            return
+        self._uninstall_probe_running = True
+        self._uninstall_probe_generation += 1
+        generation = self._uninstall_probe_generation
+        self._show_uninstall_progress(t("uninstall.inspecting"), cancelable=True)
+        thread = threading.Thread(
+            target=self._probe_uninstall,
+            args=(generation,),
+            name="shotquill-uninstall-probe",
+            daemon=True,
+        )
+        self._uninstall_probe_thread = thread
+        thread.start()
+
+    def _probe_uninstall(self, generation: int) -> None:
+        try:
+            plan = uninstall.prepare_uninstall_plan()
+        except Exception as exc:  # noqa: BLE001 - GUI boundary reports probe failures
+            _LOG.exception("uninstall inspection failed")
+            self._uninstall_probe_bridge.finished.emit(generation, None, exc)
+            return
+        self._uninstall_probe_bridge.finished.emit(generation, plan, None)
+
+    @Slot(int, object, object)
+    def _uninstall_probe_finished(
+        self,
+        generation: int,
+        plan: object,
+        error: object,
+    ) -> None:
+        if generation != self._uninstall_probe_generation or not self._uninstall_probe_running:
+            return
+        self._uninstall_probe_running = False
+        self._uninstall_probe_thread = None
+        self._clear_uninstall_progress()
+        if error is not None:
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error=error),
+            )
+            return
+        if not isinstance(plan, uninstall.UninstallPlan):
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error="invalid uninstall plan"),
+            )
+            return
+        self._present_uninstall_plan(plan)
+
+    def _present_uninstall_plan(self, plan: uninstall.UninstallPlan) -> None:
+        """Show the channel-specific action after background inspection."""
+        preview = uninstall.format_uninstall_plan(
+            plan,
+            language=self._config.language(),
+        )
+
+        if not plan.can_execute:
+            QMessageBox.warning(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.unavailable").format(plan=preview),
+            )
+            return
+        if plan.channel is uninstall.InstallChannel.HOMEBREW:
+            if plan.brew_command is None:  # Defensive: executable plans always include it.
+                QMessageBox.warning(
+                    self._settings_dialog,
+                    t("uninstall.title"),
+                    t("uninstall.unavailable").format(plan=preview),
+                )
+                return
+            QMessageBox.information(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.brew").format(
+                    command=shlex.join(plan.brew_command),
+                    plan=preview,
+                ),
+            )
+            return
+
+        if not self._confirm_uninstall(preview):
+            return
+        self._start_direct_uninstall(plan)
+
+    def _confirm_uninstall(self, preview: str) -> bool:
+        """Ask for explicit confirmation with Cancel as the safe default."""
+        dialog = QMessageBox(self._settings_dialog)
+        dialog.setWindowTitle(t("uninstall.title"))
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setText(t("uninstall.confirm").format(plan=preview))
+        uninstall_button = dialog.addButton(
+            t("uninstall.action"),
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        cancel_button = dialog.addButton(
+            t("uninstall.cancel"),
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        dialog.setDefaultButton(cancel_button)
+        dialog.setEscapeButton(cancel_button)
+        dialog.exec()
+        return dialog.clickedButton() is uninstall_button
+
+    def _show_uninstall_progress(self, message: str, *, cancelable: bool = False) -> None:
+        if self._settings_dialog is None:
+            return
+        self._clear_uninstall_progress()
+        cancel_text = t("uninstall.cancel") if cancelable else ""
+        progress = QProgressDialog(message, cancel_text, 0, 0, self._settings_dialog)
+        progress.setWindowTitle(t("uninstall.title"))
+        if cancelable:
+            progress.canceled.connect(self._cancel_uninstall_probe)
+        else:
+            progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        self._uninstall_progress = progress
+        progress.show()
+
+    def _cancel_uninstall_probe(self) -> None:
+        """Hide a slow read-only probe and ignore its eventual result."""
+        if not self._uninstall_probe_running:
+            return
+        self._uninstall_probe_generation += 1
+        self._uninstall_probe_running = False
+        self._uninstall_probe_thread = None
+        self._clear_uninstall_progress()
+
+    def _clear_uninstall_progress(self) -> None:
+        if self._uninstall_progress is None:
+            return
+        self._uninstall_progress.close()
+        self._uninstall_progress.deleteLater()
+        self._uninstall_progress = None
+
+    def _start_direct_uninstall(self, plan: uninstall.UninstallPlan) -> None:
+        """Start the protected post-exit coordinator without blocking Qt."""
+        try:
+            argv = uninstall.gui_coordinator_argv(
+                plan,
+                parent_pid=os.getpid(),
+                language=self._config.language(),
+            )
+        except (OSError, ValueError) as exc:
+            _LOG.exception("uninstall helper launch failed")
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error=exc),
+            )
+            return
+
+        process = QProcess(self)
+        process.setProgram(argv[0])
+        process.setArguments(list(argv[1:]))
+        process.finished.connect(self._uninstall_finished)
+        process.errorOccurred.connect(self._uninstall_process_error)
+        launch_timer = QTimer(self)
+        launch_timer.setSingleShot(True)
+        launch_timer.timeout.connect(self._uninstall_launch_timed_out)
+        self._uninstall_process = process
+        self._uninstall_launch_timer = launch_timer
+        self._uninstall_launcher_timed_out = False
+        self._uninstall_interaction_suspended = True
+        self._hotkeys.clear()
+        for action in self._capture_actions:
+            action.setEnabled(False)
+        if self._quit_action is not None:
+            self._quit_action.setEnabled(False)
+        self._show_uninstall_progress(t("uninstall.preparing"))
+        launch_timer.start(_UNINSTALL_LAUNCH_TIMEOUT_MS)
+        process.start()
+
+    def _stop_uninstall_timer(self, timer: QTimer | None) -> None:
+        if timer is None:
+            return
+        timer.stop()
+        timer.deleteLater()
+
+    def _release_uninstall_process(
+        self,
+        *,
+        restore_interaction: bool = True,
+        delete_process: bool = True,
+    ) -> None:
+        process = self._uninstall_process
+        self._uninstall_process = None
+        launch_timer = self._uninstall_launch_timer
+        self._uninstall_launch_timer = None
+        kill_timer = self._uninstall_kill_timer
+        self._uninstall_kill_timer = None
+        self._stop_uninstall_timer(launch_timer)
+        self._stop_uninstall_timer(kill_timer)
+        self._uninstall_launcher_timed_out = False
+        self._clear_uninstall_progress()
+        if restore_interaction:
+            self._uninstall_interaction_suspended = False
+            for action in self._capture_actions:
+                action.setEnabled(True)
+            self._apply_permission_gated_hotkeys()
+            if self._quit_action is not None:
+                self._quit_action.setEnabled(True)
+        if process is not None and delete_process:
+            process.deleteLater()
+
+    def _uninstall_launch_timed_out(self) -> None:
+        """Ask the launcher to exit so its EXIT trap can clean its coordinator."""
+        process = self._uninstall_process
+        if process is None or self._uninstall_launcher_timed_out:
+            return
+        self._uninstall_launcher_timed_out = True
+        self._stop_uninstall_timer(self._uninstall_launch_timer)
+        self._uninstall_launch_timer = None
+        _LOG.error("uninstall coordinator launcher timed out")
+        process.terminate()
+
+        kill_timer = QTimer(self)
+        kill_timer.setSingleShot(True)
+        kill_timer.timeout.connect(self._kill_timed_out_uninstall_launcher)
+        self._uninstall_kill_timer = kill_timer
+        kill_timer.start(_UNINSTALL_TERM_GRACE_MS)
+
+    def _kill_timed_out_uninstall_launcher(self) -> None:
+        """Force a stuck launcher down after allowing its TERM cleanup to run."""
+        process = self._uninstall_process
+        if process is None or not self._uninstall_launcher_timed_out:
+            return
+        process.finished.connect(lambda *_args: process.deleteLater())
+        process.kill()
+        if self._uninstall_process is not process:
+            return
+        self._release_uninstall_process(delete_process=False)
+        QMessageBox.critical(
+            self._settings_dialog,
+            t("uninstall.title"),
+            t("uninstall.start_failed").format(error=_UNINSTALL_TIMEOUT_DETAIL),
+        )
+
+    def _uninstall_process_error(self, error: QProcess.ProcessError) -> None:
+        if error != QProcess.ProcessError.FailedToStart or self._uninstall_process is None:
+            return
+        message = self._uninstall_process.errorString()
+        self._release_uninstall_process()
+        _LOG.error("uninstall authorization process failed to start: %s", message)
+        QMessageBox.critical(
+            self._settings_dialog,
+            t("uninstall.title"),
+            t("uninstall.start_failed").format(error=message),
+        )
+
+    def _uninstall_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        process = self._uninstall_process
+        if process is None:
+            return
+        stderr = bytes(process.readAllStandardError()).decode("utf-8", errors="replace")
+        timed_out = self._uninstall_launcher_timed_out
+        succeeded = (
+            not timed_out and exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0
+        )
+        self._release_uninstall_process(restore_interaction=not succeeded)
+
+        if not succeeded:
+            detail = _UNINSTALL_TIMEOUT_DETAIL if timed_out else stderr.strip() or str(exit_code)
+            QMessageBox.critical(
+                self._settings_dialog,
+                t("uninstall.title"),
+                t("uninstall.start_failed").format(error=detail),
+            )
+            return
+
+        self._app.quit()
+
     def _apply_settings(self) -> None:
+        debug_log.configure(self._config)
+        _LOG.debug("settings applied debug_mode=%s", self._config.debug_mode())
         set_language(self._config.language())
         self._capturer.include_cursor = self._config.include_cursor()
-        self._apply_hotkeys()
+        self._apply_permission_gated_hotkeys()
         self._sync_autostart()
         self._rebuild_menu()
         # Editors resolve their finish keys at creation; push the new
@@ -792,6 +1435,14 @@ class ShotquillApp(QObject):
         if window in self._windows:
             self._windows.remove(window)
 
+    def _clear_smart_debug_id(self, operation_id: str) -> None:
+        if self._smart_debug_id == operation_id:
+            self._smart_debug_id = None
+
+    def _clear_smart_capture_state(self) -> None:
+        self._smart_screenshot = None
+        self._smart_geometry = None
+
     def shutdown(self) -> None:
         self._end_scrolling()  # stop any in-flight long-screenshot timer
         self._hotkeys.stop()
@@ -800,6 +1451,7 @@ class ShotquillApp(QObject):
 def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ShotQuill")
+    app.setDesktopFileName(LINUX_GUI_DESKTOP_FILE_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():

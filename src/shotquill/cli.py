@@ -25,7 +25,9 @@ import json
 import sys
 from pathlib import Path
 
-from shotquill import __version__, audit, command_spec, headless, paths
+from shotquill import __version__, audit, command_spec, debug_log, headless, paths
+
+_LOG = debug_log.get_logger(__name__)
 
 _EXIT_USAGE = 2
 
@@ -41,8 +43,26 @@ _EXIT_USAGE = 2
 _EXIT_ASSERTION_FAILED = 20
 
 
+def _debug_config():
+    try:
+        from shotquill.config import Config
+
+        return Config()
+    except Exception:
+        return None
+
+
+def _argv_summary(argv: list[str]) -> tuple[str, int, list[str]]:
+    command = argv[0] if argv else "gui"
+    flags = sorted({arg.split("=", 1)[0] for arg in argv if arg.startswith("-")})
+    return command, len(argv), flags
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:]) if argv is None else list(argv)
+    debug_log.configure(_debug_config())
+    command, argc, flags = _argv_summary(argv)
+    _LOG.debug("cli main command=%s argc=%s flags=%s", command, argc, flags)
     if not argv:
         # Bare invocation stays the GUI app, so the existing entry point and
         # double-click behaviour survive the CLI growing around them.
@@ -55,10 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except headless.HeadlessError as exc:
+        _LOG.exception("headless error exit_code=%s", exc.exit_code)
         hint = " (run `squill doctor`)" if exc.exit_code == headless.EXIT_PERMISSION else ""
         print(f"squill: {exc}{hint}", file=sys.stderr)
         return exc.exit_code
     except PermissionError as exc:
+        _LOG.exception("permission error")
         print(f"squill: permission denied: {exc} (run `squill doctor`)", file=sys.stderr)
         return headless.EXIT_PERMISSION
     except BrokenPipeError:
@@ -79,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - the CLI boundary
         # Agents parse stderr and branch on exit codes; a traceback is noise
         # and an interpreter exit code is outside the documented contract.
+        _LOG.exception("unhandled cli error")
         print(f"squill: error: {exc}", file=sys.stderr)
         return 1
 
@@ -103,6 +126,7 @@ def _handlers() -> dict:
         "session_prune": _cmd_session_prune,
         "session_export": _cmd_session_export,
         "mcp": _cmd_mcp,
+        "uninstall": _cmd_uninstall,
         "desktop_install": _cmd_install_desktop_entry,
         "blocklist_list": _cmd_blocklist_list,
         "blocklist_add": _cmd_blocklist_add,
@@ -181,6 +205,7 @@ def _capture_image(
     masks=(),
     reveal=(),
     redact_pii_recognizer=None,
+    operation_id: str | None = None,
 ):
     """Run one capture and return ``(QImage, target, matched)``; warn on stderr
     when an app/title match was ambiguous, mirroring the MCP metadata.
@@ -192,6 +217,21 @@ def _capture_image(
     ``redact_pii_recognizer`` is given, likely PII is OCR'd and masked after the
     caller masks but before the reveal mosaic, so the redaction joins the same
     raw-pixel stage."""
+    operation_id = operation_id or debug_log.new_operation_id("cli-capture")
+    _LOG.debug(
+        "op=%s capture_image start interactive=%s window_id=%s app_set=%s title_set=%s region=%s "
+        "display=%s masks=%s reveal=%s include_cursor=%s",
+        operation_id,
+        getattr(args, "interactive", False),
+        args.window_id,
+        args.app is not None,
+        args.title is not None,
+        region,
+        args.display,
+        len(masks or ()),
+        len(reveal or ()),
+        include_cursor,
+    )
     capturer = headless.get_capturer(include_cursor=include_cursor)
     if getattr(args, "scrolling", False):
         # --auto synthesizes the wheel; resolve the scroller up front so an
@@ -217,9 +257,10 @@ def _capture_image(
         return image, target, 1
     if getattr(args, "interactive", False):
         # The compositor frames the shot and hands back the user's selection.
-        # An enforcing allowlist still refuses it (the picker can land on any
-        # window or the whole screen — same contract as a fullscreen grab); the
-        # blocklist cannot apply on Wayland, so the picker is the only gate.
+        # An enforcing allowlist refuses it (the picker can land on any window
+        # or the whole screen — same contract as a fullscreen grab). An active
+        # blocklist also refuses it because the already-composited selection
+        # cannot be checked/redacted after the portal returns it.
         result, target, matched = headless.perform_interactive_capture(capturer, via="cli")
     else:
         result, target, matched = headless.perform_capture(
@@ -243,10 +284,21 @@ def _capture_image(
         result = headless.redact_pii(result, redact_pii_recognizer)
     from shotquill.imaging import pixelate_except, result_to_qimage
 
-    return pixelate_except(result_to_qimage(result), list(reveal), result.scale), target, matched
+    image = pixelate_except(result_to_qimage(result), list(reveal), result.scale)
+    _LOG.debug(
+        "op=%s capture_image complete target=%s matched=%s size=%sx%s",
+        operation_id,
+        target,
+        matched,
+        image.width(),
+        image.height(),
+    )
+    return image, target, matched
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
+    operation_id = debug_log.new_operation_id("cli-capture")
+    _LOG.debug("op=%s cmd_capture start", operation_id)
     if args.output == "-" and sys.stdout.isatty():
         return _usage_error("refusing to write image bytes to a terminal; pipe or redirect")
     if args.output == "-" and args.json:
@@ -327,8 +379,10 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             masks=masks,
             reveal=reveal,
             redact_pii_recognizer=recognizer,
+            operation_id=operation_id,
         )
     except _UsageError as exc:
+        _LOG.debug("op=%s cmd_capture usage_error=%s", operation_id, exc)
         return _usage_error(str(exc))
 
     if args.max_width is not None:
@@ -344,6 +398,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         try:
             recorded = _mirror_capture_observation(args.session, image, target, dedup=args.dedup)
         except record.RecordError as exc:
+            _LOG.exception("op=%s record observation failed", operation_id)
             print(f"squill: {exc}", file=sys.stderr)
             return 1
 
@@ -382,6 +437,13 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         print(f"squill: recorded observation frame {recorded['index']}", file=sys.stderr)
 
     audit.record("capture", via="cli", target=target, dest=dest)
+    _LOG.debug(
+        "op=%s cmd_capture done target=%s dest_kind=%s recorded=%s",
+        operation_id,
+        target,
+        "stdout" if dest == "-" else "file",
+        recorded is not None,
+    )
     return 0
 
 
@@ -775,6 +837,14 @@ def _cmd_displays(args: argparse.Namespace) -> int:
 
 
 def _cmd_ocr(args: argparse.Namespace) -> int:
+    operation_id = debug_log.new_operation_id("cli-ocr")
+    _LOG.debug(
+        "op=%s cmd_ocr start path_set=%s boxes=%s assertions=%s",
+        operation_id,
+        args.path is not None,
+        args.boxes,
+        bool(args.contains or args.matches),
+    )
     # Usage checks first, so a bad invocation is exit 2 even on a host where
     # OCR itself is unavailable (exit codes are the contract agents branch on).
     # --title counts as a capture target here: silently OCRing the file while
@@ -813,7 +883,7 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
     else:
         # Capture-and-recognize in memory (no file, no clipboard): one step
         # instead of `capture -o - | ocr -`, same as the MCP ocr tool.
-        image, source, _matched = _capture_image(args, region)
+        image, source, _matched = _capture_image(args, region, operation_id=operation_id)
 
     # --boxes asks for per-line pixel boxes (and where assertions land); without
     # it the command keeps its plain text-lines contract.
@@ -828,6 +898,12 @@ def _cmd_ocr(args: argparse.Namespace) -> int:
         safe = _printable(line)
         print("{},{},{},{}\t{}".format(*boxes[i].as_rect(), safe) if args.boxes else safe)
     audit.record("ocr", via="cli", target=source)
+    _LOG.debug(
+        "op=%s cmd_ocr recognized lines=%s source_kind=%s",
+        operation_id,
+        len(lines),
+        "stdin" if source == "stdin" else "file_or_capture",
+    )
 
     # No --contains/--matches → the command just prints text (back-compat). With
     # them, the recognized text is asserted and the exit code carries the result.
@@ -938,6 +1014,34 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     from shotquill.mcp import serve
 
     return serve(session_timeout=args.timeout)
+
+
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    if sys.platform != "darwin":
+        print("squill: uninstall is currently available only for macOS packages", file=sys.stderr)
+        return headless.EXIT_UNSUPPORTED
+
+    from shotquill import uninstall
+
+    plan = uninstall.prepare_uninstall_plan()
+    print(uninstall.format_uninstall_plan(plan))
+    if args.dry_run:
+        return 0
+    if not plan.can_execute:
+        print("squill: this installation cannot be removed automatically", file=sys.stderr)
+        return headless.EXIT_UNSUPPORTED
+    if not sys.stdin.isatty():
+        print("squill: uninstall requires an interactive terminal", file=sys.stderr)
+        return _EXIT_USAGE
+    if not args.yes:
+        try:
+            response = input("Uninstall ShotQuill and keep all user data? [y/N] ")
+        except EOFError:
+            return 1
+        if response.strip().casefold() not in {"y", "yes"}:
+            print("Cancelled.", file=sys.stderr)
+            return 1
+    return uninstall.execute_cli_uninstall(plan)
 
 
 def _cmd_blocklist_list(args: argparse.Namespace) -> int:

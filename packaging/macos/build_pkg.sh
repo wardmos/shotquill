@@ -1,35 +1,56 @@
 #!/usr/bin/env bash
-# Build ShotQuill.app and drag-to-Applications DMGs, one per CPU architecture.
-# Ad-hoc signed (anonymous, no Apple account, no notarization).
+# Build ShotQuill.app and an installer PKG, one per CPU architecture.
+# The app is ad-hoc signed by default. Set SHOTQUILL_INSTALLER_IDENTITY to sign
+# the outer product archive with a Developer ID Installer identity.
 #
-# Usage: packaging/macos/build_dmg.sh <version-or-tag> [arch ...]
+# Usage: packaging/macos/build_pkg.sh <version-or-tag> [arch ...]
 #   arch: arm64 | x86_64 | universal2 (default: all three)
 #
-# Single-arch DMGs are roughly half the size of universal2 because PyInstaller
+# SHOTQUILL_BUILD_VERSION optionally supplies a monotonically increasing,
+# numeric CFBundleVersion and component-package version. CI sets it to the
+# repository-wide GitHub run ID so a PKG can upgrade an App installed by Brew
+# even when both builds have the same user-facing product version.
+#
+# Single-arch PKGs are roughly half the size of universal2 because PyInstaller
 # thins the fat (universal2) Python/Qt binaries down to one slice. Building a
 # non-native or universal2 app requires a universal2 Python and universal2
 # wheels for every binary dependency; PyInstaller fails loudly if that does not
 # hold. universal2 is therefore the strictest arch: the package smoke workflow
 # builds only it on PRs, since the thinned arm64/x86_64 slices cannot fail
 # independently of it.
-#
-# SHOTQUILL_DMG_FORMAT overrides the DMG compression (default ULMO = LZMA,
-# smallest but slow); smoke builds use UDZO (zlib) since their DMG is a
-# short-lived artifact where speed matters more than size.
 set -euo pipefail
 
 VERSION="${1:-0.0.0}"
 VERSION="${VERSION#v}"
+BUILD_VERSION="${SHOTQUILL_BUILD_VERSION:-$VERSION}"
 shift || true
 ARCHES=("$@")
 if [ ${#ARCHES[@]} -eq 0 ]; then
   ARCHES=(arm64 x86_64 universal2)
 fi
+if [[ ! "$VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
+  echo "error: unsafe package version: $VERSION" >&2
+  exit 2
+fi
+if [[ ! "$BUILD_VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
+  echo "error: unsafe package build version: $BUILD_VERSION" >&2
+  exit 2
+fi
+for arch in "${ARCHES[@]}"; do
+  case "$arch" in
+    arm64|x86_64|universal2) ;;
+    *)
+      echo "error: unsupported architecture: $arch" >&2
+      exit 2
+      ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 PB="/usr/libexec/PlistBuddy"
+MACOS_MIN_VERSION="13.0"
 
 rm -rf build dist
 
@@ -80,8 +101,9 @@ build_one() {
   local plist="$app/Contents/Info.plist"
 
   # --noupx: UPX rewrites Mach-O headers, which breaks the ad-hoc codesign below
-  # and Apple Silicon's loader; the DMG's LZMA compression is what shrinks the
-  # download instead. (macOS runners ship no upx anyway — this is belt-and-braces.)
+  # and Apple Silicon's loader. macOS runners ship no upx anyway, but keeping
+  # this explicit avoids architecture-specific bundle failures.
+  MACOSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION" \
   pyinstaller --noconfirm --windowed --name ShotQuill \
     --osx-bundle-identifier com.wardmos.shotquill \
     --icon "$ICNS" \
@@ -106,8 +128,10 @@ build_one() {
     || "$PB" -c "Set :NSAccessibilityUsageDescription 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$plist"
   "$PB" -c "Set :CFBundleShortVersionString $VERSION" "$plist" 2>/dev/null \
     || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
-  "$PB" -c "Set :CFBundleVersion $VERSION" "$plist" 2>/dev/null \
-    || "$PB" -c "Add :CFBundleVersion string $VERSION" "$plist"
+  "$PB" -c "Set :CFBundleVersion $BUILD_VERSION" "$plist" 2>/dev/null \
+    || "$PB" -c "Add :CFBundleVersion string $BUILD_VERSION" "$plist"
+  "$PB" -c "Set :LSMinimumSystemVersion $MACOS_MIN_VERSION" "$plist" 2>/dev/null \
+    || "$PB" -c "Add :LSMinimumSystemVersion string $MACOS_MIN_VERSION" "$plist"
 
   # Trim payload --exclude-module cannot reach (it works per-module, not
   # per-file). Prune both Contents/Frameworks and Contents/Resources:
@@ -132,21 +156,94 @@ build_one() {
   # Ad-hoc signature: required to run on Apple Silicon; embeds no identity.
   codesign --force --deep --sign - "$app"
 
-  # Assemble the DMG with hdiutil (built into macOS, no extra dependency).
-  local staging="dist/$arch/dmg"
-  rm -rf "$staging"
-  mkdir -p "$staging"
-  cp -R "$app" "$staging/"
-  ln -s /Applications "$staging/Applications"
+  # Build three component packages. The application and fixed-target uninstall
+  # helper are required; Distribution.xml exposes the two CLI links as an
+  # optional, default-on choice. The helper is not a daemon. Its protected,
+  # root-owned location prevents replacement while macOS is authorizing a
+  # one-shot uninstall. Keeping the CLI root flat avoids changing ownership of
+  # an existing /usr/local tree (including Intel Homebrew installations).
+  local package_work="build/$arch/product"
+  local component_dir="$package_work/components"
+  local app_root="$package_work/app-root"
+  local cli_root="$package_work/cli-root"
+  local uninstaller_root="$package_work/uninstaller-root"
+  local cli_script_source="packaging/macos/scripts/cli"
+  local cli_scripts="$package_work/cli-scripts"
+  local cli_arch_flags=()
+  local app_component="ShotQuill-app.pkg"
+  local cli_component="ShotQuill-cli.pkg"
+  local uninstaller_component="ShotQuill-uninstaller.pkg"
+  local distribution="$package_work/Distribution.xml"
+  rm -rf "$package_work"
+  mkdir -p \
+    "$component_dir" \
+    "$app_root" \
+    "$cli_root" \
+    "$uninstaller_root" \
+    "$cli_scripts"
+  ditto "$app" "$app_root/ShotQuill.app"
+  install -m 0755 "$cli_script_source/preinstall" "$cli_scripts/preinstall"
+  if [ "$arch" = universal2 ]; then
+    cli_arch_flags=(-arch arm64 -arch x86_64)
+  else
+    cli_arch_flags=(-arch "$arch")
+  fi
+  xcrun clang -std=c11 -Os -Wall -Wextra -Werror \
+    -mmacosx-version-min="$MACOS_MIN_VERSION" \
+    "${cli_arch_flags[@]}" \
+    packaging/macos/cli_link_installer.c -o "$cli_scripts/postinstall"
+  chmod 0755 "$cli_scripts/postinstall"
+  codesign --force --sign - "$cli_scripts/postinstall"
+  install -m 0755 packaging/macos/uninstall_pkg \
+    "$uninstaller_root/com.wardmos.shotquill.uninstall"
 
-  local dmg="dist/ShotQuill-$VERSION-$arch.dmg"
-  # ULMO = LZMA-compressed DMG: noticeably smaller than UDZO (zlib). Mountable on
-  # macOS 10.15+, which is well below ShotQuill's target.
-  hdiutil create -volname "ShotQuill $VERSION" -srcfolder "$staging" -ov \
-    -format "${SHOTQUILL_DMG_FORMAT:-ULMO}" "$dmg"
-  rm -rf "$staging"
+  pkgbuild \
+    --root "$app_root" \
+    --install-location /Applications \
+    --component-plist packaging/macos/app_components.plist \
+    --identifier com.wardmos.shotquill.app \
+    --version "$BUILD_VERSION" \
+    --ownership recommended \
+    "$component_dir/$app_component"
+  # A true payload-free package runs scripts but intentionally leaves no
+  # receipt. An empty payload root keeps the CLI optional while giving upgrades
+  # and the guarded uninstaller a receipt to track and forget.
+  pkgbuild \
+    --root "$cli_root" \
+    --install-location / \
+    --scripts "$cli_scripts" \
+    --identifier com.wardmos.shotquill.cli \
+    --version "$BUILD_VERSION" \
+    "$component_dir/$cli_component"
+  pkgbuild \
+    --root "$uninstaller_root" \
+    --install-location /Library/PrivilegedHelperTools \
+    --identifier com.wardmos.shotquill.uninstaller \
+    --version "$BUILD_VERSION" \
+    --ownership recommended \
+    "$component_dir/$uninstaller_component"
 
-  echo "Built $dmg"
+  python packaging/macos/pkg_distribution.py \
+    --version "$BUILD_VERSION" \
+    --app-package "$app_component" \
+    --cli-package "$cli_component" \
+    --uninstaller-package "$uninstaller_component" \
+    > "$distribution"
+
+  local pkg="dist/ShotQuill-$VERSION-$arch.pkg"
+  local productbuild_args=(
+    --distribution "$distribution"
+    --package-path "$component_dir"
+  )
+  if [ -n "${SHOTQUILL_INSTALLER_IDENTITY:-}" ]; then
+    productbuild_args+=(--sign "$SHOTQUILL_INSTALLER_IDENTITY")
+  fi
+  productbuild "${productbuild_args[@]}" "$pkg"
+
+  # Parse the finished package once so malformed Distribution XML cannot become
+  # a release artifact even if productbuild accepted it.
+  installer -showChoicesXML -pkg "$pkg" -target / >/dev/null
+  echo "Built $pkg"
 }
 
 for arch in "${ARCHES[@]}"; do

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 
+from shotquill.debug_log import DEFAULT_DEBUG_MODE
 from shotquill.i18n import DEFAULT_LANGUAGE
 
 DEFAULT_HOTKEYS: dict[str, str] = {
@@ -35,7 +36,30 @@ DEFAULT_EDITOR_HOTKEYS: dict[str, str] = {
 }
 
 DEFAULT_IMAGE_FORMAT = "png"
-DEFAULT_SAVE_DIR = "~/Pictures/ShotQuill"
+
+# Shots live in their own subfolder of the platform's pictures directory.
+SAVE_DIR_NAME = "ShotQuill"
+
+
+def default_save_dir() -> str:
+    """The default save directory, resolved per platform via Qt.
+
+    ``QStandardPaths.PicturesLocation`` gives the real pictures folder on each
+    OS — the redirect-aware "Pictures" known folder on Windows, the localized
+    ``XDG_PICTURES_DIR`` on Linux (e.g. ``~/图片``, ``~/Bilder``), and
+    ``~/Pictures`` on macOS — so one code path is correct everywhere instead of
+    three hard-coded branches. Qt is imported lazily to keep this module's pure
+    helpers usable without a running QApplication. If Qt reports no location
+    (rare, e.g. a headless session), fall back to ``~/Pictures``.
+    """
+    from pathlib import Path
+
+    from PySide6.QtCore import QStandardPaths
+
+    pictures = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.PicturesLocation)
+    base = Path(pictures) if pictures else Path.home() / "Pictures"
+    return str(base / SAVE_DIR_NAME)
+
 
 # Screenshots leave the mouse pointer out by default; including it is opt-in.
 DEFAULT_INCLUDE_CURSOR = False
@@ -47,11 +71,10 @@ DEFAULT_SOUND = False
 # Launch at login is off by default; enabling it installs a LaunchAgent.
 DEFAULT_AUTOSTART = False
 # Auto-output: when on, a capture is saved and/or copied immediately and the
-# annotation editor is skipped (hands-free). Both default on; turn both off to
-# get the manual annotate-then-save/copy flow back.
-DEFAULT_AUTO_SAVE = True
-DEFAULT_AUTO_COPY = True
-
+# annotation editor is skipped (hands-free). Both default off, so a capture
+# opens the annotation editor; turn either on for the hands-free flow.
+DEFAULT_AUTO_SAVE = False
+DEFAULT_AUTO_COPY = False
 # How long the pointer must rest on a new target before the capture overlay
 # switches its highlighted window, in milliseconds. 0 switches the moment the
 # pointer crosses a window edge; HOVER_SWITCH_NEVER turns automatic switching
@@ -71,11 +94,11 @@ DEFAULT_REGION_ADJUST = True
 # like during capture. Turning this off restores a regular titled window.
 DEFAULT_EDITOR_BACKDROP = True
 
-# How the editor toolbar labels its buttons: an icon next to the text (the
-# default), just the icon (compact; the text moves into the tooltip), or just
-# the text (the classic pre-icon look).
+# How the editor toolbar labels its buttons: just the icon (the default;
+# compact, with the text in the tooltip), an icon above its text, or just the
+# text (the classic pre-icon look).
 TOOLBAR_STYLES = ("both", "icon", "text")
-DEFAULT_TOOLBAR_STYLE = "both"
+DEFAULT_TOOLBAR_STYLE = "icon"
 
 
 def _to_bool(value: object, default: bool) -> bool:
@@ -168,7 +191,7 @@ class Config:
         self._settings.setValue("output/format", image_format)
 
     def save_dir(self) -> str:
-        return str(self._settings.value("output/save_dir", DEFAULT_SAVE_DIR))
+        return str(self._settings.value("output/save_dir", default_save_dir()))
 
     def set_save_dir(self, directory: str) -> None:
         self._settings.setValue("output/save_dir", directory)
@@ -214,6 +237,12 @@ class Config:
 
     def set_auto_copy_after_capture(self, enabled: bool) -> None:
         self._settings.setValue("output/auto_copy", bool(enabled))
+
+    def debug_mode(self) -> bool:
+        return _to_bool(self._settings.value("debug/enabled"), DEFAULT_DEBUG_MODE)
+
+    def set_debug_mode(self, enabled: bool) -> None:
+        self._settings.setValue("debug/enabled", bool(enabled))
 
     def hover_switch_delay_ms(self) -> int:
         """Overlay highlight-switch delay; any negative value reads as NEVER."""

@@ -301,13 +301,32 @@ def test_capture_app_reports_ambiguity(fake_capturer):
     assert fake_capturer.calls == [("window", 11)]
 
 
-def test_capture_save_path_also_writes_file(fake_capturer, tmp_path):
+def test_capture_save_path_also_writes_file(fake_capturer, config, tmp_path):
+    config.set_save_dir(str(tmp_path))
     dest = tmp_path / "out" / "shot.png"
     result = call("capture", {"save_path": str(dest)})["result"]
     meta = json.loads(result["content"][1]["text"])
     assert meta["saved_path"] == str(dest.resolve())
     with open(dest, "rb") as fh:
         assert fh.read(4) == PNG_MAGIC
+
+
+def test_capture_save_path_relative_lands_in_save_folder(fake_capturer, config, tmp_path):
+    # A relative save_path is taken under the configured save folder, not the cwd.
+    config.set_save_dir(str(tmp_path))
+    result = call("capture", {"save_path": "sub/shot.png"})["result"]
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["saved_path"] == str((tmp_path / "sub" / "shot.png").resolve())
+
+
+def test_capture_save_path_rejects_outside_save_folder(fake_capturer, config, tmp_path):
+    # An agent-chosen path escaping the save folder is refused, not written: the
+    # capture must never become an arbitrary-file-write primitive.
+    config.set_save_dir(str(tmp_path / "shots"))
+    escape = tmp_path / "elsewhere" / "loot.png"
+    result = call("capture", {"save_path": str(escape)})["result"]
+    assert result["isError"] is True
+    assert not escape.exists()
 
 
 def test_capture_max_width_downscales(fake_capturer):
@@ -552,6 +571,26 @@ def record_root(monkeypatch, tmp_path):
     return root
 
 
+def test_resources_read_corrupt_artifact_is_internal_error_not_crash(record_root):
+    # A session artifact that exists but isn't valid UTF-8 (a truncated/corrupt
+    # write, or a tampered file) makes read_text raise UnicodeDecodeError — a
+    # ValueError that escapes the per-resource OSError guard. It must surface as
+    # an in-band JSON-RPC error rather than propagating out of serve and ending
+    # the session for every later call.
+    call("session_start", {"id": "conv-corrupt", "agent": "a"})
+    (record_root / "conv-corrupt" / "manifest.json").write_bytes(b"\xff\xfe not utf-8 \xff")
+    (response,) = run(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/read",
+            "params": {"uri": "shotquill://session/conv-corrupt/manifest"},
+        }
+    )
+    assert response["id"] == 7
+    assert response["error"]["code"] == -32603
+
+
 def test_record_round_trip(fake_capturer, record_root):
     start = call("session_start", {"id": "conv-mcp", "agent": "builder"})["result"]
     sid = start["structuredContent"]["conversation_id"]
@@ -669,6 +708,26 @@ def test_capture_dedup_mirrors_observation_without_a_duplicate(fake_capturer, re
     assert len(manifest["frames"]) == 2
     assert manifest["frames"][0]["kind"] == "observation"
     assert manifest["frames"][1]["deduped"] is True
+
+
+def test_capture_reuses_deterministic_png_for_observation_mirror(
+    fake_capturer, record_root, monkeypatch
+):
+    real_encode = headless.encode_qimage
+    calls = []
+
+    def _encode(image, image_format="png", *, deterministic=False):
+        calls.append((image_format, deterministic))
+        return real_encode(image, image_format, deterministic=deterministic)
+
+    monkeypatch.setattr(headless, "encode_qimage", _encode)
+    call("session_start", {"id": "conv-obs-reuse"})
+    result = call("capture", {"session": "conv-obs-reuse", "deterministic": True})["result"]
+
+    inline_png = base64.b64decode(result["content"][0]["data"])
+    stored_png = (record_root / "conv-obs-reuse" / "frames" / "0001.png").read_bytes()
+    assert stored_png == inline_png
+    assert calls == [("png", True)]
 
 
 def test_record_list_and_prune(fake_capturer, record_root):

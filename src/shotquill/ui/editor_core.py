@@ -24,6 +24,7 @@ from PySide6.QtGui import QImage, QKeySequence, QPixmap
 
 from shotquill.i18n import adjust_hint_key, key_display_name, t
 from shotquill.ui.canvas import AnnotationCanvas
+from shotquill.ui.capture_escape import CaptureEscapeGuard
 from shotquill.ui.geometry import scale_rect_edges
 from shotquill.ui.toolbar import create_toolbar
 
@@ -51,11 +52,13 @@ class RegionContext(NamedTuple):
 
     ``screenshot`` is the frozen full-desktop shot (native pixels) the region
     was cropped from; ``geometry`` is the virtual desktop's rect in logical,
-    global points — together they let the editor re-crop any selection.
+    global points — together they let the spotlight editor paint the dimmed
+    desktop context, and let adjustable region captures re-crop any selection.
     """
 
     screenshot: QImage
     geometry: QRect
+    adjustable: bool = True
 
 
 def _toolbar_placement(cursor: QPoint | None, origin: QRect | None) -> tuple[Qt.ToolBarArea, bool]:
@@ -125,13 +128,18 @@ class EditorCoreMixin:
 
     # --- setup (called from the shell's __init__) -------------------------
 
-    def _init_editor_core(self, image, config, origin, region, recognizer):
+    def _init_editor_core(self, image, config, origin, region, recognizer, split_outputs=False):
         """Create the canvas + toolbar and wire OCR; return the toolbar.
 
         ``recognizer`` is passed in (not fetched here) so the shell decides it on
         a module the tests can patch. The shell positions the returned toolbar.
+
+        ``split_outputs`` peels the copy/save buttons onto the toolbar's sibling
+        ``outputs_toolbar`` so a width-constrained host can keep them visible (see
+        create_toolbar); the shell must then place that bar too.
         """
         self._config = config
+        self._escape_guard = CaptureEscapeGuard(self, self.close)
         self._origin = origin
         # Crop adjustment (region captures only): the live selection in logical
         # global points, kept as floats so native-pixel steps survive fractional
@@ -158,6 +166,7 @@ class EditorCoreMixin:
             self._ocr if recognizer is not None else None,
             self._pin,
             style=config.toolbar_style(),
+            split_outputs=split_outputs,
         )
         self._copy_action = self._toolbar.copy_action
         self._save_action = self._toolbar.save_action
@@ -194,6 +203,11 @@ class EditorCoreMixin:
         The shell's ``keyPressEvent`` calls this first, then falls back to
         ``super().keyPressEvent``.
         """
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            focus_item = self._canvas.scene().focusItem()
+            if focus_item is None and self._canvas.delete_selected_items():
+                event.accept()
+                return True
         # Crop adjustment first: until the first annotation lands, the arrow keys
         # nudge a region capture's crop (⇧ steps by 10, ⌥ resizes). The canvas
         # declines plain arrows so they reach the shell.
@@ -216,7 +230,7 @@ class EditorCoreMixin:
     # --- crop adjustment (region captures, until the first annotation) ----
 
     def _can_adjust(self) -> bool:
-        return self._region is not None and self._canvas.is_pristine()
+        return self._region is not None and self._region.adjustable and self._canvas.is_pristine()
 
     def crop_adjustable(self) -> bool:
         return self._can_adjust()

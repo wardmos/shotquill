@@ -3,24 +3,30 @@
 """Tests for the Windows hotkey manager's bookkeeping and match logic.
 
 The real ``pynput`` listener is never started — ``keyboard.Listener`` is replaced
-with a recording fake so we can drive ``on_press``/``on_release`` directly. The
-live Win32 listener still needs a real Windows session to exercise.
+with a recording fake so we can drive the Win32 event filter directly. The live
+Win32 listener still needs a real Windows session to exercise.
 """
 
+import threading
+
 import pytest
-from pynput.keyboard import Key
 
 from shotquill.hotkeys import windows
+
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
 
 
 class _FakeListener:
     instances: list = []
 
-    def __init__(self, on_press=None, on_release=None):
+    def __init__(self, on_press=None, on_release=None, **kwargs):
         self.on_press = on_press
         self.on_release = on_release
+        self.kwargs = kwargs
         self.started = False
         self.stopped = False
+        self.suppressed = 0
         _FakeListener.instances.append(self)
 
     def start(self):
@@ -29,13 +35,8 @@ class _FakeListener:
     def stop(self):
         self.stopped = True
 
-
-class _FakeKey:
-    """Stand-in for a pynput KeyCode: a virtual-key ``vk`` plus produced ``char``."""
-
-    def __init__(self, vk=None, char=None):
-        self.vk = vk
-        self.char = char
+    def suppress_event(self):
+        self.suppressed += 1
 
 
 @pytest.fixture
@@ -43,6 +44,22 @@ def fake_listener(monkeypatch):
     _FakeListener.instances = []
     monkeypatch.setattr(windows.keyboard, "Listener", _FakeListener)
     return _FakeListener
+
+
+def _data(vk: int):
+    return type("Data", (), {"vkCode": vk})()
+
+
+def _press(manager: windows.WindowsHotkeyManager, vk: int) -> bool:
+    return manager._event_filter(WM_KEYDOWN, _data(vk))
+
+
+def _release(manager: windows.WindowsHotkeyManager, vk: int) -> bool:
+    return manager._event_filter(WM_KEYUP, _data(vk))
+
+
+def _sync_callbacks(manager: windows.WindowsHotkeyManager) -> None:
+    manager._enqueue_callback = lambda callback: callback()
 
 
 def test_vk_table_uses_windows_virtual_key_codes():
@@ -53,6 +70,7 @@ def test_vk_table_uses_windows_virtual_key_codes():
     assert windows._WIN_VK["9"] == 0x39
     assert windows._WIN_VK["f1"] == 0x70
     assert windows._WIN_VK["f12"] == 0x7B
+    assert windows._WIN_VK["-"] == 0xBD
 
 
 def test_register_and_unregister(fake_listener):
@@ -67,9 +85,6 @@ def test_register_and_unregister(fake_listener):
 
 
 def test_register_accepts_description_kwarg(fake_listener):
-    # The app layer calls register(combo, cb, description=label) for every
-    # backend (the Wayland portal uses it); the pynput backends accept and
-    # ignore it. A missing param would TypeError at GUI startup on Windows.
     manager = windows.WindowsHotkeyManager()
     manager.register("<ctrl>+<shift>+s", lambda: None, description="Smart capture")
     assert set(manager._bindings) == {"<ctrl>+<shift>+s"}
@@ -82,148 +97,273 @@ def test_start_with_no_bindings_does_nothing(fake_listener):
 
 
 def test_start_needs_no_permission(fake_listener):
-    # Unlike macOS Input Monitoring, a Win32 listener starts without a grant.
     manager = windows.WindowsHotkeyManager()
     manager.register("<ctrl>+<shift>+s", lambda: None)
-    manager.start()  # must not raise PermissionError
+    manager.start()
     assert fake_listener.instances[-1].started is True
 
 
-def test_ctrl_combo_matches_by_vk_when_char_is_control_code(fake_listener):
-    # On Windows, Ctrl+A makes ToUnicode emit "\x01"; matching the vk (0x41)
-    # keeps the binding firing where character matching would miss.
+def test_ctrl_combo_matches_by_vk_before_pynput_char_translation(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))
+
+    assert _press(manager, 0x11) is True
+    assert _press(manager, 0x41) is False
+
     assert fired == [True]
 
 
 def test_function_key_combo_matches_by_vk(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+f5", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)
-    # Function keys arrive as Key members; vk resolves through the wrapped value.
-    manager._on_press(_FakeKey(vk=0x74))  # VK_F5
+
+    _press(manager, 0x11)
+    assert _press(manager, 0x74) is False
+
     assert fired == [True]
 
 
-def test_char_fallback_for_keys_outside_vk_table(fake_listener):
-    # A key with no vk entry (e.g. a punctuation key) falls back to char.
+def test_known_punctuation_combo_matches_by_vk(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+-", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=None, char="-"))
+
+    _press(manager, 0x11)
+    assert _press(manager, 0xBD) is False
+
     assert fired == [True]
+
+
+def test_unknown_char_only_combo_is_not_compiled_or_fired(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
+    manager.register("<ctrl>+§", lambda: fired.append(True))
+    manager.start()
+
+    _press(manager, 0x11)
+    assert _press(manager, 0xDF) is True
+
+    assert manager._compiled == []
+    assert fired == []
+    assert fake_listener.instances[-1].suppressed == 0
+
+
+def test_matching_win32_hook_event_is_suppressed(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
+    manager.register("<ctrl>+a", lambda: fired.append(True))
+    manager.start()
+    listener = fake_listener.instances[-1]
+
+    assert _press(manager, 0x11) is True
+    assert _press(manager, 0x41) is False
+
+    assert fired == [True]
+    assert listener.suppressed == 1
+
+
+def test_win32_hook_enqueues_callback_after_suppression(fake_listener):
+    fired = []
+    called = threading.Event()
+    manager = windows.WindowsHotkeyManager()
+
+    def callback():
+        fired.append(True)
+        called.set()
+
+    manager.register("<ctrl>+a", callback)
+    manager.start()
+    listener = fake_listener.instances[-1]
+
+    _press(manager, 0x11)
+    assert _press(manager, 0x41) is False
+
+    assert listener.suppressed == 1
+    assert called.wait(1)
+    assert fired == [True]
+
+
+def test_callback_does_not_fire_when_teardown_prevents_suppression(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
+    manager.register("<ctrl>+a", lambda: fired.append(True))
+    manager.start()
+
+    _press(manager, 0x11)
+    manager._listener = None
+
+    assert _press(manager, 0x41) is True
+    assert fired == []
+
+
+def test_suppressed_win32_key_release_is_suppressed(fake_listener):
+    manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
+    manager.register("<ctrl>+a", lambda: None)
+    manager.start()
+    listener = fake_listener.instances[-1]
+
+    _press(manager, 0x11)
+    _press(manager, 0x41)
+
+    assert _release(manager, 0x41) is False
+    assert listener.suppressed == 2
 
 
 def test_super_modifier_maps_to_cmd(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
-    manager.register("<cmd>+a", lambda: fired.append(True))  # cmd == Win key
+    _sync_callbacks(manager)
+    manager.register("<cmd>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.cmd)
-    manager._on_press(_FakeKey(vk=0x41, char="a"))
+
+    _press(manager, 0x5B)
+    assert _press(manager, 0x41) is False
+
     assert fired == [True]
 
 
 def test_autorepeat_fires_once(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))  # held key auto-repeats
+
+    _press(manager, 0x11)
+    _press(manager, 0x41)
+    _press(manager, 0x41)
+
     assert fired == [True]
 
 
 def test_release_allows_refire(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))
-    manager._on_release(_FakeKey(vk=0x41, char="\x01"))
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))
+
+    _press(manager, 0x11)
+    _press(manager, 0x41)
+    _release(manager, 0x41)
+    _press(manager, 0x41)
+
     assert fired == [True, True]
 
 
 def test_wrong_modifier_does_not_fire(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.alt)  # Alt, not Ctrl
-    manager._on_press(_FakeKey(vk=0x41, char="a"))
+
+    _press(manager, 0x12)
+    assert _press(manager, 0x41) is True
+
     assert fired == []
 
 
 def test_extra_modifier_does_not_fire(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)
-    manager._on_press(Key.shift)  # Ctrl+Shift+A != Ctrl+A
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))
+
+    _press(manager, 0x11)
+    _press(manager, 0x10)
+    assert _press(manager, 0x41) is True
+
     assert fired == []
 
 
 def test_no_modifier_does_not_fire(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(_FakeKey(vk=0x41, char="a"))  # bare 'a'
+
+    assert _press(manager, 0x41) is True
+
     assert fired == []
 
 
 def test_rebind_takes_effect_without_restart(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append("a"))
     manager.start()
     manager.clear()
     manager.register("<ctrl>+s", lambda: fired.append("s"))
     manager.start()
-    assert len(fake_listener.instances) == 1  # listener reused, not restarted
-    manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))  # old binding gone
-    manager._on_press(_FakeKey(vk=0x53, char="\x13"))  # new <ctrl>+s fires
+
+    assert len(fake_listener.instances) == 1
+    _press(manager, 0x11)
+    _press(manager, 0x41)
+    _press(manager, 0x53)
+
     assert fired == ["s"]
+
+
+def test_clear_drops_held_and_suppressed_state(fake_listener):
+    fired = []
+    manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
+    manager.register("<ctrl>+a", lambda: fired.append("a"))
+    manager.start()
+
+    _press(manager, 0x11)
+    _press(manager, 0x41)
+    manager.clear()
+    manager.register("<ctrl>+s", lambda: fired.append("s"))
+    manager.start()
+
+    assert _release(manager, 0x41) is True
+    assert _press(manager, 0x53) is True
+    assert fired == ["a"]
 
 
 def test_disabling_all_hotkeys_unbinds_but_keeps_listener(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
     listener = fake_listener.instances[-1]
     manager.clear()
-    manager.start()  # all hotkeys disabled in Settings
+    manager.start()
+
     assert listener.stopped is False
-    manager._on_press(Key.ctrl)
-    manager._on_press(_FakeKey(vk=0x41, char="\x01"))
+    _press(manager, 0x11)
+    _press(manager, 0x41)
     assert fired == []
 
 
 def test_stop_clears_modifier_state(fake_listener):
     fired = []
     manager = windows.WindowsHotkeyManager()
+    _sync_callbacks(manager)
     manager.register("<ctrl>+a", lambda: fired.append(True))
     manager.start()
-    manager._on_press(Key.ctrl)  # hold Ctrl, never release
+    _press(manager, 0x11)
     manager.stop()
     manager.start()
-    manager._on_press(_FakeKey(vk=0x41, char="a"))  # no live Ctrl
+    _press(manager, 0x41)
     assert fired == []
 
 
@@ -232,7 +372,7 @@ def test_stop_is_idempotent(fake_listener):
     manager.register("<ctrl>+a", lambda: None)
     manager.start()
     manager.stop()
-    manager.stop()  # second stop is a no-op, must not raise
+    manager.stop()
     assert fake_listener.instances[-1].stopped is True
 
 

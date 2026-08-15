@@ -61,6 +61,20 @@ def test_surface_covers_the_selections_screen(qtbot, config, monkeypatch):
     assert surface.geometry() == _SCREEN
 
 
+def test_escape_in_color_dialog_closes_the_entire_surface(qtbot, config, monkeypatch):
+    # The full-screen shell needs the same session-level Escape behaviour as the
+    # framed editor even while a child top-level owns keyboard focus.
+    surface = _surface(qtbot, config, monkeypatch)
+    dialog = surface._toolbar.color_dialog
+    dialog.show()
+    assert surface.isVisible() and dialog.isVisible()
+
+    qtbot.keyClick(dialog, Qt.Key_Escape)
+
+    assert not surface.isVisible()
+    assert not dialog.isVisible()
+
+
 def test_canvas_is_placed_over_the_selection_in_local_coords(qtbot, config, monkeypatch):
     surface = _surface(qtbot, config, monkeypatch)
     # origin (1100,580,200,120) on a screen at (1000,500) → local (100,80,200,120).
@@ -147,15 +161,38 @@ def test_copy_exports_and_closes(qtbot, config, monkeypatch):
 
 def test_toolbar_floats_as_a_child_near_the_selection(qtbot, config, monkeypatch):
     surface = _surface(qtbot, config, monkeypatch)
-    assert surface._toolbar.parent() is surface
-    assert surface._toolbar.isVisible()
+    assert surface._toolbar_row.parent() is surface
+    assert surface._toolbar.parent() is surface._toolbar_row
+    assert surface._toolbar.outputs_toolbar.parent() is surface._toolbar_row
+    assert surface._toolbar_row.isVisible()
     # Positioned inside the surface.
-    tb = surface._toolbar.geometry()
-    assert surface.rect().contains(tb.topLeft())
+    row = surface._toolbar_row.geometry()
+    assert surface.rect().contains(row.topLeft())
+
+
+def test_copy_and_save_stay_in_the_floating_toolbar_when_it_overflows(qtbot, config, monkeypatch):
+    # The full row is wider than this surface. Copy/save must remain at its
+    # trailing end and visible while the annotation section folds.
+    surface = _surface(qtbot, config, monkeypatch)
+    toolbar = surface._toolbar
+    outputs = toolbar.outputs_toolbar
+    row = surface._toolbar_row
+
+    surface.resize(200, surface.height())
+    surface._reposition_toolbar()
+    assert toolbar.sizeHint().width() + outputs.sizeHint().width() > surface.width()
+    assert row.width() == surface.width()
+    assert row.layout().indexOf(toolbar) < row.layout().indexOf(outputs)
+    assert toolbar.geometry().right() + 1 == outputs.geometry().left()
+    assert toolbar.geometry().top() == outputs.geometry().top()
+    assert outputs.actions() == [surface._copy_action, surface._save_action]
+    assert not toolbar.widgetForAction(toolbar.actions()[-1]).isVisible()
+    assert outputs.widgetForAction(surface._copy_action).isVisible()
+    assert outputs.widgetForAction(surface._save_action).isVisible()
 
 
 def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
-    # A window/fullscreen capture has no RegionContext: no handles, pure dim.
+    # A capture with no desktop context falls back to the plain dim layer.
     monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
     monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
     monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
@@ -166,6 +203,30 @@ def test_non_region_surface_is_pure_dim(qtbot, config, monkeypatch):
     qtbot.waitExposed(surface)
     assert surface.crop_adjustable() is False
     assert surface._screen_pixmap is None
+
+
+def test_non_adjustable_surface_keeps_dimmed_desktop_context(qtbot, config, monkeypatch):
+    # Window captures are not crop-adjustable, but their spotlight backdrop still
+    # needs the frozen desktop slice so the area outside the window stays visible.
+    monkeypatch.setattr(QGuiApplication, "screenAt", lambda pt: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", lambda: _FakeScreen())
+    monkeypatch.setattr(QGuiApplication, "screens", lambda: [_FakeScreen()])
+    shot = _image(_SCREEN.width(), _SCREEN.height(), "red")
+    region = RegionContext(shot, QRect(_SCREEN), adjustable=False)
+    surface = SpotlightSurface(_image(200, 120), config, QRect(1100, 580, 200, 120), region)
+    surface.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(surface)
+    surface.show()
+    qtbot.waitExposed(surface)
+
+    assert surface.crop_adjustable() is False
+    assert surface._screen_pixmap is not None
+    image = surface.grab().toImage()
+    outside = image.pixelColor(20, 20)
+    assert outside.red() > 0
+    assert outside.green() == 0
+    assert outside.blue() == 0
+    assert outside.red() < QColor("red").red()
 
 
 def test_paint_smoke_adjustable_and_dragging(qtbot, config, monkeypatch):
@@ -191,6 +252,19 @@ def test_drag_tracks_the_cursor_for_the_loupe(qtbot, config, monkeypatch):
     assert (surface._cursor.x(), surface._cursor.y()) == (340, 150)
     surface._end_handle_drag(QPointF(340, 150))
     assert surface._cursor is None  # drag over -> loupe gone
+
+
+def test_drag_updates_only_dirty_regions(qtbot, config, monkeypatch):
+    surface = _surface(qtbot, config, monkeypatch)
+    updates = []
+    monkeypatch.setattr(surface, "update", lambda region=None: updates.append(region))
+
+    surface._try_begin_handle_drag(QPointF(300, 140))
+    surface._update_handle_drag(QPointF(340, 150))
+
+    assert updates
+    assert all(region is not None for region in updates)
+    assert all(region.boundingRect() != surface.rect() for region in updates)
 
 
 def test_paint_loupe_mid_drag_does_not_crash(qtbot, config, monkeypatch):
@@ -271,6 +345,29 @@ def test_reactivation_re_covers_the_menu_bar(qtbot, config, monkeypatch):
     monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
     surface.changeEvent(QEvent(QEvent.ActivationChange))
     assert calls == [surface]
+
+
+def test_reactivation_does_not_interrupt_active_text_edit(qtbot, config, monkeypatch):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QGraphicsTextItem
+
+    surface = _surface(qtbot, config, monkeypatch)
+    surface._canvas.setFocus()
+    surface._canvas._create_text(QPointF(20, 20))
+    item = next(
+        entry for entry in surface._canvas.scene().items() if isinstance(entry, QGraphicsTextItem)
+    )
+    assert surface._canvas.scene().focusItem() is item
+    monkeypatch.setattr(surface, "isActiveWindow", lambda: True)
+    focus_calls = []
+    monkeypatch.setattr(surface, "setFocus", lambda: focus_calls.append(True))
+
+    surface.changeEvent(QEvent(QEvent.ActivationChange))
+
+    assert focus_calls == []
+    assert item.scene() is surface._canvas.scene()
+    assert item.committed is False
+    assert surface._canvas.scene().focusItem() is item
 
 
 def test_handles_sit_outside_the_selection(qtbot, config, monkeypatch):

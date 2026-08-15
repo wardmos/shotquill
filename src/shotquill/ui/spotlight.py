@@ -34,9 +34,10 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPen,
+    QRegion,
     QShortcut,
 )
-from PySide6.QtWidgets import QFrame, QLabel, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from shotquill.ocr import get_recognizer
 from shotquill.ui import macos_window
@@ -47,14 +48,15 @@ from shotquill.ui.editor_core import (
     RegionContext,
     _toolbar_placement,
 )
-from shotquill.ui.geometry import crop_edge_hits, resize_selection, scale_rect_edges
-from shotquill.ui.loupe import paint_loupe
+from shotquill.ui.geometry import crop_edge_hits, loupe_anchor, resize_selection, scale_rect_edges
+from shotquill.ui.loupe import LOUPE_H, LOUPE_LABEL_H, LOUPE_OFFSET, LOUPE_W, paint_loupe
 from shotquill.ui.smart_overlay import _ACCENT, _HANDLE_GRAB, _HANDLE_SIZE
 
 if TYPE_CHECKING:
     from shotquill.config import Config
 
 _TOOLBAR_GAP = 8  # logical points between the selection and the floating toolbar
+_DIRTY_PAD = 8.0
 
 
 class _DimScreen(QWidget):
@@ -114,7 +116,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self.setGeometry(self._screen_geo)
         self.setMouseTracking(True)
 
-        toolbar = self._init_editor_core(image, config, origin, region, get_recognizer())
+        toolbar = self._init_editor_core(
+            image, config, origin, region, get_recognizer(), split_outputs=True
+        )
 
         # The lit selection IS the canvas, parented as a positioned child (placed
         # in showEvent / on every crop change), not a central widget. Drop the
@@ -128,9 +132,19 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._status_badge = QLabel(self._canvas.viewport())
         self._status_badge.setStyleSheet(_BADGE_STYLE)
         self._status_badge.hide()
-        # The toolbar floats as a child near the selection (positioned on show).
+        # Keep one continuous floating row: annotation tools take the flexible
+        # leading section, while copy/save occupy a fixed trailing section. This
+        # preserves their order and lets only the annotation section fold.
         self._toolbar = toolbar
-        toolbar.setParent(self)
+        outputs = toolbar.outputs_toolbar
+        self._toolbar_row = QWidget(self)
+        toolbar_layout = QHBoxLayout(self._toolbar_row)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(0)
+        toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        outputs.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        toolbar_layout.addWidget(toolbar, 1)
+        toolbar_layout.addWidget(outputs)
 
         # This screen's slice of the frozen desktop shot, painted dimmed as
         # context (None for non-region captures — then the surface is pure dim).
@@ -195,6 +209,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
     # --- window lifecycle -------------------------------------------------
 
     def showEvent(self, event) -> None:
+        self._escape_guard.enable()
         super().showEvent(event)
         self._cover_menubar()
         self._show_dim_screens()
@@ -211,8 +226,11 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # whatever the user switches to.
         if event.type() == QEvent.ActivationChange:
             if self.isActiveWindow():
-                self._cover_menubar()
+                # Re-level the native window without moving keyboard focus away
+                # from an active graphics text editor in the canvas.
+                self._cover_menubar(take_focus=False)
                 self._show_dim_screens()
+                self._canvas.restore_text_focus()
             else:
                 self._hide_dim_screens()
         super().changeEvent(event)
@@ -227,20 +245,22 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         for dim in self._dim_screens:
             dim.hide()
 
-    def _cover_menubar(self) -> None:
+    def _cover_menubar(self, *, take_focus: bool = True) -> None:
         # Match the capture overlay's proven sequence: set the resizable style
         # mask FIRST (it must not run after the level change and reset it), then
-        # raise the NSWindow above the menu bar, then take focus — covering the
-        # menu bar so the spotlight (and edge dragging) reaches the screen top.
+        # raise the NSWindow above the menu bar, then optionally take focus on
+        # initial presentation. Re-activation only needs the native re-leveling.
         macos_window.set_resizable(self, False)
         self.raise_()
         if sys.platform == "darwin":
             macos_window.raise_above_menubar(self)
         self.raise_()
-        self.activateWindow()
-        self.setFocus()
+        if take_focus:
+            self.activateWindow()
+            self.setFocus()
 
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # Stop a late text focus-out from committing onto the dying undo stack.
         self._canvas.begin_teardown()
         for dim in self._dim_screens:
@@ -271,9 +291,16 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         from PySide6.QtGui import QCursor
 
         self._toolbar.adjustSize()
+        self._toolbar.outputs_toolbar.adjustSize()
+        self._toolbar_row.adjustSize()
+        preferred = self._toolbar_row.sizeHint()
+        # The fixed trailing output section keeps its preferred width; the
+        # leading annotation bar absorbs the constraint and exposes overflow.
+        self._toolbar_row.resize(min(preferred.width(), self.width()), preferred.height())
+        self._toolbar_row.layout().activate()
         sel = self._to_local(self._origin)
         area, align_right = _toolbar_placement(QCursor.pos(), self._origin)
-        tb = self._toolbar.size()
+        tb = self._toolbar_row.size()
         x = sel.right() - tb.width() if align_right else sel.left()
         if area == Qt.BottomToolBarArea:
             y = sel.bottom() + _TOOLBAR_GAP
@@ -282,9 +309,9 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         # Clamp inside the surface so the toolbar is always reachable.
         x = min(max(x, 0), max(self.width() - tb.width(), 0))
         y = min(max(y, 0), max(self.height() - tb.height(), 0))
-        self._toolbar.move(int(x), int(y))
-        self._toolbar.show()
-        self._toolbar.raise_()
+        self._toolbar_row.move(int(x), int(y))
+        self._toolbar_row.show()
+        self._toolbar_row.raise_()
 
     # --- painting ---------------------------------------------------------
 
@@ -382,6 +409,58 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
             font=self.font(),
         )
 
+    @staticmethod
+    def _region_from_rect(rect: QRectF | QRect, *, pad: float = _DIRTY_PAD) -> QRegion:
+        qrect = QRectF(rect).adjusted(-pad, -pad, pad, pad).toAlignedRect()
+        return QRegion(qrect) if not qrect.isEmpty() else QRegion()
+
+    @staticmethod
+    def _union_regions(*regions: QRegion | None) -> QRegion | None:
+        out = QRegion()
+        for region in regions:
+            if region is None or region.isEmpty():
+                continue
+            out = out.united(region)
+        return out if not out.isEmpty() else None
+
+    def _selection_dirty_region(self, sel: QRectF | None) -> QRegion | None:
+        if sel is None:
+            return None
+        return self._region_from_rect(sel.adjusted(0, -28, 0, 0))
+
+    def _loupe_dirty_region(self, cursor: QPointF | None) -> QRegion | None:
+        if cursor is None:
+            return None
+        ax, ay = loupe_anchor(
+            cursor.x(),
+            cursor.y(),
+            LOUPE_W,
+            LOUPE_H + LOUPE_LABEL_H,
+            self.width(),
+            self.height(),
+            LOUPE_OFFSET,
+        )
+        return self._region_from_rect(QRectF(ax, ay, LOUPE_W, LOUPE_H + LOUPE_LABEL_H))
+
+    def _update_drag_region(
+        self,
+        old_sel: QRectF | None,
+        new_sel: QRectF | None,
+        old_cursor: QPointF | None,
+        new_cursor: QPointF | None,
+    ) -> None:
+        dirty = self._union_regions(
+            self._selection_dirty_region(old_sel),
+            self._selection_dirty_region(new_sel),
+            self._loupe_dirty_region(old_cursor),
+            self._loupe_dirty_region(new_cursor),
+        )
+        if dirty is None:
+            return
+        clipped = dirty.intersected(QRegion(self.rect()))
+        if not clipped.isEmpty():
+            self.update(clipped)
+
     # --- mouse: handle drags (eventFilter on the canvas + bare-area presses) ---
 
     def eventFilter(self, obj, event) -> bool:
@@ -445,10 +524,12 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         self._live_sel = self._sel_local()
         self._canvas.hide()  # paint the live lit slice ourselves while dragging
         self.grabMouse()
-        self.update()
+        self._update_drag_region(None, self._live_sel, None, self._cursor)
         return True
 
     def _update_handle_drag(self, surface_pos: QPointF) -> None:
+        old_sel = QRectF(self._live_sel) if self._live_sel is not None else None
+        old_cursor = QPointF(self._cursor) if self._cursor is not None else None
         sel = self._sel_local()  # committed base; active edge tracks the pointer
         bounds = (0.0, 0.0, float(self.width()), float(self.height()))
         new = resize_selection(
@@ -461,7 +542,7 @@ class SpotlightSurface(EditorCoreMixin, QWidget):
         )
         self._live_sel = QRectF(*new)
         self._cursor = QPointF(surface_pos)  # the loupe magnifies around the dragged edge
-        self.update()
+        self._update_drag_region(old_sel, self._live_sel, old_cursor, self._cursor)
 
     def _end_handle_drag(self, surface_pos: QPointF) -> None:
         self._update_handle_drag(surface_pos)

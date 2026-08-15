@@ -143,7 +143,9 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
 
         # get_recognizer is resolved here (a module the tests can patch) and
         # handed to the core, which omits the OCR button when it is None.
-        toolbar = self._init_editor_core(image, config, origin, region, get_recognizer())
+        toolbar = self._init_editor_core(
+            image, config, origin, region, get_recognizer(), split_outputs=True
+        )
         self.setCentralWidget(self._canvas)
         # Region captures stay adjustable: let the canvas hand off an edge press
         # to this window, which opens the full-screen adjust surface.
@@ -156,15 +158,27 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
 
-        # The toolbar lands in the corner nearest the pointer (e.g. the
+        # The tool row lands in the corner nearest the pointer (e.g. the
         # bottom-right after a region drag towards the bottom of the screen), so
         # finishing a shot never means crossing the whole capture.
         area, align_right = _toolbar_placement(QCursor.pos(), origin)
+        self.addToolBar(area, toolbar)
+        # The copy/save finish buttons never fold, so they go on a sibling bar in
+        # the opposite edge's area rather than sharing the tool row's. Sharing a
+        # row would peg the window's minimum width to the sum of both bars — wider
+        # than a narrow shot, which then stretches the canvas off the capture; in
+        # separate areas the minimum is just the wider single bar. It also keeps
+        # each edge a single row, so the shot still lands exactly on its capture.
+        outputs = toolbar.outputs_toolbar
         if align_right:
+            # Hug copy/save to the pointer's horizontal side: a leading expanding
+            # spacer pushes them to the trailing edge of their (slack-absorbing,
+            # since it's the only bar in its area) row.
             spacer = QWidget()
             spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            toolbar.insertWidget(toolbar.actions()[0], spacer)
-        self.addToolBar(area, toolbar)
+            outputs.insertWidget(outputs.actions()[0], spacer)
+        opposite = Qt.BottomToolBarArea if area == Qt.TopToolBarArea else Qt.TopToolBarArea
+        self.addToolBar(opposite, outputs)
         # Resolves the (configurable, possibly disabled) finish keys and sets the
         # matching tooltips; re-run by the app whenever Settings changes.
         self.reload_finish_keys()
@@ -183,6 +197,7 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         self._wire_adjust_hint()
 
     def showEvent(self, event) -> None:
+        self._escape_guard.enable()
         super().showEvent(event)
         if self._backdrop is not None:
             # Shown without activating, so the editor keeps keyboard focus;
@@ -210,9 +225,12 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
                 self.raise_()
             else:
                 self._backdrop.hide()
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._canvas.restore_text_focus()
         super().changeEvent(event)
 
     def closeEvent(self, event) -> None:
+        self._escape_guard.disable()
         # Before teardown fires a focus-out on any active text item, tell the
         # canvas to stop committing it onto the dying undo stack.
         self._canvas.begin_teardown()

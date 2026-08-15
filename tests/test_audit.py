@@ -42,6 +42,18 @@ def test_record_entry_shape(tmp_path, monkeypatch):
     assert system_lines == [line]
 
 
+def test_record_creates_missing_log_dir(tmp_path, monkeypatch):
+    # audit_log_path() only computes the path; the writer owns directory
+    # creation, so a first-ever capture must still land on disk.
+    log = tmp_path / "shotquill" / "Logs" / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    monkeypatch.setattr(audit, "_to_system_log", lambda line: None)
+
+    audit.record("capture", via="cli")
+
+    assert json.loads(log.read_text(encoding="utf-8"))["action"] == "capture"
+
+
 def test_record_appends_instead_of_truncating(tmp_path, monkeypatch):
     log = tmp_path / "audit.log"
     monkeypatch.setattr(paths, "audit_log_path", lambda: log)

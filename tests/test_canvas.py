@@ -48,6 +48,41 @@ def test_drawing_a_rectangle_pushes_one_undo_command(qtbot):
     assert canvas.undo_stack().count() == 1
 
 
+def test_drawing_a_rectangle_does_not_select_it(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+
+    assert not item.isSelected()
+    assert canvas._selected_annotation_scene_rects() == []
+
+
+def test_clicking_inside_rectangle_selects_it_while_drawing_tool_is_active(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    stack = canvas.undo_stack()
+
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+
+    assert item.isSelected()
+    assert canvas._selected_annotation_scene_rects()
+    assert stack.count() == 1
+
+
+def test_select_tool_clicking_inside_rectangle_selects_it(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    canvas.set_tool(Tool.SELECT)
+
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+
+    assert item.isSelected()
+    assert canvas._selected_annotation_scene_rects()
+
+
 def test_right_release_mid_drag_does_not_commit_the_item(qtbot):
     # A stray right-button release while the left button is still dragging must
     # not finish the annotation early — the drag continues and only the left
@@ -68,9 +103,177 @@ def test_right_release_mid_drag_does_not_commit_the_item(qtbot):
     assert rects[0].rect().width() > 40  # the drag kept going past the right-release point
 
 
-def test_tiny_click_is_discarded(qtbot):
-    canvas = _canvas(qtbot)
+def _draw_rect(qtbot, canvas):
     canvas.set_tool(Tool.RECT)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+    return next(i for i in canvas.scene().items() if i.zValue() > -1000)
+
+
+def _annotation_items(canvas):
+    return canvas._annotation_items()
+
+
+def test_move_items_command_round_trips_position(qtbot):
+    from PySide6.QtCore import QPointF
+
+    from shotquill.ui.canvas import _MoveItemsCommand
+
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    old = item.pos()
+    new = old + QPointF(10, 12)
+    stack = canvas.undo_stack()
+
+    stack.push(_MoveItemsCommand([(item, old, new)]))
+    assert item.pos() == new
+    assert stack.count() == 2  # the add, then the move
+    stack.undo()
+    assert item.pos() == old
+    stack.redo()
+    assert item.pos() == new
+
+
+def test_dragging_a_selected_item_is_undoable(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    assert canvas.undo_stack().count() == 1
+    start = item.pos()
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseMove(viewport, pos=QPoint(58, 52))
+    qtbot.mouseMove(viewport, pos=QPoint(70, 64))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(70, 64))
+
+    assert item.pos() != start  # the drag actually moved it
+    assert canvas.undo_stack().count() == 2  # the move is recorded
+    canvas.undo_stack().undo()
+    assert item.pos() == start  # undo restores the original position
+
+
+def test_select_click_without_moving_records_no_undo(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    assert canvas.undo_stack().count() == 1
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    viewport = canvas.viewport()
+    # A plain click (press + release at the same spot) selects but moves nothing.
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(45, 40))
+    assert canvas.undo_stack().count() == 1  # no spurious move command
+
+
+def test_selected_annotation_has_a_view_selection_rect(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+
+    item.setSelected(True)
+
+    rects = canvas._selected_annotation_scene_rects()
+    assert len(rects) == 1
+    assert rects[0].contains(item.mapRectToScene(item.boundingRect()))
+
+    item.setSelected(False)
+    assert canvas._selected_annotation_scene_rects() == []
+
+
+def test_selection_effect_is_not_exported(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    unselected = canvas.export_image()
+
+    item.setSelected(True)
+
+    selected = canvas.export_image()
+
+    assert not selected.isNull()
+    assert selected == unselected
+
+
+def test_delete_key_removes_selected_item_and_is_undoable(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    stack = canvas.undo_stack()
+    assert stack.count() == 1
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Delete)
+
+    assert item.scene() is None
+    assert not item.isSelected()
+    assert stack.count() == 2
+    stack.undo()
+    assert item.scene() is canvas.scene()
+    assert item.isSelected()
+    stack.redo()
+    assert item.scene() is None
+
+
+def test_backspace_deletes_multiple_selected_items_as_one_undo_command(qtbot):
+    canvas = _canvas(qtbot)
+    first = _draw_rect(qtbot, canvas)
+    second = _draw_rect(qtbot, canvas)
+    assert len(_annotation_items(canvas)) == 2
+    stack = canvas.undo_stack()
+    assert stack.count() == 2
+
+    canvas.set_tool(Tool.SELECT)
+    first.setSelected(True)
+    second.setSelected(True)
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert first.scene() is None
+    assert second.scene() is None
+    assert stack.count() == 3
+    stack.undo()
+    assert sorted(_annotation_items(canvas), key=id) == sorted([first, second], key=id)
+    assert first.isSelected()
+    assert second.isSelected()
+    stack.redo()
+    assert _annotation_items(canvas) == []
+
+
+def test_delete_key_falls_back_to_last_hit_annotation(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(False)
+    canvas._last_hit_item = item
+
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Delete)
+
+    assert item.scene() is None
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+
+
+def test_delete_key_removes_single_annotation_without_selection(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_rect(qtbot, canvas)
+    item.setSelected(False)
+
+    canvas.setFocus()
+    qtbot.keyClick(canvas, Qt.Key_Backspace)
+
+    assert item.scene() is None
+    canvas.undo_stack().undo()
+    assert item.scene() is canvas.scene()
+
+
+@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE])
+def test_tiny_click_is_discarded(qtbot, tool):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(tool)
     viewport = canvas.viewport()
     qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(20, 20))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(20, 20))
@@ -98,7 +301,14 @@ def test_pixelate_preserves_dimensions():
 
 @pytest.mark.parametrize(
     "tool",
-    [Tool.ELLIPSE, Tool.LINE, Tool.ARROW, Tool.PEN, Tool.HIGHLIGHTER],
+    [
+        Tool.ROUNDED_RECT,
+        Tool.ELLIPSE,
+        Tool.LINE,
+        Tool.ARROW,
+        Tool.PEN,
+        Tool.HIGHLIGHTER,
+    ],
 )
 def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     canvas = _canvas(qtbot)
@@ -109,6 +319,179 @@ def test_each_drag_tool_pushes_one_undo_command(qtbot, tool):
     qtbot.mouseMove(viewport, pos=QPoint(80, 60))
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
     assert canvas.undo_stack().count() == 1
+
+
+def test_rounded_rectangle_tool_creates_a_rounded_outline(qtbot):
+    from shotquill.ui.items.rounded_rect import RoundedRectItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.ROUNDED_RECT)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, RoundedRectItem))
+    assert not item.path().contains(item.rect().topLeft())
+    assert item.path().contains(item.rect().center())
+    assert item.pen().style() != Qt.NoPen
+    assert canvas.undo_stack().count() == 1
+
+
+def _draw_spotlight(qtbot, canvas, tool, start=(15, 15), end=(80, 60)):
+    from shotquill.ui.items.spotlight import SpotlightRegionItem
+
+    canvas.set_shape_spotlight_enabled(True)
+    canvas.set_tool(tool)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(*start))
+    qtbot.mouseMove(viewport, pos=QPoint(*end))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(*end))
+    return max(
+        (item for item in _annotation_items(canvas) if isinstance(item, SpotlightRegionItem)),
+        key=lambda item: item.zValue(),
+    )
+
+
+@pytest.mark.parametrize("tool", [Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE])
+def test_spotlight_keeps_shape_bright_and_dims_outside(qtbot, tool):
+    canvas = _canvas(qtbot)
+    canvas.set_color(QColor("red"))  # spotlight dimming is independent of annotation color
+    item = _draw_spotlight(qtbot, canvas, tool)
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+    inside = item.mapToScene(item.rect().center()).toPoint()
+    outside = QPoint(3, 3)
+
+    assert exported.pixelColor(inside) == source.pixelColor(inside)
+    dimmed = exported.pixelColor(outside)
+    original = source.pixelColor(outside)
+    assert dimmed.value() < original.value()
+    assert dimmed.red() == dimmed.green() == dimmed.blue()
+    assert canvas.undo_stack().count() == 1
+
+
+def test_ellipse_spotlight_dims_bounding_box_corners(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.ELLIPSE)
+    rect = item.mapRectToScene(item.rect())
+    corner = QPoint(int(rect.left() + 2), int(rect.top() + 2))
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+
+    assert exported.pixelColor(corner).value() < source.pixelColor(corner).value()
+
+
+def test_rounded_rectangle_spotlight_dims_rounded_corners(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.ROUNDED_RECT)
+    rect = item.mapRectToScene(item.rect())
+    corner = QPoint(int(rect.left() + 2), int(rect.top() + 2))
+    center = rect.center().toPoint()
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+
+    assert exported.pixelColor(corner).value() < source.pixelColor(corner).value()
+    assert exported.pixelColor(center) == source.pixelColor(center)
+
+
+def test_multiple_spotlight_regions_all_stay_bright(qtbot):
+    canvas = _canvas(qtbot, 160, 100)
+    first = _draw_spotlight(qtbot, canvas, Tool.RECT, (10, 20), (55, 70))
+    second = _draw_spotlight(qtbot, canvas, Tool.ELLIPSE, (95, 20), (145, 70))
+
+    source = canvas.background_image()
+    exported = canvas.export_image()
+    first_center = first.mapToScene(first.rect().center()).toPoint()
+    second_center = second.mapToScene(second.rect().center()).toPoint()
+    outside = QPoint(75, 10)
+
+    assert exported.pixelColor(first_center) == source.pixelColor(first_center)
+    assert exported.pixelColor(second_center) == source.pixelColor(second_center)
+    assert exported.pixelColor(outside).value() < source.pixelColor(outside).value()
+
+
+def test_spotlight_add_undo_redo_updates_dimming(qtbot):
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.RECT)
+    outside = QPoint(3, 3)
+    source = canvas.background_image()
+    stack = canvas.undo_stack()
+
+    stack.undo()
+    assert canvas.export_image().pixelColor(outside) == source.pixelColor(outside)
+
+    stack.redo()
+    inside = item.mapToScene(item.rect().center()).toPoint()
+    exported = canvas.export_image()
+    assert exported.pixelColor(inside) == source.pixelColor(inside)
+    assert exported.pixelColor(outside).value() < source.pixelColor(outside).value()
+
+
+def test_moving_spotlight_region_moves_clear_area_and_is_undoable(qtbot):
+    from PySide6.QtCore import QPointF
+
+    canvas = _canvas(qtbot)
+    item = _draw_spotlight(qtbot, canvas, Tool.RECT, (15, 20), (70, 60))
+    source = canvas.background_image()
+    old_center = item.mapToScene(item.rect().center()).toPoint()
+    old_only = item.mapToScene(QPointF(item.rect().left() + 5, item.rect().center().y())).toPoint()
+    start = canvas.mapFromScene(item.mapToScene(item.rect().center()))
+
+    canvas.set_tool(Tool.SELECT)
+    item.setSelected(True)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=start)
+    qtbot.mouseMove(viewport, pos=start + QPoint(15, 0))
+    qtbot.mouseMove(viewport, pos=start + QPoint(25, 0))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=start + QPoint(25, 0))
+
+    new_center = item.mapToScene(item.rect().center()).toPoint()
+    exported = canvas.export_image()
+    assert new_center != old_center
+    assert exported.pixelColor(old_only).value() < source.pixelColor(old_only).value()
+    assert exported.pixelColor(new_center) == source.pixelColor(new_center)
+
+    canvas.undo_stack().undo()
+    restored = canvas.export_image()
+    assert restored.pixelColor(old_only) == source.pixelColor(old_only)
+
+
+def test_shape_spotlight_style_can_be_disabled_for_outline_shapes(qtbot):
+    from PySide6.QtWidgets import QGraphicsEllipseItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_shape_spotlight_enabled(True)
+    canvas.set_shape_spotlight_enabled(False)
+    canvas.set_tool(Tool.ELLIPSE)
+    viewport = canvas.viewport()
+
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(80, 60))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(80, 60))
+
+    item = next(i for i in _annotation_items(canvas) if isinstance(i, QGraphicsEllipseItem))
+    assert item.pen().style() != Qt.NoPen
+    assert item.brush().style() == Qt.NoBrush
+
+
+def test_freehand_skips_redundant_move_points(qtbot):
+    from PySide6.QtWidgets import QGraphicsPathItem
+
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.PEN)
+    viewport = canvas.viewport()
+    qtbot.mousePress(viewport, Qt.LeftButton, pos=QPoint(15, 15))
+    qtbot.mouseMove(viewport, pos=QPoint(40, 35))
+    for _ in range(5):
+        qtbot.mouseMove(viewport, pos=QPoint(40, 35))
+    qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(40, 35))
+
+    item = next(i for i in canvas.scene().items() if isinstance(i, QGraphicsPathItem))
+    assert item.path().elementCount() == 2
 
 
 def test_undo_then_redo_toggles_scene_membership(qtbot):
@@ -135,10 +518,55 @@ def test_color_and_width_setters_round_trip(qtbot):
     assert canvas.width() == 7
 
 
+def test_default_width_is_four(qtbot):
+    canvas = _canvas(qtbot)
+    assert canvas.width() == 4
+
+
+def test_font_size_defaults_to_thirty_two_and_is_independent(qtbot):
+    canvas = _canvas(qtbot)
+    assert canvas.font_size() == 32
+
+    canvas.set_font_size(18)
+
+    assert canvas.font_size() == 18
+    assert canvas.width() == 4
+
+
 def test_width_is_clamped_to_minimum_one(qtbot):
     canvas = _canvas(qtbot)
     canvas.set_width(0)
     assert canvas.width() == 1
+
+
+def test_select_tool_uses_the_default_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.RECT)
+    canvas.set_tool(Tool.SELECT)
+    assert canvas.viewport().cursor().shape() == Qt.ArrowCursor
+
+
+def test_drawing_tools_use_a_distinct_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.RECT)
+    assert canvas.viewport().cursor().shape() == Qt.CrossCursor
+
+
+def test_text_tool_uses_text_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_tool(Tool.TEXT)
+    assert canvas.viewport().cursor().shape() == Qt.IBeamCursor
+
+
+def test_idle_cursor_keeps_existing_tool_cursor(qtbot):
+    canvas = _canvas(qtbot)
+    viewport = canvas.viewport()
+
+    canvas.set_tool(Tool.RECT)
+    canvas._update_idle_cursor()
+
+    assert viewport.testAttribute(Qt.WA_SetCursor)
+    assert viewport.cursor().shape() == Qt.CrossCursor
 
 
 def test_select_tool_does_not_create_items(qtbot):
@@ -181,7 +609,7 @@ def _click_text_tool(qtbot, canvas):
     qtbot.mouseRelease(viewport, Qt.LeftButton, pos=QPoint(30, 30))
 
 
-def _finish_editing(item):
+def _finish_editing(item, reason=Qt.MouseFocusReason):
     """Deliver the focus-out that ends text editing.
 
     Offscreen the scene is never active, so items never truly gain focus and
@@ -191,7 +619,7 @@ def _finish_editing(item):
     from PySide6.QtCore import QEvent
     from PySide6.QtGui import QFocusEvent
 
-    item.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+    item.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut, reason))
 
 
 def test_text_tool_creates_item_on_single_click(qtbot):
@@ -203,14 +631,158 @@ def test_text_tool_creates_item_on_single_click(qtbot):
     assert canvas.undo_stack().count() == 0
 
 
-def test_empty_text_item_is_discarded_on_focus_out(qtbot):
-    # A stray click with the text tool must not leave an invisible, selectable,
-    # undoable item behind.
+def test_text_tool_uses_configured_font_size(qtbot):
+    canvas = _canvas(qtbot)
+    canvas.set_font_size(21)
+    _click_text_tool(qtbot, canvas)
+
+    assert _text_items(canvas)[0].font().pointSize() == 21
+
+
+def test_text_tool_focuses_new_item_for_keyboard_input(qtbot):
+    from PySide6.QtWidgets import QGraphicsItem
+
+    canvas = _canvas(qtbot)
+    canvas.setFocus()
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+
+    assert item.flags() & QGraphicsItem.ItemIsFocusable
+    assert canvas.scene().focusItem() is item
+    qtbot.keyClicks(canvas, "note")
+    assert item.toPlainText() == "note"
+
+
+def test_empty_text_item_is_discarded_before_starting_another_text(qtbot):
+    # Repeated stray clicks with the Text tool must not accumulate invisible,
+    # selectable, undoable items.
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
-    _finish_editing(_text_items(canvas)[0])
-    assert _text_items(canvas) == []
+    first = _text_items(canvas)[0]
+
+    _click_text_tool(qtbot, canvas)
+
+    assert len(_text_items(canvas)) == 1
+    assert first not in _text_items(canvas)
     assert canvas.undo_stack().count() == 0
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        Qt.MouseFocusReason,
+        Qt.TabFocusReason,
+        Qt.BacktabFocusReason,
+        Qt.ActiveWindowFocusReason,
+        Qt.PopupFocusReason,
+        Qt.ShortcutFocusReason,
+        Qt.MenuBarFocusReason,
+        Qt.OtherFocusReason,
+        Qt.NoFocusReason,
+    ],
+)
+@pytest.mark.parametrize("text", ["", "note"])
+def test_focus_loss_never_finishes_or_discards_text(qtbot, reason, text):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText(text)
+
+    _finish_editing(item, reason)
+
+    assert item in _text_items(canvas)
+    assert item.committed is False
+    assert canvas.undo_stack().count() == 0
+
+    canvas.set_tool(Tool.RECT)
+    if text:
+        assert item in _text_items(canvas)
+        assert item.committed is True
+        assert canvas.undo_stack().count() == 1
+    else:
+        assert _text_items(canvas) == []
+        assert canvas.undo_stack().count() == 0
+
+
+def test_focus_loss_refocuses_active_text_on_next_event_tick(qtbot, monkeypatch):
+    canvas = _canvas(qtbot)
+    canvas.setFocus()
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    assert canvas.scene().focusItem() is item
+    focus_calls = []
+    real_set_focus = item.setFocus
+    monkeypatch.setattr(
+        item,
+        "setFocus",
+        lambda *args: focus_calls.append(args) or real_set_focus(*args),
+    )
+    monkeypatch.setattr(canvas, "isActiveWindow", lambda: True)
+
+    _finish_editing(item, Qt.MouseFocusReason)
+
+    qtbot.waitUntil(lambda: bool(focus_calls))
+    assert item.scene() is canvas.scene()
+    assert item.committed is False
+    qtbot.keyClicks(canvas, "note")
+    assert item.toPlainText() == "note"
+
+
+def test_focus_restore_retries_while_window_activation_settles(qtbot, monkeypatch):
+    canvas = _canvas(qtbot)
+    canvas.setFocus()
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    focus_calls = []
+    real_set_focus = item.setFocus
+    monkeypatch.setattr(
+        item,
+        "setFocus",
+        lambda *args: focus_calls.append(args) or real_set_focus(*args),
+    )
+    active = {"value": False}
+    monkeypatch.setattr(canvas, "isActiveWindow", lambda: active["value"])
+
+    _finish_editing(item, Qt.NoFocusReason)
+    qtbot.wait(10)
+    assert focus_calls == []
+
+    active["value"] = True
+    qtbot.waitUntil(lambda: bool(focus_calls), timeout=500)
+    assert item.committed is False
+    assert canvas.scene().focusItem() is item
+
+
+@pytest.mark.parametrize("text", ["", "note"])
+def test_switching_tools_explicitly_finishes_active_text(qtbot, text):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    item = _text_items(canvas)[0]
+    item.setPlainText(text)
+
+    canvas.set_tool(Tool.RECT)
+
+    if text:
+        assert item in _text_items(canvas)
+        assert item.committed is True
+        assert canvas.undo_stack().count() == 1
+    else:
+        assert _text_items(canvas) == []
+        assert canvas.undo_stack().count() == 0
+
+
+def test_starting_another_text_explicitly_commits_the_previous_one(qtbot):
+    canvas = _canvas(qtbot)
+    _click_text_tool(qtbot, canvas)
+    first = _text_items(canvas)[0]
+    first.setPlainText("first")
+
+    _click_text_tool(qtbot, canvas)
+
+    items = _text_items(canvas)
+    assert len(items) == 2
+    assert first.committed is True
+    assert canvas.undo_stack().count() == 1
 
 
 def test_starting_a_text_edit_freezes_crop_even_if_discarded(qtbot):
@@ -221,43 +793,44 @@ def test_starting_a_text_edit_freezes_crop_even_if_discarded(qtbot):
     assert canvas.is_pristine()
     _click_text_tool(qtbot, canvas)
     assert not canvas.is_pristine()
-    _finish_editing(_text_items(canvas)[0])  # discarded as empty
+    canvas.set_tool(Tool.RECT)  # explicitly finishes and discards the empty edit
     assert _text_items(canvas) == []
     assert canvas.undo_stack().count() == 0
     assert not canvas.is_pristine()  # stays frozen
 
 
-def test_text_item_with_content_becomes_undoable_on_focus_out(qtbot):
+def test_text_item_with_content_becomes_undoable_when_editing_explicitly_finishes(qtbot):
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
     item.setPlainText("note")
-    _finish_editing(item)
+    canvas.set_tool(Tool.RECT)
     assert len(_text_items(canvas)) == 1
     assert canvas.undo_stack().count() == 1
     canvas.undo_stack().undo()
     assert _text_items(canvas) == []
 
 
-def test_whitespace_only_text_item_is_discarded_on_focus_out(qtbot):
+def test_whitespace_only_text_item_is_discarded_when_editing_explicitly_finishes(qtbot):
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
     item.setPlainText("   ")
-    _finish_editing(item)
+    canvas.set_tool(Tool.RECT)
     assert _text_items(canvas) == []
     assert canvas.undo_stack().count() == 0
 
 
-def test_repeated_focus_out_after_commit_is_idempotent(qtbot):
+def test_repeated_focus_out_after_explicit_commit_is_idempotent(qtbot):
     # Qt can deliver more focus-out events later (e.g. when the scene clears
     # focus during removal); they must not double-push or discard the item.
     canvas = _canvas(qtbot)
     _click_text_tool(qtbot, canvas)
     item = _text_items(canvas)[0]
     item.setPlainText("note")
+    canvas.set_tool(Tool.RECT)
     _finish_editing(item)
-    _finish_editing(item)
+    _finish_editing(item, Qt.OtherFocusReason)
     assert len(_text_items(canvas)) == 1
     assert canvas.undo_stack().count() == 1
 

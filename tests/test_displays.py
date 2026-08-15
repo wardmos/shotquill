@@ -125,19 +125,19 @@ def test_doctor_displays_check_survives_a_broken_backend():
     assert "probe" in check["detail"]
 
 
-def test_display_capture_without_enumeration_logs_redaction_gap(monkeypatch, tmp_path):
+def test_display_capture_without_enumeration_is_refused(monkeypatch, tmp_path):
     # With blocklist rules but no window enumeration the display frame cannot
-    # be protected — same honest fallback as the region path: capture plainly
-    # and log the gap.
+    # be protected, so fail closed rather than capture plainly.
     from shotquill import blocklist as bl
 
     rules = bl.Blocklist((bl.BlockRule(name="vault"),))
     log = tmp_path / "audit.log"
     monkeypatch.setattr(paths, "audit_log_path", lambda: log)
     cap = FakeCapturer()
-    result, target, _ = headless.perform_capture(cap, display=0, blocklist=rules)
-    assert cap.captured == [("region", PRIMARY.bounds)]
-    assert "redact_unavailable" in log.read_text(encoding="utf-8")
+    with pytest.raises(headless.CaptureBlocked):
+        headless.perform_capture(cap, display=0, blocklist=rules)
+    assert cap.captured == []
+    assert "capture_blocked" in log.read_text(encoding="utf-8")
 
 
 # --- the Qt default list_displays (offscreen: one 800x800 screen) ---------------

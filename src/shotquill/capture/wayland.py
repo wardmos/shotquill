@@ -45,9 +45,14 @@ def _ensure_gui_app() -> None:
     precisely how Wayland is meant to be captured."""
     from PySide6.QtGui import QGuiApplication
 
-    if QGuiApplication.instance() is None:
+    app = QGuiApplication.instance()
+    if app is None:
         # Qt keeps its own reference once constructed; we only need it to exist.
-        QGuiApplication([])
+        from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
+
+        app = QGuiApplication([])
+        app.setApplicationName("ShotQuill")
+        app.setDesktopFileName(LINUX_GUI_DESKTOP_FILE_NAME)
 
 
 class PortalScreenCapturer(ScreenCapturer):
@@ -64,6 +69,13 @@ class PortalScreenCapturer(ScreenCapturer):
         # here (the caller redacts by rectangle); accept them for the interface.
         image, origin, scale = self._grab()
         return _qimage_to_result(image, scale, origin=origin)
+
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+        # The overlay path: the portal already handed back a whole-desktop
+        # QImage, so display it directly rather than flattening it to bytes and
+        # rebuilding it. exclude ids are ignored (the portal can't omit windows).
+        image, _origin, _scale = self._grab()
+        return image
 
     def capture_region(self, region: Rect) -> CaptureResult:
         from PySide6.QtCore import QRect

@@ -1,11 +1,11 @@
-# Build-environment pins for the macOS package/release workflows.
+# Build-environment pins for package and release workflows.
 #
 # pyproject.toml keeps loose lower bounds on purpose (correct for users running
 # `pip install shotquill`); this file freezes the versions CI actually builds
 # and ships with, so the same commit produces the same bundle months later and
-# upstream releases can't change a DMG without a reviewed upgrade here.
+# upstream releases can't change a PKG without a reviewed upgrade here.
 #
-# Upgrade via a dedicated PR: bump the pins, let Package smoke build the DMG,
+# Upgrade via a dedicated PR: bump the pins, let Package smoke build the PKG,
 # and sanity-check the app before merging.
 #
 # PySide6==X pins its companion wheels (PySide6-Essentials, PySide6-Addons,
@@ -19,8 +19,8 @@ pyinstaller-hooks-contrib==2026.6
 
 # All pyobjc packages release in lockstep; pin the core plus every framework
 # binding pyproject.toml declares.
-pyobjc-core==12.2
-pyobjc-framework-Cocoa==12.2
+pyobjc-core==12.2.1
+pyobjc-framework-Cocoa==12.2.1
 pyobjc-framework-Quartz==12.2
 pyobjc-framework-ScreenCaptureKit==12.2
 pyobjc-framework-Vision==12.2

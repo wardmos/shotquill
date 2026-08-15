@@ -71,6 +71,16 @@ class QtGrabCapturer(ScreenCapturer):
         canvas, virtual, dpr = self._grab_virtual_desktop()
         return _qimage_to_result(canvas, dpr, origin=(virtual.x(), virtual.y()))
 
+    def capture_fullscreen_image(self, exclude_window_ids: frozenset[int] = frozenset()):
+        # The overlay path: the composited canvas is already a standalone
+        # Format_RGBA8888 QImage spanning the virtual desktop — exactly what the
+        # overlay displays. Hand it over as-is instead of flattening it to bytes
+        # and rebuilding a QImage (two full-screen copies the overlay never
+        # needs). exclude_window_ids is unused here (this backend can't enumerate
+        # windows, so the caller only takes this path when nothing is excluded).
+        canvas, _virtual, _dpr = self._grab_virtual_desktop()
+        return canvas
+
     def capture_region(self, region: Rect) -> CaptureResult:
         from PySide6.QtCore import QRect
 

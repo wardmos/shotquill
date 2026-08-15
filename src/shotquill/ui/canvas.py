@@ -12,9 +12,10 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QImage,
     QPainter,
@@ -40,6 +41,8 @@ from shotquill.ui._debug import crop_log
 from shotquill.ui.geometry import crop_edge_hits
 from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
+from shotquill.ui.items.rounded_rect import RoundedRectItem
+from shotquill.ui.items.spotlight import SpotlightOverlayItem, SpotlightRegionItem
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
@@ -48,7 +51,10 @@ if TYPE_CHECKING:
     from shotquill.ui.editor import CropHost
 
 _DEFAULT_COLOR = "#ff3b30"
+_DEFAULT_WIDTH = 4
+_DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
+_SHAPE_TOOLS = (Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE)
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
@@ -60,26 +66,35 @@ _CROP_EDGE_MARGIN = 10.0
 # (Retina) shots; cap live mosaic regeneration to roughly this rate. The
 # release handler always renders the final rect, so no precision is lost.
 _MOSAIC_PREVIEW_INTERVAL = 1 / 30  # seconds
+_FREEHAND_MIN_VIEW_DELTA = 0.75
+_SELECTION_OUTLINE_COLOR = "#2d7ff9"
+_SELECTION_OUTLINE_VIEW_PADDING = 4.0
+_SELECTION_HANDLE_VIEW_SIZE = 8.0
+_SELECTION_HIT_VIEW_TOLERANCE = 8.0
+_SELECTION_CLICK_VIEW_TOLERANCE = 4
+# Cocoa can settle one mouse/window transition through several focus owners.
+# Retry briefly instead of trusting the platform-specific FocusReason label;
+# each callback is guarded by the active edit identity and window activation.
+_TEXT_FOCUS_RESTORE_DELAYS_MS = (0, 50, 250, 1000)
 
 
 class _TextItem(QGraphicsTextItem):
     """A text annotation that defers its undo entry until editing finishes.
 
-    Created empty and focused for typing; when focus leaves, the canvas decides
-    its fate — discard if still empty (a stray click must not leave an
-    invisible, undoable item behind), otherwise push it onto the undo stack.
-    ``committed`` flips once that decision is made so re-entrant focus-out
-    events (e.g. from the removal itself) do nothing.
+    Created empty and focused for typing; the canvas distinguishes an intentional
+    editing exit from transient window/input-method focus churn. Once editing
+    genuinely finishes, empty items are discarded and non-empty items enter the
+    undo stack. ``committed`` keeps that decision idempotent.
     """
 
-    def __init__(self, on_editing_finished: Callable[[_TextItem], None]) -> None:
+    def __init__(self, on_focus_lost: Callable[[_TextItem, Qt.FocusReason], None]) -> None:
         super().__init__()
         self.committed = False
-        self._on_editing_finished = on_editing_finished
+        self._on_focus_lost = on_focus_lost
 
     def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().focusOutEvent(event)
-        self._on_editing_finished(self)
+        self._on_focus_lost(self, event.reason())
 
 
 class _AddItemCommand(QUndoCommand):
@@ -101,7 +116,53 @@ class _AddItemCommand(QUndoCommand):
             self._on_scene = True
 
 
+class _MoveItemsCommand(QUndoCommand):
+    """Undoable move of annotation items (already dragged to their new spots).
+
+    ``ItemIsMovable`` lets the select tool drag items, but Qt mutates ``pos()``
+    directly with no undo entry — so without this an undo after a move restores
+    nothing, and an undo of a *later* edit leaves the move silently applied. We
+    snapshot positions on press and record this command on release for whatever
+    actually moved.
+    """
+
+    def __init__(self, moves: list[tuple[QGraphicsItem, QPointF, QPointF]]) -> None:
+        super().__init__("move annotation")
+        self._moves = moves
+
+    def undo(self) -> None:
+        for item, old, _new in self._moves:
+            item.setPos(old)
+
+    def redo(self) -> None:
+        for item, _old, new in self._moves:
+            item.setPos(new)
+
+
+class _DeleteItemsCommand(QUndoCommand):
+    """Undoable removal of selected annotation items."""
+
+    def __init__(self, scene: QGraphicsScene, items: list[QGraphicsItem]) -> None:
+        super().__init__("delete annotation")
+        self._scene = scene
+        self._items = [(item, item.isSelected()) for item in items]
+
+    def undo(self) -> None:
+        for item, was_selected in self._items:
+            if item.scene() is None:
+                self._scene.addItem(item)
+            item.setSelected(was_selected)
+
+    def redo(self) -> None:
+        for item, _was_selected in self._items:
+            if item.scene() is self._scene:
+                item.setSelected(False)
+                self._scene.removeItem(item)
+
+
 class AnnotationCanvas(QGraphicsView):
+    tool_changed = Signal(object)
+
     def __init__(self, background: QPixmap) -> None:
         super().__init__()
         self._scene = QGraphicsScene(self)
@@ -110,6 +171,9 @@ class AnnotationCanvas(QGraphicsView):
         self._background = self._scene.addPixmap(background)
         self._background.setZValue(-1000)
         self._scene.setSceneRect(QRectF(background.rect()))
+        self._spotlight_overlay = SpotlightOverlayItem(self._scene.sceneRect())
+        self._spotlight_overlay.setZValue(self._background.zValue() + 1)
+        self._scene.addItem(self._spotlight_overlay)
 
         self.setRenderHint(QPainter.Antialiasing)
         self.setMouseTracking(True)
@@ -117,10 +181,19 @@ class AnnotationCanvas(QGraphicsView):
         self._undo = QUndoStack(self)
         self._tool = Tool.SELECT
         self._color = QColor(_DEFAULT_COLOR)
-        self._width = 4
+        self._width = _DEFAULT_WIDTH
+        self._font_size = _DEFAULT_FONT_SIZE
+        self._shape_spotlight_enabled = False
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
+        self._last_hit_item: QGraphicsItem | None = None
+        self._press_hit_item: QGraphicsItem | None = None
+        self._press_view_pos = None
+        # Positions of movable items captured at the start of a select-drag, so
+        # the release can record an undoable move for whatever actually shifted.
+        self._move_snapshot: dict[QGraphicsItem, QPointF] | None = None
         self._path: QPainterPath | None = None
+        self._last_path_pos: QPointF | None = None
         self._start = QPointF()
         self._mosaic_rect = None  # latest drag rect; release renders it exactly
         self._mosaic_last = 0.0  # monotonic time of the last live mosaic render
@@ -128,11 +201,13 @@ class AnnotationCanvas(QGraphicsView):
         # text is later discarded as empty, so the crop can't become adjustable
         # again under a half-finished annotation. See ``is_pristine``.
         self._text_started = False
+        self._active_text_item: _TextItem | None = None
         self._closing = False  # set on teardown; stops late focus-out commits
         # Crop edge-adjust (region captures only): the editor registers itself
         # as the host; a press on a viewport edge hands off to it (see the mouse
         # handlers and set_crop_host).
         self._crop_host: CropHost | None = None
+        self._scene.selectionChanged.connect(self._update_selection_effects)
         self._apply_drag_mode()
 
     # --- public API used by the toolbar / window --------------------------
@@ -162,12 +237,15 @@ class AnnotationCanvas(QGraphicsView):
         self._background_pixmap = background
         self._background.setPixmap(background)
         self._scene.setSceneRect(QRectF(background.rect()))
+        self._spotlight_overlay.set_scene_rect(self._scene.sceneRect())
 
     def is_pristine(self) -> bool:
-        """True while nothing has been annotated: no undo history, no text edit
-        ever started, and nothing on the scene beyond the background screenshot
-        (an uncommitted text item counts as an annotation)."""
-        return not self._text_started and self._undo.count() == 0 and len(self._scene.items()) == 1
+        """True while no user annotation has started.
+
+        The permanent spotlight overlay is scene infrastructure, not an
+        annotation; an uncommitted text or spotlight region still counts.
+        """
+        return not self._text_started and self._undo.count() == 0 and not self._annotation_items()
 
     def color(self) -> QColor:
         return QColor(self._color)
@@ -175,18 +253,34 @@ class AnnotationCanvas(QGraphicsView):
     def width(self) -> int:
         return self._width
 
+    def tool(self) -> Tool:
+        return self._tool
+
     def set_tool(self, tool: Tool) -> None:
+        if tool != self._tool:
+            self._finish_active_text()
         self._tool = tool
         self._apply_drag_mode()
-        # Drop any crop-resize cursor left over from hovering an edge; the next
-        # hover re-applies it if the (still-SELECT, still-pristine) crop allows.
-        self.viewport().unsetCursor()
+        self._update_idle_cursor()
+        self.tool_changed.emit(tool)
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
 
+    def shape_spotlight_enabled(self) -> bool:
+        return self._shape_spotlight_enabled
+
+    def set_shape_spotlight_enabled(self, enabled: bool) -> None:
+        self._shape_spotlight_enabled = bool(enabled)
+
     def set_width(self, width: int) -> None:
         self._width = max(1, int(width))
+
+    def font_size(self) -> int:
+        return self._font_size
+
+    def set_font_size(self, size: int) -> None:
+        self._font_size = max(1, int(size))
 
     def export_image(self) -> QImage:
         self._scene.clearSelection()
@@ -236,12 +330,155 @@ class AnnotationCanvas(QGraphicsView):
             return Qt.SizeVerCursor
         return None
 
+    def _set_viewport_cursor(self, shape) -> None:
+        viewport = self.viewport()
+        if shape is None:
+            if viewport.testAttribute(Qt.WA_SetCursor):
+                viewport.unsetCursor()
+            return
+        if not viewport.testAttribute(Qt.WA_SetCursor) or viewport.cursor().shape() != shape:
+            viewport.setCursor(shape)
+
     def _update_crop_cursor(self, pos) -> None:
-        cursor = self._crop_cursor(self._crop_edges_at(pos))
-        if cursor is None:
-            self.viewport().unsetCursor()
+        self._set_viewport_cursor(self._crop_cursor(self._crop_edges_at(pos)))
+
+    def _update_idle_cursor(self, pos=None) -> None:
+        if self._tool == Tool.SELECT:
+            if pos is None:
+                self._set_viewport_cursor(None)
+            else:
+                self._update_crop_cursor(pos)
+            return
+        if self._tool == Tool.TEXT:
+            self._set_viewport_cursor(Qt.IBeamCursor)
         else:
-            self.viewport().setCursor(cursor)
+            self._set_viewport_cursor(Qt.CrossCursor)
+
+    def delete_selected_items(self) -> bool:
+        selected = self._selected_annotation_items()
+        if not selected:
+            fallback = self._delete_fallback_item()
+            if fallback is not None:
+                selected = [fallback]
+        if not selected:
+            return False
+        self._undo.push(_DeleteItemsCommand(self._scene, selected))
+        self._last_hit_item = None
+        return True
+
+    def _annotation_items(self) -> list[QGraphicsItem]:
+        return [
+            item
+            for item in self._scene.items()
+            if item is not self._background
+            and item is not self._spotlight_overlay
+            and item.scene() is self._scene
+        ]
+
+    def _selected_annotation_items(self) -> list[QGraphicsItem]:
+        return [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._background
+            and item is not self._spotlight_overlay
+            and item.scene() is self._scene
+        ]
+
+    def _delete_fallback_item(self) -> QGraphicsItem | None:
+        candidates = (self._scene.focusItem(), self._last_hit_item, self._item_under_cursor())
+        for item in candidates:
+            if item in self._annotation_items() and item.flags() & QGraphicsItem.ItemIsSelectable:
+                return item
+        annotations = self._annotation_items()
+        if len(annotations) == 1 and annotations[0].flags() & QGraphicsItem.ItemIsSelectable:
+            return annotations[0]
+        return None
+
+    def _item_under_cursor(self) -> QGraphicsItem | None:
+        pos = self.viewport().mapFromGlobal(QCursor.pos())
+        if not self.viewport().rect().contains(pos):
+            return None
+        item = self.itemAt(pos)
+        if item is self._background or item is self._spotlight_overlay:
+            return None
+        return item
+
+    def _annotation_item_at_view_pos(self, pos) -> QGraphicsItem | None:
+        scene_pos = self.mapToScene(pos)
+        padding = self._scene_units_for_view_pixels(_SELECTION_HIT_VIEW_TOLERANCE)
+        for item in sorted(self._annotation_items(), key=lambda it: it.zValue(), reverse=True):
+            hit_rect = item.mapRectToScene(item.boundingRect()).adjusted(
+                -padding, -padding, padding, padding
+            )
+            if hit_rect.contains(scene_pos):
+                return item
+        return None
+
+    def _select_annotation_item(self, item: QGraphicsItem | None) -> bool:
+        if item is None or item.scene() is not self._scene:
+            return False
+        if not item.flags() & QGraphicsItem.ItemIsSelectable:
+            return False
+        self._scene.clearSelection()
+        item.setSelected(True)
+        self._last_hit_item = item
+        return True
+
+    def _is_click_release(self, pos) -> bool:
+        return (
+            self._press_view_pos is not None
+            and (pos - self._press_view_pos).manhattanLength() <= _SELECTION_CLICK_VIEW_TOLERANCE
+        )
+
+    def _update_selection_effects(self) -> None:
+        self.viewport().update()
+
+    def _scene_units_for_view_pixels(self, pixels: float) -> float:
+        transform = self.transform()
+        scale = max(abs(transform.m11()), abs(transform.m22()), 0.01)
+        return pixels / scale
+
+    def _selected_annotation_scene_rects(self) -> list[QRectF]:
+        padding = self._scene_units_for_view_pixels(_SELECTION_OUTLINE_VIEW_PADDING)
+        return [
+            item.mapRectToScene(item.boundingRect()).adjusted(-padding, -padding, padding, padding)
+            for item in self._selected_annotation_items()
+        ]
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802 (Qt override)
+        super().drawForeground(painter, rect)
+        selected_rects = self._selected_annotation_scene_rects()
+        if not selected_rects:
+            return
+
+        pen = QPen(QColor(_SELECTION_OUTLINE_COLOR))
+        pen.setWidthF(1.5)
+        pen.setCosmetic(True)
+        pen.setStyle(Qt.DashLine)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+
+        handle = self._scene_units_for_view_pixels(_SELECTION_HANDLE_VIEW_SIZE)
+        for selected_rect in selected_rects:
+            visible = selected_rect.intersected(rect)
+            if visible.isNull():
+                continue
+            painter.drawRect(selected_rect)
+            left = selected_rect.left()
+            right = selected_rect.right()
+            top = selected_rect.top()
+            bottom = selected_rect.bottom()
+            painter.drawLine(QPointF(left, top), QPointF(left + handle, top))
+            painter.drawLine(QPointF(left, top), QPointF(left, top + handle))
+            painter.drawLine(QPointF(right, top), QPointF(right - handle, top))
+            painter.drawLine(QPointF(right, top), QPointF(right, top + handle))
+            painter.drawLine(QPointF(left, bottom), QPointF(left + handle, bottom))
+            painter.drawLine(QPointF(left, bottom), QPointF(left, bottom - handle))
+            painter.drawLine(QPointF(right, bottom), QPointF(right - handle, bottom))
+            painter.drawLine(QPointF(right, bottom), QPointF(right, bottom - handle))
+        painter.restore()
 
     def _next_z(self) -> float:
         self._z += 1.0
@@ -259,6 +496,13 @@ class AnnotationCanvas(QGraphicsView):
         return pen
 
     def keyPressEvent(self, event) -> None:
+        if (
+            event.key() in (Qt.Key_Backspace, Qt.Key_Delete)
+            and self._scene.focusItem() is None
+            and self.delete_selected_items()
+        ):
+            event.accept()
+            return
         # Arrow keys belong to the window's crop adjustment while no text
         # annotation has focus (a focused text item still gets them for cursor
         # movement via the scene). Without this, QAbstractScrollArea would
@@ -269,6 +513,12 @@ class AnnotationCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._press_view_pos = event.position().toPoint()
+            self._press_hit_item = self._annotation_item_at_view_pos(self._press_view_pos)
+        else:
+            self._press_view_pos = None
+            self._press_hit_item = None
         # A press on a crop edge (region capture, still pristine) opens the
         # full-screen adjust surface instead of starting a rubber-band select.
         if event.button() == Qt.LeftButton:
@@ -283,6 +533,17 @@ class AnnotationCanvas(QGraphicsView):
                 return
 
         if event.button() != Qt.LeftButton or self._tool == Tool.SELECT:
+            if event.button() == Qt.LeftButton and self._tool == Tool.SELECT:
+                self._last_hit_item = self.itemAt(event.position().toPoint())
+                if self._last_hit_item is self._background:
+                    self._last_hit_item = None
+                # Snapshot movable items before Qt drags them, so the matching
+                # release can push an undoable move for any that shift.
+                self._move_snapshot = {
+                    it: it.pos()
+                    for it in self._scene.items()
+                    if it.flags() & QGraphicsItem.ItemIsMovable
+                }
             super().mousePressEvent(event)
             return
 
@@ -296,17 +557,28 @@ class AnnotationCanvas(QGraphicsView):
         item: QGraphicsItem | None = None
         if tool in (Tool.PEN, Tool.HIGHLIGHTER):
             self._path = QPainterPath(self._start)
+            self._last_path_pos = QPointF(self._start)
             path_item = QGraphicsPathItem(self._path)
             path_item.setPen(self._pen(highlighter=tool == Tool.HIGHLIGHTER))
             item = path_item
-        elif tool == Tool.RECT:
-            rect_item = QGraphicsRectItem(QRectF(self._start, self._start))
-            rect_item.setPen(self._pen())
-            item = rect_item
-        elif tool == Tool.ELLIPSE:
-            ellipse_item = QGraphicsEllipseItem(QRectF(self._start, self._start))
-            ellipse_item.setPen(self._pen())
-            item = ellipse_item
+        elif tool in _SHAPE_TOOLS:
+            if self._shape_spotlight_enabled:
+                shape_item = SpotlightRegionItem(
+                    self._spotlight_overlay,
+                    ellipse=tool == Tool.ELLIPSE,
+                    rounded=tool == Tool.ROUNDED_RECT,
+                )
+            elif tool == Tool.RECT:
+                shape_item = QGraphicsRectItem()
+                shape_item.setPen(self._pen())
+            elif tool == Tool.ROUNDED_RECT:
+                shape_item = RoundedRectItem()
+                shape_item.setPen(self._pen())
+            else:
+                shape_item = QGraphicsEllipseItem()
+                shape_item.setPen(self._pen())
+            shape_item.setRect(QRectF(self._start, self._start))
+            item = shape_item
         elif tool == Tool.LINE:
             line_item = QGraphicsLineItem(QLineF(self._start, self._start))
             line_item.setPen(self._pen())
@@ -331,16 +603,19 @@ class AnnotationCanvas(QGraphicsView):
             # gesture is discoverable. True hover only — a held button is a
             # rubber-band select and must not flip the cursor.
             if not event.buttons():
-                self._update_crop_cursor(event.position())
+                self._update_idle_cursor(event.position())
             super().mouseMoveEvent(event)
             return
 
         pos = self.mapToScene(event.position().toPoint())
         tool = self._tool
         if tool in (Tool.PEN, Tool.HIGHLIGHTER) and self._path is not None:
+            if not self._freehand_point_moved_enough(pos):
+                return
             self._path.lineTo(pos)
+            self._last_path_pos = QPointF(pos)
             self._temp_item.setPath(self._path)
-        elif tool in (Tool.RECT, Tool.ELLIPSE):
+        elif tool in _SHAPE_TOOLS:
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))
@@ -352,6 +627,23 @@ class AnnotationCanvas(QGraphicsView):
                 self._temp_item.update_rect(self._mosaic_rect)
 
     def mouseReleaseEvent(self, event) -> None:
+        # A select-drag finishing: let Qt commit the new positions, then record
+        # an undoable move for whatever actually shifted (a plain click or a
+        # rubber-band select moves nothing and pushes no command).
+        if self._move_snapshot is not None and event.button() == Qt.LeftButton:
+            super().mouseReleaseEvent(event)
+            moved = [
+                (it, old, it.pos())
+                for it, old in self._move_snapshot.items()
+                if it.scene() is self._scene and it.pos() != old
+            ]
+            self._move_snapshot = None
+            if moved:
+                self._undo.push(_MoveItemsCommand(moved))
+            elif self._is_click_release(event.position().toPoint()):
+                self._select_annotation_item(self._press_hit_item)
+            return
+
         # Only the left button finishes a drag: a stray right/middle release
         # mid-drag must not commit the half-drawn item (the press handler only
         # ever starts items on the left button).
@@ -362,6 +654,7 @@ class AnnotationCanvas(QGraphicsView):
         item = self._temp_item
         self._temp_item = None
         self._path = None
+        self._last_path_pos = None
 
         if isinstance(item, MosaicItem) and self._mosaic_rect is not None:
             # The live preview is throttled; render the final drag rect exactly.
@@ -369,27 +662,45 @@ class AnnotationCanvas(QGraphicsView):
             self._mosaic_rect = None
 
         if self._is_negligible(item):
+            if isinstance(item, SpotlightRegionItem):
+                self._spotlight_overlay.remove_region(item)
             self._scene.removeItem(item)
+            if self._is_click_release(event.position().toPoint()):
+                self._select_annotation_item(self._press_hit_item)
             return
 
         item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
         self._undo.push(_AddItemCommand(self._scene, item))
 
     def _create_text(self, pos: QPointF) -> None:
-        # The undo entry is deferred to _finish_text: only text that survives
-        # its first focus-out (i.e. is non-empty) becomes part of the document.
+        # The undo entry is deferred to _finish_text: only text that survives an
+        # intentional editing exit becomes part of the document.
+        self._finish_active_text()
         self._text_started = True  # latch: never re-enable crop adjustment
-        item = _TextItem(self._finish_text)
+        item = _TextItem(self._text_focus_lost)
         item.setDefaultTextColor(self._color)
         font = QFont()
-        font.setPointSize(max(self._width * 4, 16))
+        font.setPointSize(self._font_size)
         item.setFont(font)
         item.setPos(pos)
         item.setTextInteractionFlags(Qt.TextEditorInteraction)
-        item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+        item.setFlags(
+            QGraphicsItem.ItemIsSelectable
+            | QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemIsFocusable
+        )
         item.setZValue(self._next_z())
         self._scene.addItem(item)
+        self._active_text_item = item
         item.setFocus()
+
+    def _freehand_point_moved_enough(self, pos: QPointF) -> bool:
+        if self._last_path_pos is None:
+            return True
+        min_delta = self._scene_units_for_view_pixels(_FREEHAND_MIN_VIEW_DELTA)
+        dx = pos.x() - self._last_path_pos.x()
+        dy = pos.y() - self._last_path_pos.y()
+        return dx * dx + dy * dy >= min_delta * min_delta
 
     def begin_teardown(self) -> None:
         """Stop committing text on focus-out — the window is closing.
@@ -400,11 +711,52 @@ class AnnotationCanvas(QGraphicsView):
         the deferred commit is moot at this point."""
         self._closing = True
 
+    def restore_text_focus(self) -> None:
+        """Resume a pending text edit after the editor window re-activates."""
+        item = self._active_text_item
+        if item is not None:
+            self._restore_text_focus(item)
+
+    def _text_focus_lost(self, item: _TextItem, _reason: Qt.FocusReason) -> None:
+        if item.committed or self._closing:
+            return
+        # A focus event alone is never an editing decision: macOS can label the
+        # same asynchronous window transition as Mouse, Other, ActiveWindow, or
+        # NoFocus across runs. Explicit user actions (tool switch / next text
+        # placement) call _finish_active_text instead. While this edit remains
+        # active, re-assert its focus after the current event and during the
+        # short window-server settling period.
+        for delay in _TEXT_FOCUS_RESTORE_DELAYS_MS:
+            QTimer.singleShot(
+                delay,
+                self,
+                lambda item=item: self._restore_text_focus(item),
+            )
+
+    def _restore_text_focus(self, item: _TextItem) -> None:
+        if (
+            self._closing
+            or self._active_text_item is not item
+            or item.committed
+            or item.scene() is not self._scene
+            or not self.window().isActiveWindow()
+        ):
+            return
+        self.setFocus(Qt.OtherFocusReason)
+        item.setFocus(Qt.OtherFocusReason)
+
+    def _finish_active_text(self) -> None:
+        item = self._active_text_item
+        if item is not None:
+            self._finish_text(item)
+
     def _finish_text(self, item: _TextItem) -> None:
-        """First focus-out commits a text item: empty → discarded, else undoable."""
+        """Commit a finished text item: empty → discarded, else undoable."""
         if item.committed or self._closing:
             return
         item.committed = True
+        if self._active_text_item is item:
+            self._active_text_item = None
         if not item.toPlainText().strip():
             self._scene.removeItem(item)
             return
@@ -412,7 +764,7 @@ class AnnotationCanvas(QGraphicsView):
 
     @staticmethod
     def _is_negligible(item: QGraphicsItem) -> bool:
-        if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+        if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, RoundedRectItem)):
             rect = item.rect()
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
         if isinstance(item, QGraphicsLineItem):  # also covers ArrowItem

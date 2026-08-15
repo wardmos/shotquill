@@ -8,7 +8,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPixmap  # noqa: E402
-from PySide6.QtWidgets import QLabel, QToolButton  # noqa: E402
+from PySide6.QtWidgets import QColorDialog, QLabel, QToolButton  # noqa: E402
 
 from shotquill.ui.canvas import AnnotationCanvas  # noqa: E402
 from shotquill.ui.toolbar import _TOOLS, create_toolbar  # noqa: E402
@@ -42,42 +42,137 @@ def _toolbar(qtbot, style=None, **callbacks):
 
 def test_toolbar_has_a_checkable_action_per_tool(qtbot):
     _canvas_, toolbar = _toolbar(qtbot)
-    checkable = [a for a in toolbar.actions() if a.isCheckable()]
-    assert len(checkable) == len(_TOOLS)
+    assert len(toolbar.tool_actions) == len(_TOOLS)
     # Select is the default checked tool.
-    checked = [a for a in checkable if a.isChecked()]
+    checked = [action for action in toolbar.tool_actions if action.isChecked()]
     assert len(checked) == 1
 
 
 def test_tool_actions_are_mutually_exclusive(qtbot):
-    canvas, toolbar = _toolbar(qtbot)
-    checkable = [a for a in toolbar.actions() if a.isCheckable()]
+    _canvas_, toolbar = _toolbar(qtbot)
     # Triggering the second tool action unchecks the first (exclusive group).
-    checkable[1].trigger()
-    assert sum(a.isChecked() for a in checkable) == 1
+    toolbar.tool_actions[1].trigger()
+    assert sum(action.isChecked() for action in toolbar.tool_actions) == 1
 
 
 def test_tool_action_switches_canvas_tool(qtbot):
     canvas, toolbar = _toolbar(qtbot)
-    # _TOOLS order maps 1:1 to the checkable actions; index 1 is RECT.
-    rect_action = [a for a in toolbar.actions() if a.isCheckable()][1]
+    # _TOOLS order maps 1:1 to tool_actions; index 1 is RECT.
+    rect_action = toolbar.tool_actions[1]
     assert _TOOLS[1][1] is Tool.RECT
+
     rect_action.trigger()
-    canvas.set_tool(Tool.RECT)  # sanity; trigger already routed through the lambda
-    canvas.set_tool(_TOOLS[1][1])
+
+    assert canvas.tool() is Tool.RECT
+
+
+def test_rounded_rectangle_sits_between_rectangle_and_ellipse(qtbot):
+    canvas, toolbar = _toolbar(qtbot)
+    labels = [action.text() for action in toolbar.tool_actions]
+    rect_index = labels.index("Rectangle")
+
+    assert labels[rect_index : rect_index + 3] == [
+        "Rectangle",
+        "Rounded rectangle",
+        "Ellipse",
+    ]
+
+    toolbar.tool_actions[rect_index + 1].trigger()
+    assert canvas.tool() is Tool.ROUNDED_RECT
+
+
+def test_toolbar_groups_spotlight_style_with_color_without_changing_shape_tool(qtbot):
+    canvas, toolbar = _toolbar(qtbot)
+    ellipse_action = next(action for action in toolbar.tool_actions if action.text() == "Ellipse")
+    ellipse_action.trigger()
+
+    spotlight = toolbar.spotlight_action
+    color = next(action for action in toolbar.actions() if action.text() == "Color")
+    assert spotlight not in toolbar.tool_actions
+    assert toolbar.actions().index(spotlight) + 1 == toolbar.actions().index(color)
+    assert not spotlight.isChecked()
+
+    spotlight.trigger()
+
+    assert spotlight.isChecked()
+    assert canvas.shape_spotlight_enabled()
+    assert canvas.tool() is Tool.ELLIPSE
 
 
 def test_width_spinbox_reflects_and_updates_canvas(qtbot):
     canvas, toolbar = _toolbar(qtbot)
+    assert toolbar.width_spin.value() == 4
+    assert toolbar.width_spin.suffix() == " px"
     toolbar.width_spin.setValue(13)
     assert canvas.width() == 13
+
+
+def test_size_control_switches_between_independent_width_and_font_size(qtbot):
+    canvas, toolbar = _toolbar(qtbot, style="both")
+    text_action = next(action for action in toolbar.actions() if action.text() == "Text")
+    rect_action = next(action for action in toolbar.actions() if action.text() == "Rectangle")
+    spin = toolbar.width_spin
+    caption = spin.parentWidget().findChild(QLabel)
+
+    text_action.trigger()
+    assert (spin.value(), spin.maximum(), spin.suffix(), caption.text()) == (
+        32,
+        160,
+        " pt",
+        "Font size",
+    )
+    spin.setValue(14)
+    assert canvas.font_size() == 14
+    assert canvas.width() == 4
+
+    rect_action.trigger()
+    assert (spin.value(), spin.maximum(), spin.suffix(), caption.text()) == (4, 40, " px", "Width")
+    spin.setValue(7)
+    assert canvas.width() == 7
+    assert canvas.font_size() == 14
+
+    text_action.trigger()
+    assert spin.value() == 14
+    assert spin.suffix() == " pt"
+
+
+def test_color_dialog_is_owned_non_native_and_non_modal(qtbot):
+    # The macOS native panel can fail to front over the always-on-top editor.
+    # Window modality would then block every editor key behind an invisible
+    # panel.  Use the parented Qt widget picker and never enter a modal state.
+    canvas, toolbar = _toolbar(qtbot)
+    dialog = toolbar.color_dialog
+    assert isinstance(dialog, QColorDialog)
+    assert dialog.parentWidget() is canvas
+    assert dialog.testOption(QColorDialog.DontUseNativeDialog)
+
+    color_action = next(action for action in toolbar.actions() if action.text() == "Color")
+    color_action.trigger()
+
+    assert dialog.isVisible()
+    assert dialog.isModal() is False
+    assert dialog.windowModality() == Qt.NonModal
+
+
+def test_color_dialog_applies_only_an_accepted_color(qtbot):
+    canvas, toolbar = _toolbar(qtbot)
+    dialog = toolbar.color_dialog
+    original = canvas.color()
+
+    dialog.setCurrentColor(QColor("blue"))
+    dialog.reject()
+    assert canvas.color() == original
+
+    dialog.setCurrentColor(QColor("green"))
+    dialog.accept()
+    assert canvas.color() == QColor("green")
 
 
 def test_width_control_is_a_captioned_two_row_widget(qtbot):
     # Two rows like the icon-over-label buttons: the value on top, the caption
     # below (and pinned to the bottom so it lands on the buttons' label line).
     # The label lives in that caption, not the spin box's wide inline prefix.
-    _canvas_, toolbar = _toolbar(qtbot)
+    _canvas_, toolbar = _toolbar(qtbot, style="both")
     spin = toolbar.width_spin
     assert spin.prefix() == ""
     container = spin.parentWidget()
@@ -92,21 +187,30 @@ def test_width_control_is_a_captioned_two_row_widget(qtbot):
 def test_width_caption_is_dropped_in_icon_only_mode(qtbot):
     # Icon-only strips every button's label, so the width control must not show a
     # lone "Width" caption among them; it keeps its name through a tooltip.
-    _canvas_, toolbar = _toolbar(qtbot, style="icon")
+    canvas, toolbar = _toolbar(qtbot, style="icon")
     spin = toolbar.width_spin
     container = spin.parentWidget()
     assert container.findChildren(QLabel) == []
     assert spin.toolTip() == "Width"
+    canvas.set_tool(Tool.TEXT)
+    assert spin.toolTip() == "Font size"
+    assert spin.suffix() == " pt"
+    assert spin.maximum() == 160
+    assert spin.maximumWidth() >= spin.fontMetrics().horizontalAdvance("160 pt")
 
 
 def test_width_shows_inline_label_in_text_mode(qtbot):
     # Text-only buttons are single-row labels, so the width field shows its name
     # inline as a prefix ("Width 12") rather than a stacked caption that would be
     # clipped against the shorter single-row button height.
-    _canvas_, toolbar = _toolbar(qtbot, style="text")
+    canvas, toolbar = _toolbar(qtbot, style="text")
     spin = toolbar.width_spin
     assert spin.prefix() == "Width "
     assert spin.parentWidget().findChildren(QLabel) == []
+    canvas.set_tool(Tool.TEXT)
+    assert spin.prefix() == "Font size "
+    assert spin.suffix() == " pt"
+    assert spin.value() == 32
 
 
 def test_toolbar_exposes_copy_and_save_actions(qtbot):
@@ -134,6 +238,37 @@ def test_copy_and_save_callbacks_are_wired(qtbot):
     assert set(calls) == {"copy", "save", "ocr", "pin"}
 
 
+def test_outputs_stay_on_the_main_bar_by_default(qtbot):
+    # Hosts using the ordinary single-bar layout keep the original action order:
+    # copy/save are the final two tools.
+    _canvas_, toolbar = _toolbar(qtbot)
+    assert toolbar.outputs_toolbar is None
+    assert toolbar.actions()[-2:] == [toolbar.copy_action, toolbar.save_action]
+
+
+def test_split_outputs_moves_copy_save_to_a_no_collapse_sibling_bar(qtbot):
+    # The framed editor constrains the bar's width, so copy/save are peeled onto
+    # a sibling that never folds them behind the overflow chevron.
+    from shotquill.ui.toolbar import _NoCollapseToolBar
+
+    canvas = _canvas(qtbot)
+    toolbar = create_toolbar(
+        canvas, lambda: None, lambda: None, lambda: None, lambda: None, split_outputs=True
+    )
+    qtbot.addWidget(toolbar)
+    outputs = toolbar.outputs_toolbar
+    assert isinstance(outputs, _NoCollapseToolBar)
+    qtbot.addWidget(outputs)
+    # The tool row no longer carries copy/save; the outputs bar does.
+    assert toolbar.copy_action not in toolbar.actions()
+    assert toolbar.save_action not in toolbar.actions()
+    assert toolbar.copy_action in outputs.actions()
+    assert toolbar.save_action in outputs.actions()
+    # A no-collapse bar reserves room for every button (min == preferred), so it
+    # never hides one behind a chevron.
+    assert outputs.minimumSizeHint() == outputs.sizeHint()
+
+
 def test_ocr_action_present_when_callback_given(qtbot):
     _canvas_, toolbar = _toolbar(qtbot, on_ocr=lambda: None)
     assert "Copy Text" in {a.text() for a in toolbar.actions()}
@@ -156,19 +291,21 @@ def test_every_button_has_an_icon(qtbot):
         assert not action.icon().isNull(), action.text()
 
 
-def test_toolbar_shows_text_under_icon_by_default(qtbot):
-    # Icon on top, label underneath: icons share one row, labels another.
+def test_toolbar_shows_icon_only_by_default(qtbot):
+    # Compact by default: just the glyph, its label carried by the tooltip.
     _canvas_, toolbar = _toolbar(qtbot)
-    assert toolbar.toolButtonStyle() == Qt.ToolButtonTextUnderIcon
+    assert toolbar.toolButtonStyle() == Qt.ToolButtonIconOnly
 
 
 def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
     from PySide6.QtCore import QSize
 
-    from shotquill.ui.icons import ICON_SIZE
+    from shotquill.ui.icons import ICON_SIZE_STANDALONE
 
+    # The default is icon-only, whose glyph is emitted at the larger standalone
+    # size (no caption to balance), and the toolbar's icon size must match it.
     _canvas_, toolbar = _toolbar(qtbot)
-    assert toolbar.iconSize() == QSize(ICON_SIZE, ICON_SIZE)
+    assert toolbar.iconSize() == QSize(ICON_SIZE_STANDALONE, ICON_SIZE_STANDALONE)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +314,8 @@ def test_toolbar_icon_size_matches_the_emitted_glyph_size(qtbot):
         ("both", "ICON_SIZE"),  # captioned stacked layout: small glyph over label
         ("icon", "ICON_SIZE_STANDALONE"),  # no caption: larger standalone glyph
         ("text", "ICON_SIZE"),  # no icon drawn; size is the harmless default
-        ("sideways", "ICON_SIZE"),  # unknown value falls back to the default size
+        # unknown value falls back to the default style's size (icon-only)
+        ("sideways", "ICON_SIZE_STANDALONE"),
     ],
 )
 def test_icon_size_follows_the_toolbar_style(qtbot, style, expected_size):
@@ -223,7 +361,7 @@ def test_buttons_are_packed_tighter_than_the_platform_default(qtbot):
         ("both", Qt.ToolButtonTextUnderIcon),
         ("icon", Qt.ToolButtonIconOnly),
         ("text", Qt.ToolButtonTextOnly),
-        ("sideways", Qt.ToolButtonTextUnderIcon),  # unknown value: default look
+        ("sideways", Qt.ToolButtonIconOnly),  # unknown value: default (icon-only) look
     ],
 )
 def test_toolbar_button_style_follows_setting(qtbot, style, expected):

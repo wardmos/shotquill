@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Builds the editor toolbar: tool picker, color, width, undo/redo, OCR, copy/save."""
+"""Builds the editor toolbar: tool picker, color, size, undo/redo, OCR, copy/save."""
 
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ RESERVED_SHORTCUTS: tuple[QKeySequence.StandardKey, ...] = (
 _TOOLS: list[tuple[str, Tool, str]] = [
     ("tool.select", Tool.SELECT, "select"),
     ("tool.rect", Tool.RECT, "rect"),
+    ("tool.rounded_rect", Tool.ROUNDED_RECT, "rounded_rect"),
     ("tool.ellipse", Tool.ELLIPSE, "ellipse"),
     ("tool.arrow", Tool.ARROW, "arrow"),
     ("tool.line", Tool.LINE, "line"),
@@ -70,7 +71,7 @@ _ICON_SIZES: dict[str, int] = {
     "text": ICON_SIZE,
 }
 
-# Pack the bar tighter than the platform default: with sixteen buttons the
+# Pack the bar tighter than the platform default: with many buttons the
 # per-button padding plus the inter-item spacing and fat separators add up,
 # and once the row no longer fits the shot's width Qt hides the overflow
 # behind an extension chevron the user has to click open. Zeroing the
@@ -83,20 +84,31 @@ _TIGHT_STYLE = (
     "QToolBar { spacing: 0px; padding: 0px; margin: 0px; }"
     "QToolBar::separator { width: 1px; margin: 0px 3px; }"
     "QToolButton { padding: 1px 0px; font-size: 11px; }"
-    # The width control's caption (the only QLabel in the bar) sits on the same
+    # The size control's caption (the only QLabel in the bar) sits on the same
     # line as the buttons' under-icon labels, so it matches their font size.
     "QLabel { font-size: 11px; }"
 )
-# Extra width, on top of the two-digit value text, reserved for the spin box's
+# Extra width, on top of the numeric value text, reserved for the spin box's
 # up/down button column and inner margins. Capping the field to this keeps it
 # from reserving the spin box's generous default width.
-_WIDTH_FIELD_PADDING = 22
+_SIZE_FIELD_PADDING = 22
+_MAX_STROKE_WIDTH = 40
+_MAX_FONT_SIZE = 160
 
 
-def _pick_color(canvas: AnnotationCanvas) -> None:
-    color = QColorDialog.getColor(canvas.color(), None, t("dialog.pick_color"))
-    if color.isValid():
-        canvas.set_color(color)
+class _NoCollapseToolBar(QToolBar):
+    """A toolbar that never hides items behind the overflow chevron.
+
+    QToolBar folds its trailing buttons into an extension popup once the row is
+    narrower than its contents. Reporting the full size hint as the minimum keeps
+    the host (the editor window's toolbar area) from ever shrinking the bar below
+    that, so every button stays on the row. Used for the copy/save outputs so
+    finishing a shot is always one visible click away, no matter how narrow the
+    capture is (the tool row keeps Qt's normal folding — see create_toolbar).
+    """
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
 
 def create_toolbar(
@@ -106,6 +118,7 @@ def create_toolbar(
     on_ocr: Callable[[], None] | None,
     on_pin: Callable[[], None],
     style: str = DEFAULT_TOOLBAR_STYLE,
+    split_outputs: bool = False,
 ) -> QToolBar:
     toolbar = QToolBar()
     toolbar.setToolButtonStyle(_BUTTON_STYLES.get(style, _BUTTON_STYLES[DEFAULT_TOOLBAR_STYLE]))
@@ -113,7 +126,7 @@ def create_toolbar(
     # larger glyph than the captioned "both" layout. Render every glyph at that
     # size and match the toolbar's icon size to it, so the buttons don't pad the
     # glyph back out (the platform default, 24+, would).
-    icon_px = _ICON_SIZES.get(style, ICON_SIZE)
+    icon_px = _ICON_SIZES.get(style, _ICON_SIZES[DEFAULT_TOOLBAR_STYLE])
 
     def sized_icon(name: str) -> QIcon:
         # The stroke scales with the glyph, so the larger icon-only glyph draws
@@ -132,6 +145,7 @@ def create_toolbar(
     toolbar.setMovable(False)
     group = QActionGroup(toolbar)
     group.setExclusive(True)
+    tool_actions: list[QAction] = []
 
     for key, tool, icon in _TOOLS:
         action = QAction(sized_icon(icon), t(key), toolbar)
@@ -139,75 +153,134 @@ def create_toolbar(
         action.setChecked(tool == Tool.SELECT)
         action.triggered.connect(lambda _checked=False, bound=tool: canvas.set_tool(bound))
         group.addAction(action)
+        tool_actions.append(action)
         toolbar.addAction(action)
+
+    toolbar.tool_actions = tuple(tool_actions)
 
     toolbar.addSeparator()
 
-    color_action = QAction(sized_icon("color"), t("toolbar.color"), toolbar)
-    color_action.triggered.connect(lambda: _pick_color(canvas))
-    toolbar.addAction(color_action)
+    # Shape and appearance are independent: spotlight sits with color and size,
+    # outside the mutually exclusive drawing-tool group above.
+    spotlight_action = QAction(sized_icon("spotlight"), t("toolbar.spotlight"), toolbar)
+    spotlight_action.setCheckable(True)
+    spotlight_action.setChecked(canvas.shape_spotlight_enabled())
+    spotlight_action.toggled.connect(canvas.set_shape_spotlight_enabled)
+    toolbar.addAction(spotlight_action)
+    toolbar.spotlight_action = spotlight_action
 
-    width = QSpinBox()
-    width.setRange(1, 40)
-    width.setValue(canvas.width())
-    width.setAlignment(Qt.AlignHCenter)
+    # The macOS native colour panel can remain behind the frameless always-on-top
+    # editor.  Never combine that panel with window modality: an invisible modal
+    # panel blocks every editor key and makes the capture surface look frozen.
+    # The parented Qt widget dialog has predictable transient-window behaviour,
+    # and show() keeps it non-modal even if a window manager fails to front it.
+    color_dialog = QColorDialog(canvas.color(), canvas)
+    color_dialog.setOption(QColorDialog.DontUseNativeDialog)
+    color_dialog.setWindowModality(Qt.NonModal)
+    color_dialog.setWindowTitle(t("dialog.pick_color"))
+    color_dialog.colorSelected.connect(canvas.set_color)
+
+    def show_color_dialog() -> None:
+        color_dialog.setCurrentColor(canvas.color())
+        color_dialog.show()
+        color_dialog.raise_()
+        color_dialog.activateWindow()
+
+    color_action = QAction(sized_icon("color"), t("toolbar.color"), toolbar)
+    color_action.triggered.connect(show_color_dialog)
+    toolbar.addAction(color_action)
+    toolbar.color_dialog = color_dialog
+
+    size = QSpinBox()
+    size.setAlignment(Qt.AlignHCenter)
     # Frameless lets the field shrink to about the icons' height: a normal spin
     # box is taller than the icons, which would make the stacked control taller
     # than the buttons and push its caption off their label line.
     # Removing the box border slims it so the whole control matches a button's
     # height (pinned below) and the rows line up.
-    width.setFrame(False)
+    size.setFrame(False)
     # The editor's keyboard surface lives on the canvas/window: arrows adjust
     # a region capture's crop, Space/Enter finish the shot. A focusable spin
     # box would keep those keys after a click — arrows would silently step the
-    # stroke width instead of the crop — so it stays mouse-only (the up/down
+    # active size instead of the crop — so it stays mouse-only (the up/down
     # buttons and the scroll wheel still adjust it). The inner line edit holds
     # its own focus policy and is the spin box's focus proxy, so clear both.
-    width.setFocusPolicy(Qt.NoFocus)
-    width.lineEdit().setFocusPolicy(Qt.NoFocus)
-    width.valueChanged.connect(canvas.set_width)
+    size.setFocusPolicy(Qt.NoFocus)
+    size.lineEdit().setFocusPolicy(Qt.NoFocus)
 
-    # The width field carries its "Width" name differently per style, so the
-    # control always matches the buttons' row count:
+    def _set_active_size(value: int) -> None:
+        if canvas.tool() == Tool.TEXT:
+            canvas.set_font_size(value)
+        else:
+            canvas.set_width(value)
+
+    size.valueChanged.connect(_set_active_size)
+
+    # The field carries its dynamic name differently per style, so the control
+    # always matches the buttons' row count:
     #   both  — number over a caption (two rows), like the icon-over-label
     #           buttons; the caption lands on their label line.
     #   icon  — number only, name via tooltip (one row), like the label-less
     #           icon buttons.
     #   text  — single-row labels, so the name goes inline as a prefix
-    #           ("Width 12"); a stacked caption would be clipped against the
-    #           shorter single-row button height.
+    #           ("Width 4 px" / "Font size 32 pt"); a stacked caption would be
+    #           clipped against the shorter single-row button height.
     # Unknown styles fall back to the two-row layout, matching the button-style
     # fallback above.
     width_label = t("toolbar.width").strip()
+    font_size_label = t("toolbar.font_size").strip()
 
-    def _cap_to_two_digits() -> None:
-        # Cap the field to its two-digit value plus the up/down button column,
-        # so it doesn't reserve the spin box's (much wider) default size.
-        width.setMaximumWidth(width.fontMetrics().horizontalAdvance("40") + _WIDTH_FIELD_PADDING)
+    def _cap_numeric_field(maximum: int, suffix: str) -> None:
+        # Cap the field to its largest value plus the up/down button column, so
+        # it doesn't reserve the spin box's (much wider) default size.
+        value_width = size.fontMetrics().horizontalAdvance(f"{maximum}{suffix}")
+        size.setMaximumWidth(value_width + _SIZE_FIELD_PADDING)
 
-    width_control = QWidget()
-    width_box = QVBoxLayout(width_control)
-    width_box.setContentsMargins(0, 0, 0, 0)
-    width_box.setSpacing(0)
-    width_box.addWidget(width)
-    if style == "icon":
-        _cap_to_two_digits()
-        width.setToolTip(width_label)
-    elif style == "text":
-        # No narrow cap here: the inline prefix needs the room.
-        width.setPrefix(f"{width_label} ")
-        width.setToolTip(width_label)
-    else:
-        _cap_to_two_digits()
-        width_caption = QLabel(width_label)
-        width_caption.setAlignment(Qt.AlignHCenter)
-        width_box.addWidget(width_caption)
-        width_caption.setFixedHeight(width_caption.sizeHint().height())
+    size_control = QWidget()
+    size_box = QVBoxLayout(size_control)
+    size_box.setContentsMargins(0, 0, 0, 0)
+    size_box.setSpacing(0)
+    size_box.addWidget(size)
+    size_caption: QLabel | None = None
+    if style not in ("icon", "text"):
+        size_caption = QLabel(width_label)
+        size_caption.setAlignment(Qt.AlignHCenter)
+        size_box.addWidget(size_caption)
+        size_caption.setFixedHeight(size_caption.sizeHint().height())
     sample_button = toolbar.widgetForAction(toolbar.actions()[0])
-    width_control.setFixedHeight(sample_button.sizeHint().height())
-    toolbar.addWidget(width_control)
-    # Exposed so tests (and any later sync) can reach the nested spin box.
-    toolbar.width_spin = width
+    size_control.setFixedHeight(sample_button.sizeHint().height())
+    toolbar.addWidget(size_control)
+
+    def _sync_size_control(tool: Tool) -> None:
+        is_text = tool == Tool.TEXT
+        maximum = _MAX_FONT_SIZE if is_text else _MAX_STROKE_WIDTH
+        value = canvas.font_size() if is_text else canvas.width()
+        label = font_size_label if is_text else width_label
+        suffix = " pt" if is_text else " px"
+
+        signals_were_blocked = size.blockSignals(True)
+        try:
+            size.setRange(1, maximum)
+            size.setValue(value)
+            size.setSuffix(suffix)
+            size.setToolTip(label)
+            if style == "text":
+                size.setPrefix(f"{label} ")
+            else:
+                _cap_numeric_field(maximum, suffix)
+                if size_caption is not None:
+                    size_caption.setText(label)
+        finally:
+            size.blockSignals(signals_were_blocked)
+
+    canvas.tool_changed.connect(_sync_size_control)
+    _sync_size_control(canvas.tool())
+
+    # Exposed so tests (and any later sync) can reach the nested spin box. Keep
+    # the old width_spin name as a compatibility alias while it becomes a
+    # width-or-font-size control.
+    toolbar.size_spin = size
+    toolbar.width_spin = size
 
     toolbar.addSeparator()
 
@@ -240,13 +313,29 @@ def create_toolbar(
     copy_action.setShortcut(QKeySequence.Copy)
     copy_action.setToolTip(t("toolbar.copy_tip"))
     copy_action.triggered.connect(on_copy)
-    toolbar.addAction(copy_action)
 
     save_action = QAction(sized_icon("save"), t("toolbar.save"), toolbar)
     save_action.setShortcut(QKeySequence.Save)
     save_action.setToolTip(t("toolbar.save_tip"))
     save_action.triggered.connect(on_save)
-    toolbar.addAction(save_action)
+
+    # Copy/save are the shot's finish actions, so they must never fold away. When
+    # the host can constrain the bar's width, split them into a fixed
+    # no-collapse section that stays visible while the annotation section folds.
+    # The host decides whether the two sections share a continuous row.
+    if split_outputs:
+        outputs = _NoCollapseToolBar()
+        outputs.setToolButtonStyle(toolbar.toolButtonStyle())
+        outputs.setIconSize(toolbar.iconSize())
+        outputs.setStyleSheet(_TIGHT_STYLE)
+        outputs.setMovable(False)
+        outputs.addAction(copy_action)
+        outputs.addAction(save_action)
+        toolbar.outputs_toolbar = outputs
+    else:
+        toolbar.addAction(copy_action)
+        toolbar.addAction(save_action)
+        toolbar.outputs_toolbar = None
 
     # Exposed so EditorWindow can keep these tooltips in sync with the
     # configurable finish keys (see EditorWindow._refresh_finish_tips).

@@ -61,10 +61,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "无法读取你的白名单，ShotQuill 不会截图"
         "（它无法判断哪些被允许）。请在设置里修复。（{error}）",
     },
+    "notify.window_policy_unavailable": {
+        "en": "ShotQuill can't inspect windows on this desktop, so it won't capture "
+        "while a blocklist or allowlist is active. ({error})",
+        "zh": "ShotQuill 无法检查此桌面上的窗口；当排除名单或白名单启用时不会截图。（{error}）",
+    },
     "notify.save_failed": {"en": "Save failed: {error}", "zh": "保存失败：{error}"},
     "notify.open_folder_failed": {
         "en": "Couldn't open the save folder: {error}",
         "zh": "无法打开保存文件夹：{error}",
+    },
+    "notify.capture_need_screen_recording": {
+        "en": "Screenshots need Screen Recording permission. "
+        "Enable it in System Settings, then restart ShotQuill.",
+        "zh": "截图需要屏幕录制权限。请在系统设置中启用后重启 ShotQuill。",
     },
     "notify.hotkeys_need_input_monitoring": {
         "en": "Global hotkeys need Input Monitoring permission. "
@@ -138,6 +148,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Tools
     "tool.select": {"en": "Select", "zh": "选择"},
     "tool.rect": {"en": "Rectangle", "zh": "矩形"},
+    "tool.rounded_rect": {"en": "Rounded rectangle", "zh": "圆角矩形"},
     "tool.ellipse": {"en": "Ellipse", "zh": "圆"},
     "tool.arrow": {"en": "Arrow", "zh": "箭头"},
     "tool.line": {"en": "Line", "zh": "直线"},
@@ -146,8 +157,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "tool.mosaic": {"en": "Mosaic", "zh": "马赛克"},
     "tool.text": {"en": "Text", "zh": "文字"},
     # Toolbar controls
+    "toolbar.spotlight": {"en": "Spotlight", "zh": "聚光"},
     "toolbar.color": {"en": "Color", "zh": "颜色"},
     "toolbar.width": {"en": "Width ", "zh": "粗细 "},
+    "toolbar.font_size": {"en": "Font size ", "zh": "字号 "},
     "toolbar.undo": {"en": "Undo", "zh": "撤销"},
     "toolbar.redo": {"en": "Redo", "zh": "重做"},
     "toolbar.ocr": {"en": "Copy Text", "zh": "取字"},
@@ -215,6 +228,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Include mouse pointer in screenshots",
         "zh": "截图包含鼠标指针",
     },
+    "settings.debug_mode": {
+        "en": "Debug mode (write detailed logs)",
+        "zh": "Debug 模式（写入详细日志）",
+    },
     "settings.flash": {"en": "Flash on capture", "zh": "截图时闪光"},
     "settings.sound": {"en": "Sound on capture", "zh": "截图时播放声音"},
     "settings.hover_switch": {"en": "Highlight window after", "zh": "悬停高亮窗口"},
@@ -241,6 +258,53 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.open_system_settings": {
         "en": "Open System Settings…",
         "zh": "打开系统设置…",
+    },
+    "settings.uninstall": {"en": "Uninstall ShotQuill…", "zh": "卸载 ShotQuill…"},
+    "uninstall.title": {"en": "Uninstall ShotQuill", "zh": "卸载 ShotQuill"},
+    "uninstall.action": {"en": "Uninstall", "zh": "卸载"},
+    "uninstall.cancel": {"en": "Cancel", "zh": "取消"},
+    "uninstall.inspecting": {
+        "en": "Checking the installation channel…",
+        "zh": "正在检查安装来源…",
+    },
+    "uninstall.preparing": {
+        "en": "Preparing the protected uninstaller…",
+        "zh": "正在准备受保护的卸载程序…",
+    },
+    "uninstall.confirm": {
+        "en": "Remove the application, ShotQuill-owned command links, and package receipts? "
+        "Settings, recordings, logs, screenshots, and custom save folders are kept. "
+        "Save and close any open editors first; unsaved annotations will be lost. "
+        "ShotQuill closes before macOS requests administrator authorization. If authorization "
+        "is cancelled, or removal fails before the app is removed, ShotQuill opens again. "
+        "After approval, verified cleanup may take about 30 seconds; a completion notice follows. "
+        "If cleanup only partially completes, follow-up steps are shown.\n\n{plan}",
+        "zh": "是否移除应用、ShotQuill 自有命令链接及软件包收据？"
+        "设置、录制、日志、截图和自定义保存目录都会保留。"
+        "请先保存并关闭已打开的编辑器，未保存的标注将会丢失。"
+        "ShotQuill 会先退出，然后 macOS 可能请求管理员授权；"
+        "若取消授权，或在应用移除前失败，ShotQuill 会重新打开；"
+        "授权后，校验和清理可能需要约 30 秒，完成后会显示通知；"
+        "若只完成部分清理，将显示后续处理步骤。\n\n{plan}",
+    },
+    "uninstall.brew": {
+        "en": "Homebrew manages this installation. Run this command in Terminal:\n\n"
+        "{command}\n\n{plan}",
+        "zh": "此安装由 Homebrew 管理。请在终端运行：\n\n{command}\n\n{plan}",
+    },
+    "uninstall.unavailable": {
+        "en": "This installation cannot be removed automatically. No files were changed.\n\n{plan}",
+        "zh": "无法自动移除此安装，未更改任何文件。\n\n{plan}",
+    },
+    "uninstall.start_failed": {
+        "en": "The uninstaller could not be started: {error}",
+        "zh": "无法启动卸载器：{error}",
+    },
+    "uninstall.failed": {
+        "en": "The uninstaller did not complete (exit code {code}). ShotQuill will stay open "
+        "when possible; no user data was targeted.",
+        "zh": "卸载未完成（退出码 {code}）。如果条件允许，ShotQuill 会保持运行；"
+        "卸载过程未将用户数据列为目标。",
     },
     "settings.blocklist": {"en": "Blocked apps", "zh": "排除名单"},
     "settings.blocklist_button": {"en": "Blocked apps…", "zh": "排除名单…"},

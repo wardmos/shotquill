@@ -119,12 +119,16 @@ def test_empty_blocklist_skips_enumeration_entirely():
     assert target == "window 22"
 
 
-def test_window_id_capture_when_enumeration_unavailable_proceeds():
-    # If windows cannot be listed we cannot match the id — fail open and let
-    # the capture itself succeed or fail.
+def test_window_id_capture_when_enumeration_unavailable_is_refused(tmp_path):
+    # If windows cannot be listed we cannot match the id against the blocklist
+    # (which denies by identity). Fail closed rather than risk capturing a
+    # blocked app whose identity this backend cannot prove.
     cap = FakeCapturer(list_raises=headless.CapabilityUnsupported("list_windows", "wayland"))
-    result, _, _ = headless.perform_capture(cap, window_id=22, blocklist=ONEPW_LIST)
-    assert cap.captured == [("window", 22)]
+    with pytest.raises(headless.CaptureBlocked):
+        headless.perform_capture(cap, window_id=22, blocklist=ONEPW_LIST, via="mcp")
+    assert cap.captured == []
+    line = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert '"capture_blocked"' in line and '"window 22"' in line
 
 
 def test_window_capture_redacts_blocked_overlap_on_framebuffer_backend():
@@ -198,14 +202,14 @@ def test_doctor_reports_blocklist(monkeypatch, tmp_path):
 
 
 def test_doctor_flags_unredacted_blocklist_without_enumeration(monkeypatch, tmp_path):
-    # The honest part: on a backend that can't enumerate windows (Linux), a
-    # blocked app is captured plainly in full-screen grabs — doctor must say so.
+    # The honest part: on a backend that can't enumerate windows, blocklist-
+    # protected full-screen grabs are refused rather than captured plainly.
     path = tmp_path / "blocklist.json"
     bl.save(ONEPW_LIST, path)
     monkeypatch.setattr(paths, "blocklist_path", lambda: path)
     check = headless._check_blocklist_redaction(can_enumerate=False)
     assert check is not None and check["available"] is False
-    assert "NOT redacted" in check["detail"]
+    assert "refused" in check["detail"]
 
 
 def test_doctor_blocklist_redaction_ok_with_enumeration(monkeypatch, tmp_path):
@@ -268,11 +272,24 @@ def test_fullscreen_solid_blocks_window_the_backend_cannot_exclude(tmp_path, mon
     assert "capture_redacted" in log.read_text(encoding="utf-8")
 
 
-def test_region_redacts_blocked_window():
+def test_region_redacts_blocked_window(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
     cap = FakeCapturer(windows=[ONEPW])
     result, target, _ = headless.perform_capture(cap, region=Rect(0, 0, 2, 2), blocklist=ONEPW_LIST)
     assert target.startswith("region")
     assert _all_black(result)
+    assert "capture_redacted" in log.read_text(encoding="utf-8")
+
+
+def test_region_blocklist_is_refused_when_enumeration_unavailable(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setattr(paths, "audit_log_path", lambda: log)
+    cap = FakeCapturer(list_raises=headless.CapabilityUnsupported("list_windows", "wayland"))
+    with pytest.raises(headless.CaptureBlocked):
+        headless.perform_capture(cap, region=Rect(0, 0, 2, 2), blocklist=ONEPW_LIST)
+    assert cap.captured == []
+    assert "capture_blocked" in log.read_text(encoding="utf-8")
 
 
 def test_fullscreen_unchanged_when_no_blocked_window_present():
@@ -281,13 +298,14 @@ def test_fullscreen_unchanged_when_no_blocked_window_present():
     assert not _all_black(result)  # Safari is not blocked; nothing painted
 
 
-def test_fullscreen_redaction_gap_is_logged_when_enumeration_unavailable(tmp_path, monkeypatch):
+def test_fullscreen_blocklist_is_refused_when_enumeration_unavailable(tmp_path, monkeypatch):
     log = tmp_path / "audit.log"
     monkeypatch.setattr(paths, "audit_log_path", lambda: log)
     cap = FakeCapturer(list_raises=headless.CapabilityUnsupported("list_windows", "wayland"))
-    result, _, _ = headless.perform_capture(cap, blocklist=ONEPW_LIST)
-    assert not _all_black(result)  # cannot enumerate → frame left as-is
-    assert "redact_unavailable" in log.read_text(encoding="utf-8")
+    with pytest.raises(headless.CaptureBlocked):
+        headless.perform_capture(cap, blocklist=ONEPW_LIST)
+    assert cap.captured == []
+    assert "capture_blocked" in log.read_text(encoding="utf-8")
 
 
 def test_fullscreen_redaction_respects_reported_origin():

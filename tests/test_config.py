@@ -4,6 +4,7 @@ from shotquill.config import (
     DEFAULT_AUTO_COPY,
     DEFAULT_AUTO_SAVE,
     DEFAULT_AUTOSTART,
+    DEFAULT_DEBUG_MODE,
     DEFAULT_EDITOR_HOTKEYS,
     DEFAULT_FLASH,
     DEFAULT_HOTKEYS,
@@ -76,10 +77,15 @@ def test_cursor_excluded_by_default():
     assert DEFAULT_INCLUDE_CURSOR is False
 
 
-def test_auto_output_defaults_on():
-    # Hands-free by default: a capture is saved AND copied without the editor.
-    assert DEFAULT_AUTO_SAVE is True
-    assert DEFAULT_AUTO_COPY is True
+def test_auto_output_defaults_off():
+    # Manual by default: a capture opens the editor; neither auto-save nor
+    # auto-copy fires until the user opts in.
+    assert DEFAULT_AUTO_SAVE is False
+    assert DEFAULT_AUTO_COPY is False
+
+
+def test_debug_mode_defaults_off():
+    assert DEFAULT_DEBUG_MODE is False
 
 
 def test_hover_switch_defaults():
@@ -111,6 +117,13 @@ def test_to_bool_parses_qsettings_strings():
     assert _to_bool(True, False) is True
 
 
+def test_to_bool_coerces_other_types_via_bool():
+    # A value that is neither bool, str, nor None (e.g. an int a QSettings
+    # backend hands back) falls through to bool() — not the default.
+    assert _to_bool(0, True) is False
+    assert _to_bool(2, False) is True
+
+
 def test_human_readable_hotkey_ignores_blank_segments():
     # Pin mac_style so the assertion doesn't drift with the host platform
     # (default = sys.platform-dependent, ``Alt+A`` off-mac).
@@ -133,6 +146,7 @@ def test_config_returns_defaults_when_unset(config):
     assert config.sound_on_capture() is DEFAULT_SOUND
     assert config.autostart() is DEFAULT_AUTOSTART
     assert config.include_cursor() is DEFAULT_INCLUDE_CURSOR
+    assert config.debug_mode() is DEFAULT_DEBUG_MODE
 
 
 def test_config_hotkey_round_trip(config):
@@ -182,10 +196,12 @@ def test_config_bool_round_trips(config):
     config.set_sound_on_capture(True)
     config.set_autostart(True)
     config.set_include_cursor(True)
+    config.set_debug_mode(True)
     assert config.flash_on_capture() is False
     assert config.sound_on_capture() is True
     assert config.autostart() is True
     assert config.include_cursor() is True
+    assert config.debug_mode() is True
 
 
 def test_region_adjust_defaults_on(config):
@@ -240,10 +256,10 @@ def test_editor_backdrop_round_trip(config):
     assert config.editor_backdrop() is True
 
 
-def test_toolbar_style_defaults_to_icon_and_text(config):
+def test_toolbar_style_defaults_to_icon_only(config):
     from shotquill.config import DEFAULT_TOOLBAR_STYLE, TOOLBAR_STYLES
 
-    assert DEFAULT_TOOLBAR_STYLE == "both"
+    assert DEFAULT_TOOLBAR_STYLE == "icon"
     assert DEFAULT_TOOLBAR_STYLE in TOOLBAR_STYLES
     assert config.toolbar_style() == DEFAULT_TOOLBAR_STYLE
 

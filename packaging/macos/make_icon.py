@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Render the ShotQuill app icon master PNG.
 
-Produces a 1024x1024 PNG matching the menu-bar mark (blue rounded tile + white
-"S"), following Apple's icon grid (~10% transparent margin around the tile).
+Produces a 1024x1024 PNG matching the brand mark (blue rounded tile + white
+capture/pen glyph), following Apple's icon grid (~10% transparent margin around
+the tile).
 
-The committed ``icon.png`` is what ``build_dmg.sh`` converts into ``.icns`` with
+The committed ``icon.png`` is what ``build_pkg.sh`` converts into ``.icns`` with
 macOS' native ``sips``/``iconutil``, so the build never depends on fonts being
 present on the build machine. Re-run this only to regenerate the artwork::
 
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 SIZE = 1024
 SS = 4  # supersampling factor for crisp edges / anti-aliasing
@@ -25,21 +26,6 @@ RADIUS = 185  # rounded-tile corner radius (squircle-ish)
 # Brand blue, as a top->bottom gradient around the menu-bar #2d7ff9.
 TOP = (74, 155, 255)
 BOTTOM = (31, 111, 224)
-
-FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-]
-
-
-def _load_font(px: int) -> ImageFont.FreeTypeFont:
-    for path in FONT_CANDIDATES:
-        if Path(path).exists():
-            return ImageFont.truetype(path, px)
-    raise SystemExit("No suitable bold sans font found; install Liberation/DejaVu.")
-
 
 def _vertical_gradient(w: int, h: int) -> Image.Image:
     grad = Image.new("RGB", (1, h))
@@ -63,6 +49,63 @@ def _rounded_mask(w: int, h: int, radius: int) -> Image.Image:
     return mask
 
 
+def _bar(draw: ImageDraw.ImageDraw, xy: tuple[int, int, int, int], radius: int) -> None:
+    draw.rounded_rectangle(xy, radius=radius, fill=(255, 255, 255, 255))
+
+
+def _draw_corners(draw: ImageDraw.ImageDraw, scale: int) -> None:
+    w = 56
+    r = 12 * scale
+
+    def s(x: int) -> int:
+        return x * scale
+
+    # top-left
+    _bar(draw, (s(260), s(285), s(420), s(285 + w)), r)
+    _bar(draw, (s(260), s(285), s(260 + w), s(445)), r)
+    # top-right
+    _bar(draw, (s(604), s(285), s(764), s(285 + w)), r)
+    _bar(draw, (s(764 - w), s(285), s(764), s(445)), r)
+    # bottom-left
+    _bar(draw, (s(260), s(683), s(420), s(683 + w)), r)
+    _bar(draw, (s(260), s(523), s(260 + w), s(739)), r)
+    # bottom-right
+    _bar(draw, (s(604), s(683), s(764), s(683 + w)), r)
+    _bar(draw, (s(764 - w), s(523), s(764), s(739)), r)
+
+
+def _draw_nib(draw: ImageDraw.ImageDraw, scale: int) -> None:
+    points = [
+        (456, 740),
+        (434, 620),
+        (386, 540),
+        (432, 384),
+        (540, 278),
+        (668, 238),
+        (650, 384),
+        (552, 486),
+        (642, 450),
+        (606, 548),
+        (638, 620),
+        (572, 700),
+        (552, 740),
+    ]
+    draw.polygon([(x * scale, y * scale) for x, y in points], fill=(255, 255, 255, 255))
+    draw.rounded_rectangle(
+        (454 * scale, 736 * scale, 570 * scale, 784 * scale),
+        radius=8 * scale,
+        fill=(255, 255, 255, 255),
+    )
+    draw.ellipse(
+        (494 * scale, 520 * scale, 542 * scale, 568 * scale),
+        fill=tuple(round((TOP[i] + BOTTOM[i]) / 2) for i in range(3)) + (255,),
+    )
+    draw.rectangle(
+        (510 * scale, 568 * scale, 526 * scale, 738 * scale),
+        fill=tuple(round((TOP[i] + BOTTOM[i]) / 2) for i in range(3)) + (255,),
+    )
+
+
 def render(out: Path) -> None:
     big = SIZE * SS
     canvas = Image.new("RGBA", (big, big), (0, 0, 0, 0))
@@ -73,16 +116,9 @@ def render(out: Path) -> None:
     tile.putalpha(_rounded_mask(tile_w, tile_h, RADIUS * SS))
     canvas.alpha_composite(tile, (m, m))
 
-    font = _load_font(int(560 * SS))
-    # Center the glyph on its actual ink bounds, not the font's line box
-    # (which includes ascender/descender padding and pushes the "S" off-center).
-    glyph = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    ImageDraw.Draw(glyph).text((0, 0), "S", font=font, fill=(255, 255, 255, 255))
-    left, top, right, bottom = glyph.getbbox()
-    canvas.alpha_composite(
-        glyph,
-        (round(big / 2 - (left + right) / 2), round(big / 2 - (top + bottom) / 2)),
-    )
+    draw = ImageDraw.Draw(canvas)
+    _draw_corners(draw, SS)
+    _draw_nib(draw, SS)
 
     canvas.resize((SIZE, SIZE), Image.LANCZOS).save(out)
     print(f"wrote {out}")

@@ -12,8 +12,10 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QKeySequence  # noqa: E402
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem  # noqa: E402
 
 from shotquill.ui import editor as editor_module  # noqa: E402
+from shotquill.ui.canvas import _AddItemCommand  # noqa: E402
 from shotquill.ui.editor import EditorWindow, RegionContext  # noqa: E402
 
 
@@ -106,6 +108,51 @@ def test_enter_saves_to_folder_and_closes(qtbot, config, tmp_path):
     assert not window.isVisible()
 
 
+def test_escape_in_color_dialog_closes_the_entire_editor(qtbot, config):
+    # Escape is a capture-session emergency exit, not merely a window shortcut.
+    # A focused child dialog must not consume it and leave the screenshot editor
+    # behind (the failure mode that made the macOS surface appear frozen).
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    dialog = window._toolbar.color_dialog
+    dialog.show()
+    assert window.isVisible() and dialog.isVisible()
+
+    qtbot.keyClick(dialog, Qt.Key_Escape)
+
+    assert not window.isVisible()
+    assert not dialog.isVisible()
+
+
+def test_unshown_editor_does_not_enable_session_escape_guard(qtbot, config):
+    editor = _editor(qtbot, config)
+    assert not editor.isVisible()
+    assert editor._escape_guard._installed is False
+
+
+def test_visible_editor_does_not_steal_escape_from_other_windows(qtbot, config):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    from shotquill.ui.pinned import PinnedWindow
+
+    editor = _editor(qtbot, config)
+    editor.setAttribute(Qt.WA_DeleteOnClose, False)
+    editor.show()
+    assert editor._escape_guard._installed is True
+    pin = PinnedWindow(_image())
+    pin.setAttribute(Qt.WA_DeleteOnClose, False)
+    qtbot.addWidget(pin)
+    pin.show()
+
+    QApplication.sendEvent(pin, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+
+    assert not pin.isVisible()
+    assert editor.isVisible()
+
+
 def test_custom_finish_keys_are_honoured(qtbot, config, tmp_path):
     config.set_save_dir(str(tmp_path))
     config.set_editor_hotkey("editor_save", "Ctrl+D")
@@ -177,6 +224,23 @@ def test_disabled_finish_keys_do_nothing(qtbot, config, tmp_path):
     qtbot.keyClick(window, Qt.Key_Return)
     assert QGuiApplication.clipboard().image().isNull()
     assert list(tmp_path.glob("ShotQuill *.png")) == []
+
+
+def test_delete_key_removes_selected_annotation_when_editor_has_focus(qtbot, config):
+    window = _editor(qtbot, config)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    item = QGraphicsRectItem(QRectF(5, 5, 20, 20))
+    item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+    window._canvas.scene().addItem(item)
+    window._canvas.undo_stack().push(_AddItemCommand(window._canvas.scene(), item))
+    item.setSelected(True)
+
+    window.setFocus()
+    qtbot.keyClick(window, Qt.Key_Delete)
+
+    assert item.scene() is None
+    window._canvas.undo_stack().undo()
+    assert item.scene() is window._canvas.scene()
 
 
 def test_editor_places_canvas_over_capture_origin(qtbot, config):
@@ -264,30 +328,79 @@ def _fake_cursor(monkeypatch, x, y):
 
 
 def test_toolbar_moves_to_bottom_right_when_pointer_ends_there(qtbot, config, monkeypatch):
-    from PySide6.QtWidgets import QToolBar, QWidgetAction
+    from PySide6.QtWidgets import QWidgetAction
 
     origin = QRect(100, 100, 200, 100)
     _fake_cursor(monkeypatch, 280, 190)  # released near the bottom-right corner
     window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    toolbar = window.findChild(QToolBar)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
+    # The tool row follows the pointer; the no-collapse copy/save bar takes the
+    # opposite edge so the two never share (and widen) a row.
     assert window.toolBarArea(toolbar) == Qt.BottomToolBarArea
-    # Right alignment comes from an expanding spacer ahead of the actions.
-    assert isinstance(toolbar.actions()[0], QWidgetAction)
+    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
+    # Right alignment pushes the copy/save bar's buttons to the trailing edge via
+    # an expanding spacer ahead of its actions.
+    assert isinstance(outputs.actions()[0], QWidgetAction)
+
+
+def test_copy_and_save_stay_visible_when_the_editor_is_narrow(qtbot, config, monkeypatch):
+    # The shot's finish buttons must never fold behind the tool row's overflow
+    # chevron: on a capture far narrower than the full row, the tool buttons fold
+    # but copy/save ride a no-collapse sibling bar that keeps them on the row.
+    _fake_cursor(monkeypatch, 120, 110)
+    window = EditorWindow(_image(), config, QRect(100, 100, 200, 100))
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.resize(140, 300)
+    window.show()
+    qtbot.waitExposed(window)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
+    # The tool row has folded (its trailing button is hidden behind the chevron)...
+    assert not toolbar.widgetForAction(toolbar.actions()[-1]).isVisible()
+    # ...yet copy and save are still shown.
+    assert outputs.widgetForAction(window._copy_action).isVisible()
+    assert outputs.widgetForAction(window._save_action).isVisible()
+
+
+def test_outputs_take_the_opposite_edge_and_dont_widen_a_narrow_shot(qtbot, config):
+    # The no-collapse outputs bar sits in the opposite edge's area, so the window
+    # minimum width is the wider single bar rather than the sum of both — a narrow
+    # shot keeps its width (the canvas stays exactly over the capture) and copy/
+    # save stay visible.
+    origin = QRect(100, 100, 80, 100)  # narrower than the tool row plus outputs
+    screenshot = _image(400, 300)
+    window = EditorWindow(
+        screenshot.copy(origin), config, origin, RegionContext(screenshot, QRect(0, 0, 400, 300))
+    )
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
+    assert window.toolBarArea(toolbar) != window.toolBarArea(outputs)
+    assert window._canvas.viewport().size() == origin.size()
+    assert outputs.widgetForAction(window._copy_action).isVisible()
+    assert outputs.widgetForAction(window._save_action).isVisible()
 
 
 def test_toolbar_stays_top_left_when_pointer_ends_there(qtbot, config, monkeypatch):
-    from PySide6.QtWidgets import QToolBar, QWidgetAction
+    from PySide6.QtWidgets import QWidgetAction
 
     origin = QRect(100, 100, 200, 100)
     _fake_cursor(monkeypatch, 120, 110)
     window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
-    toolbar = window.findChild(QToolBar)
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
     assert window.toolBarArea(toolbar) == Qt.TopToolBarArea
-    assert not isinstance(toolbar.actions()[0], QWidgetAction)
+    assert window.toolBarArea(outputs) == Qt.BottomToolBarArea
+    assert not isinstance(outputs.actions()[0], QWidgetAction)
 
 
 def test_editor_places_canvas_over_origin_with_bottom_toolbar(qtbot, config, monkeypatch):
@@ -349,6 +462,20 @@ def test_editor_backdrop_hides_while_deactivated(qtbot, config, monkeypatch):
     monkeypatch.setattr(EditorWindow, "isActiveWindow", lambda self: True)
     QApplication.sendEvent(window, QEvent(QEvent.ActivationChange))
     assert window._backdrop.isVisible()
+
+
+def test_editor_reactivation_restores_pending_text_focus(qtbot, config, monkeypatch):
+    from PySide6.QtCore import QEvent
+
+    window = _editor(qtbot, config)
+    window.show()
+    calls = []
+    monkeypatch.setattr(window._canvas, "restore_text_focus", lambda: calls.append(True))
+    monkeypatch.setattr(window, "isActiveWindow", lambda: True)
+
+    window.changeEvent(QEvent(QEvent.ActivationChange))
+
+    assert calls == [True]
 
 
 def test_editor_backdrop_off_restores_titled_window(qtbot, config):
@@ -666,6 +793,27 @@ def test_enter_crop_adjust_opens_overlay_seeded_with_current_crop(qtbot, config)
         overlay.close()
 
 
+def test_two_escapes_close_crop_adjust_then_editor(qtbot, config):
+    # Crop adjustment is a deliberately nested screenshot state: the first
+    # Escape cancels that temporary layer, and the next exits screenshot mode.
+    window = _region_editor(qtbot, config)
+    window.show()
+    window.enter_crop_adjust((False, False, True, False))
+    overlay = window._crop_overlay
+    assert overlay is not None
+    overlay.setAttribute(Qt.WA_DeleteOnClose, False)
+    controller = getattr(overlay, "_controller", None)
+    target = controller._views[0] if controller is not None else overlay
+    assert target.isVisible()
+
+    qtbot.keyClick(target, Qt.Key_Escape)
+    assert overlay._closed is True
+    assert window.isVisible()
+
+    qtbot.keyClick(window, Qt.Key_Escape)
+    assert not window.isVisible()
+
+
 def test_crop_adjusted_recrops_from_the_full_screenshot(qtbot, config):
     # The apply path re-crops from the frozen screenshot via _apply_selection,
     # so the editor stays the single source of truth (the overlay's image arg is
@@ -790,11 +938,10 @@ def test_editor_toolbar_style_follows_config(qtbot, config):
 def test_width_spinbox_never_takes_keyboard_focus(qtbot, config):
     # The window's keyboard surface (arrow-key crop adjustment, Space/Enter
     # finish keys) must survive a click on the width spin box — a focusable
-    # spin box would silently swallow the arrows for stepping the width.
-    from PySide6.QtWidgets import QSpinBox
-
+    # spin box would silently swallow the arrows for stepping the width.  Use
+    # the toolbar's explicit handle: QColorDialog also owns internal spin boxes.
     window = _editor(qtbot, config)
-    spinbox = window.findChild(QSpinBox)
+    spinbox = window._toolbar.width_spin
     assert spinbox.focusPolicy() == Qt.NoFocus
     assert spinbox.lineEdit().focusPolicy() == Qt.NoFocus
 

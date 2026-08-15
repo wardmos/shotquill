@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QKeyCombination, Qt, Signal
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -90,6 +90,26 @@ def _is_usable_save_dir(text: str) -> bool:
             return False
         probe = parent
     return probe.is_dir() and os.access(probe, os.W_OK)
+
+
+def _normalize_finish_sequence(sequence: QKeySequence) -> QKeySequence:
+    """Fold a recorded finish key the way the editor matches it at runtime.
+
+    ``editor_core._pressed_sequence`` maps keypad Enter to Return and strips the
+    KeypadModifier before comparing, so the same folding must happen before the
+    duplicate / reserved / capture-conflict checks. Otherwise a key recorded as
+    keypad Enter (or with the keypad modifier set) reads as distinct here yet
+    collides at runtime — e.g. copy on Return and save on keypad Enter would pass
+    the duplicate check but both fire as Return, with save shadowing copy.
+    """
+    if sequence.isEmpty():
+        return sequence
+    combo = sequence[0]
+    key = combo.key()
+    if key == Qt.Key_Enter:
+        key = Qt.Key_Return
+    modifiers = combo.keyboardModifiers() & ~Qt.KeypadModifier
+    return QKeySequence(QKeyCombination(modifiers, Qt.Key(key)))
 
 
 def _reserved_editor_sequences() -> list[QKeySequence]:
@@ -243,6 +263,8 @@ class _PermissionRow(QWidget):
 
 
 class SettingsDialog(QDialog):
+    uninstall_requested = Signal()
+
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
@@ -305,6 +327,10 @@ class SettingsDialog(QDialog):
         self._include_cursor.setChecked(config.include_cursor())
         form.addRow("", self._include_cursor)
 
+        self._debug_mode = QCheckBox(t("settings.debug_mode"))
+        self._debug_mode.setChecked(config.debug_mode())
+        form.addRow("", self._debug_mode)
+
         self._hover_switch = QComboBox()
         for choice in _HOVER_SWITCH_CHOICES:
             self._hover_switch.addItem(_hover_switch_label(choice), choice)
@@ -344,24 +370,20 @@ class SettingsDialog(QDialog):
         self._sound.setChecked(config.sound_on_capture())
         form.addRow("", self._sound)
 
-        # Both permission rows are macOS-only concepts (Screen Recording / Input
-        # Monitoring TCC grants). Off-darwin the status probes return UNKNOWN
+        # Screen Recording is a macOS-only TCC grant. Off-darwin the status probe returns UNKNOWN
         # and the "Open System Settings" button would shell out to `open
         # x-apple-systempreferences:…` — a no-op (or wrong handler) on Linux.
-        # Hide the rows entirely there so Settings doesn't show meaningless
-        # controls; keep the attrs as ``None`` so ``changeEvent`` can skip them.
+        # Hide the row entirely there so Settings doesn't show meaningless
+        # controls. Global hotkeys use RegisterEventHotKey and do not need Input
+        # Monitoring, so there is no hotkey permission row.
         if sys.platform == "darwin":
             self._screen_permission = _PermissionRow(
                 permissions.screen_capture_status, permissions.open_screen_capture_pane
             )
-            self._input_permission = _PermissionRow(
-                permissions.input_monitoring_status, permissions.open_input_monitoring_pane
-            )
             form.addRow(t("settings.permission_screen"), self._screen_permission)
-            form.addRow(t("settings.permission_input"), self._input_permission)
         else:
             self._screen_permission = None
-            self._input_permission = None
+        self._input_permission = None
 
         self._blocklist_button = QPushButton(t("settings.blocklist_button"))
         self._blocklist_button.clicked.connect(self._open_blocklist)
@@ -374,6 +396,13 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save_and_accept)
         buttons.rejected.connect(self.reject)
+        if sys.platform == "darwin":
+            self._uninstall_button = buttons.addButton(
+                t("settings.uninstall"), QDialogButtonBox.ButtonRole.ActionRole
+            )
+            self._uninstall_button.clicked.connect(self.uninstall_requested.emit)
+        else:
+            self._uninstall_button = None
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -391,7 +420,6 @@ class SettingsDialog(QDialog):
             and self._screen_permission is not None
         ):
             self._screen_permission.refresh()
-            self._input_permission.refresh()
         super().changeEvent(event)
 
     def _open_blocklist(self) -> None:
@@ -445,8 +473,8 @@ class SettingsDialog(QDialog):
             if row.enabled() and row.active_sequence().isEmpty():
                 QMessageBox.warning(self, t("settings.title"), t("settings.editor_key_empty"))
                 return False
-        copy_seq = self._editor_copy.active_sequence()
-        save_seq = self._editor_save.active_sequence()
+        copy_seq = _normalize_finish_sequence(self._editor_copy.active_sequence())
+        save_seq = _normalize_finish_sequence(self._editor_save.active_sequence())
         reserved = _reserved_editor_sequences()
         captures = [
             _capture_combo_sequence(row.combo())
@@ -490,6 +518,7 @@ class SettingsDialog(QDialog):
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_include_cursor(self._include_cursor.isChecked())
+        self._config.set_debug_mode(self._debug_mode.isChecked())
         self._config.set_hover_switch_delay_ms(self._hover_switch.currentData())
         self._config.set_region_adjust(self._region_adjust.isChecked())
         self._config.set_editor_backdrop(self._editor_backdrop.isChecked())
