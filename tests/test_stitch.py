@@ -13,6 +13,7 @@ from PySide6.QtGui import (  # noqa: E402
 
 from shotquill.stitch import (  # noqa: E402
     ScrollAccumulator,
+    StitchError,
     detect_sticky_bands,
     estimate_vertical_offset,
     stitch_vertical,
@@ -76,14 +77,13 @@ def test_estimate_offset_none_on_size_mismatch():
 
 
 def test_estimate_offset_respects_sticky_header():
-    # A fixed 3-row header sits on top. Without excluding it the anchor leads with
-    # the header rows, which only line up at dy=0 where the band disagrees — so the
-    # match fails (None). Telling it head=3 skips the header and recovers the scroll.
+    # A fixed 3-row header sits on top. The tolerant fallback can recover the
+    # offset on its own; explicitly excluding the known header remains exact.
     header = [_row_color(900 + i) for i in range(3)]
     band = _tall(10, 40, start=100)
     prev = _image(10, header + band[0:20])
     curr = _image(10, header + band[5:25])
-    assert estimate_vertical_offset(prev, curr) is None  # misled by the header
+    assert estimate_vertical_offset(prev, curr) == 5
     assert estimate_vertical_offset(prev, curr, head=3) == 5
 
 
@@ -169,13 +169,13 @@ def test_stitch_keeps_sticky_header_and_footer_once():
         assert _row_seed(out, 3 + j) == (c.red(), c.green(), c.blue())
 
 
-def test_stitch_disjoint_pair_appends_whole_band():
-    # A gap too large to overlap: content is appended rather than dropped, so the
-    # stitched height is the sum of both frames (no overlap removed).
+def test_stitch_disjoint_pair_is_an_explicit_failure():
+    # A gap cannot be distinguished from skipped content. Silently appending the
+    # whole frame would produce a plausible-looking but incomplete long screenshot.
     source = _image(10, _tall(10, 80))
     frames = [_crop(source, 0, 12), _crop(source, 60, 12)]
-    out = stitch_vertical(frames)
-    assert out.height() == 24
+    with pytest.raises(StitchError, match="overlap"):
+        stitch_vertical(frames)
 
 
 # --- ScrollAccumulator (the live sample → decide → stitch driver) -------------
@@ -207,12 +207,54 @@ def test_accumulator_stops_after_settle_and_drops_duplicates():
     assert acc.result().height() == 40
 
 
+def test_accumulator_waits_for_motion_after_initial_still_frames():
+    page = _image(10, _tall(10, 100))
+    first, moved = _crop(page, 0, 30), _crop(page, 10, 30)
+    acc = _acc(settle=2)
+
+    assert acc.add(first) is True
+    assert acc.add(first) is True  # user has not started scrolling yet
+    assert acc.add(moved) is True  # later motion must still seed the stitch
+    assert acc.add(moved) is True
+    assert acc.add(moved) is False
+
+    assert acc.frame_count == 2
+    assert acc.result().height() == 40
+
+
+def test_accumulator_rejects_a_missing_overlap_instead_of_duplicating_frames():
+    page = _image(10, _tall(10, 100))
+    acc = _acc()
+    assert acc.add(_crop(page, 0, 30)) is True
+    with pytest.raises(StitchError, match="overlap"):
+        acc.add(_crop(page, 60, 30))
+
+
 def test_accumulator_stops_at_max_height():
     page = _image(10, _tall(10, 100))
     acc = _acc(max_height=35)
     assert acc.add(_crop(page, 0, 30)) is True  # approx height 30
     assert acc.add(_crop(page, 10, 30)) is False  # +10 → 40 ≥ 35, stop
     assert acc.result().height() == 35  # stitched 40, cropped back to the cap
+
+
+def test_accumulator_caps_a_single_frame_to_max_height():
+    page = _image(10, _tall(10, 30))
+    acc = _acc(max_height=20)
+
+    assert acc.add(page) is False
+    assert acc.result().height() == 20
+
+
+def test_accumulator_counts_still_samples_toward_max_frames():
+    page = _image(10, _tall(10, 100))
+    first, moved = _crop(page, 0, 30), _crop(page, 10, 30)
+    acc = _acc(max_frames=3, settle=99)
+
+    assert acc.add(first) is True
+    assert acc.add(moved) is True
+    assert acc.add(moved) is False
+    assert acc.frame_count == 2
 
 
 def test_accumulator_stops_at_max_frames():
@@ -282,3 +324,50 @@ def test_estimate_offset_rejects_false_anchor_match_in_repeating_region():
     prev = _crop(page, 0, 20)
     curr = _crop(page, 2, 20)
     assert estimate_vertical_offset(prev, curr) == 2
+
+
+def test_estimate_offset_tolerates_a_fixed_screen_artifact():
+    # A cursor, scrollbar thumb, or floating control stays at a screen position
+    # while the page moves underneath it. That local mismatch must not turn the
+    # entire pair into a disjoint frame.
+    page = _image(30, _tall(30, 80))
+    prev = _crop(page, 0, 30)
+    curr = _crop(page, 10, 30)
+    marker = QColor(255, 0, 0)
+    for image in (prev, curr):
+        for y in range(8, 14):
+            for x in range(27, 30):
+                image.setPixelColor(x, y, marker)
+
+    assert estimate_vertical_offset(prev, curr) == 10
+
+
+def test_estimate_offset_prefers_broad_overlap_over_a_short_repeated_match():
+    # The row generator repeats after 251 rows. A fixed control breaks the true
+    # exact match at 100px, while a 602px candidate happens to leave a tiny exact
+    # repeated strip. Prefer the offset supported by most of the viewport.
+    page = _image(30, _tall(30, 1400))
+    prev = _crop(page, 0, 700)
+    curr = _crop(page, 100, 700)
+    marker = QColor(255, 0, 0)
+    for image in (prev, curr):
+        for y in range(200, 300):
+            for x in range(27, 30):
+                image.setPixelColor(x, y, marker)
+
+    assert estimate_vertical_offset(prev, curr) == 100
+
+
+def test_accumulator_keeps_the_correct_height_with_a_fixed_screen_artifact():
+    page = _image(30, _tall(30, 80))
+    frames = [_crop(page, offset, 30) for offset in (0, 10, 20)]
+    marker = QColor(255, 0, 0)
+    for image in frames:
+        for y in range(8, 14):
+            for x in range(27, 30):
+                image.setPixelColor(x, y, marker)
+
+    acc = _acc()
+    for image in frames:
+        assert acc.add(image) is True
+    assert acc.result().height() == 50

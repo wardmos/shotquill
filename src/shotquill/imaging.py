@@ -43,6 +43,30 @@ def result_to_qimage(result: CaptureResult) -> QImage:
     return image.copy()
 
 
+def qimage_to_result(
+    image: QImage, scale: float, origin: tuple[int, int] = (0, 0)
+) -> CaptureResult:
+    """Flatten a ``QImage`` into the tightly packed capture pipeline format."""
+    from PySide6.QtGui import QImage
+
+    converted = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    if converted.isNull() or converted.width() <= 0 or converted.height() <= 0:
+        raise ValueError("cannot convert an empty image into a capture result")
+    raw = bytes(converted.constBits())
+    row_bytes = converted.width() * 4
+    stride = converted.bytesPerLine()
+    if stride != row_bytes:
+        raw = b"".join(raw[y * stride : y * stride + row_bytes] for y in range(converted.height()))
+    return CaptureResult(
+        width=converted.width(),
+        height=converted.height(),
+        scale=float(scale),
+        pixels=raw,
+        origin_x=int(origin[0]),
+        origin_y=int(origin[1]),
+    )
+
+
 def downscale_to_max(image: QImage, max_dimension: int) -> QImage:
     """Shrink ``image`` so its longer side is at most ``max_dimension`` pixels.
 

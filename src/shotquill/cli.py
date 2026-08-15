@@ -237,15 +237,15 @@ def _capture_image(
         # --auto synthesizes the wheel; resolve the scroller up front so an
         # unsupported platform (Wayland) fails fast (exit 4) before any capture.
         scroller = None
-        if getattr(args, "auto", False):
+        if getattr(args, "auto", False) and getattr(
+            capturer, "supports_repeated_region_capture", True
+        ):
             from shotquill import scroll
 
             scroller = scroll.get_scroller()
-        # The long-screenshot loop produces its own stitched QImage, so it
-        # bypasses the raw-pixel CaptureResult stage (and the masks/PII it carries,
-        # which --scrolling rejects up front). The frame count is dropped here so
-        # ``matched`` keeps its window-ambiguity meaning (1 = unambiguous).
-        image, target, _frames = headless.perform_scrolling_capture(
+        # The frame count is dropped here so ``matched`` keeps its window-
+        # ambiguity meaning (1 = unambiguous).
+        result, target, _frames = headless.perform_scrolling_capture(
             capturer,
             region,
             via="cli",
@@ -254,8 +254,8 @@ def _capture_image(
             scroller=scroller,
             scroll_clicks=args.scroll_clicks,
         )
-        return image, target, 1
-    if getattr(args, "interactive", False):
+        matched = 1
+    elif getattr(args, "interactive", False):
         # The compositor frames the shot and hands back the user's selection.
         # An enforcing allowlist refuses it (the picker can land on any window
         # or the whole screen — same contract as a fullscreen grab). An active
@@ -325,9 +325,8 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             )
 
     if args.scrolling:
-        # The long screenshot scrolls within a framed --region, so the other
-        # target modes contradict it, and the per-frame post-processing that runs
-        # on the raw CaptureResult stage isn't wired into the stitched path yet.
+        # The long screenshot scrolls within a framed --region, so the other target
+        # modes contradict it.
         if args.interactive:
             return _usage_error("--scrolling and --interactive cannot be combined")
         target_conflicts = _flags_set(
@@ -342,17 +341,6 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             )
         if not args.region:
             return _usage_error("--scrolling needs --region (the area to scroll within)")
-        # mask/reveal are repeatable lists, --redact-pii a flag, --session a string,
-        # so an empty/false value means "not given" — test truthiness, not None.
-        unsupported = _flags_set(
-            ("--mask", args.mask),
-            ("--reveal", args.reveal),
-            ("--redact-pii", args.redact_pii),
-            ("--session", args.session),
-            present=bool,
-        )
-        if unsupported:
-            return _usage_error("--scrolling does not support " + ", ".join(unsupported) + " yet")
         if args.max_height <= 0:
             return _usage_error("--max-height must be positive")
         if args.scroll_interval <= 0:

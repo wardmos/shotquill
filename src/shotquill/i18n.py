@@ -22,6 +22,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.smart": {"en": "Capture", "zh": "截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "menu.scrolling": {"en": "Long Screenshot", "zh": "长截图"},
+    "menu.scrolling_stop": {"en": "Stop Long Screenshot", "zh": "停止长截图"},
     "menu.open_folder": {"en": "Open Save Folder", "zh": "打开保存文件夹"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
@@ -52,8 +53,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "长截图需要先框选一个区域——请拖拽框出要滚动的范围。",
     },
     "notify.scrolling_unavailable": {
-        "en": "Auto-scroll isn't available here: {reason}",
-        "zh": "此环境无法自动滚动：{reason}",
+        "en": "Long screenshots aren't available here: {reason}",
+        "zh": "此环境无法进行长截图：{reason}",
+    },
+    "notify.scrolling_started": {
+        "en": "Long screenshot started. Press Esc or choose Stop Long Screenshot to cancel.",
+        "zh": "长截图已开始。按 Esc 或选择“停止长截图”即可取消。",
+    },
+    "notify.scrolling_cancelled": {
+        "en": "Long screenshot cancelled.",
+        "zh": "长截图已取消。",
+    },
+    "notify.scrolling_failed": {
+        "en": "Long screenshot stopped: {error}",
+        "zh": "长截图已停止：{error}",
     },
     "notify.allowlist_unreadable": {
         "en": "Your allowlist couldn't be read, so ShotQuill won't capture "

@@ -44,6 +44,8 @@ squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
 squill capture --reveal 40,12,180,20 -o shot.png # mosaic all but this rectangle
 squill capture --redact-pii -o shot.png   # OCR and mask likely PII before output
+squill capture --scrolling --auto --region 100,120,900,700 -o page.png # long screenshot
+squill capture --scrolling --region 100,120,900,700 -o page.png # manual wheel input
 squill window list --json                     # list windows, front-most first
 squill display list                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
@@ -60,6 +62,18 @@ The parts agents rely on:
   defaults to a private temp dir — pass `-o` to keep a shot. `--json` swaps
   the bare path for one JSON object (path, target, size, ambiguity count),
   and `--max-width` downscales before the image reaches a vision model.
+- **Stitch a scrollable region into one long capture.** `--scrolling` requires
+  `--region X,Y,W,H`; add `--auto` to drive the wheel, or omit it and scroll
+  the target by hand while the command samples. `--max-height`,
+  `--scroll-interval`, and `--scroll-clicks` bound/tune the run. The stitched
+  `CaptureResult` then follows the ordinary pipeline, so `--mask`, `--reveal`,
+  `--redact-pii`, `--session`, `--max-width`, and deterministic encoding all
+  compose normally. The MCP `capture` tool takes `scrolling` plus the three
+  tuning fields and always drives the wheel automatically. Every pair must have
+  a reliable overlap; a pointer/scrollbar-sized artifact is tolerated, while a
+  gap returns an explicit error instead of a corrupted-looking success.
+  Available on macOS, Windows, and X11. Wayland returns `unsupported` until
+  ShotQuill has a continuous ScreenCast/PipeWire backend.
 - **Byte-stable captures for tests.** `--deterministic` pins the embedded DPI
   and strips PNG timestamp/text chunks (and forces the cursor off), so identical
   pixels always encode to identical bytes — what a golden-image diff or content
@@ -272,9 +286,10 @@ or in `claude_desktop_config.json`:
 ```
 
 Twelve tools: **capture** (full screen / window by id or app+title / one
-monitor by `display` index / region; returns the image inline — pass
-`max_width` to downscale and save context; `save_path` optionally persists;
-`session` optionally files an observation frame), **window_list**,
+monitor by `display` index / region; `scrolling` plus a region drives and stitches
+a long capture; returns the image inline — pass `max_width` to downscale and save
+context; `save_path` optionally persists; `session` optionally files an
+observation frame), **window_list**,
 **display_list**, **ocr** (a file, or capture-and-recognize fully in memory so
 reading on-screen text costs no image tokens), **diff** (compare two images for
 golden-image checks), **doctor**, and the flight-recorder tools **session_start**

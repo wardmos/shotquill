@@ -99,6 +99,10 @@ class CaptureBlocked(HeadlessError):
     exit_code = EXIT_BLOCKED
 
 
+class ScrollingCaptureError(HeadlessError):
+    """Long capture stopped because consecutive frames could not be aligned."""
+
+
 class ImageInputTooLarge(HeadlessError):
     """The image the caller handed in (file or stdin) is past ``MAX_IMAGE_BYTES``.
 
@@ -489,7 +493,7 @@ def perform_scrolling_capture(
     scroll_clicks: int = SCROLL_CLICKS_DEFAULT,
     source=None,
     sleep=time.sleep,
-) -> tuple[QImage, str, int]:
+) -> tuple[CaptureResult, str, int]:
     """Capture a long screenshot by sampling ``region`` while the content scrolls.
 
     The loop grabs the region on a timer, drops samples that did not move, and
@@ -498,24 +502,32 @@ def perform_scrolling_capture(
     for ``settle`` samples (reached the bottom / the scroll stopped), when the
     stitched height would exceed ``max_height``, or at the ``max_frames`` safety cap.
 
-    With no ``scroller`` it is the manual path — the human scrolls, which is why it
-    works on every backend. Pass a ``scroller``
-    (:func:`shotquill.scroll.get_scroller`) and the loop turns the wheel
-    ``scroll_clicks`` notches between samples, walking the page itself; the actual
-    step is measured back from the frames, so the notch's pixel size need not be
-    known.
+    With no ``scroller`` it is the manual path — the human scrolls. Pass a
+    ``scroller`` (:func:`shotquill.scroll.get_scroller`) and the loop turns the
+    wheel ``scroll_clicks`` notches between samples. Either mode requires a backend
+    that can sample the same region repeatedly; the Wayland Screenshot portal only
+    brokers isolated stills and is rejected before it prompts. The actual scroll
+    step is measured from the frames, so the notch's pixel size need not be known.
 
     Like a fullscreen / region grab it captures a whole rectangle, so an enforcing
     allowlist refuses it (its "only these apps" contract cannot be honoured for a
     region of everything). A blocklisted window overlapping the region is redacted
     out of every sampled frame, exactly as it is for a one-shot region grab.
 
-    ``source`` (an iterable of ``QImage``) and ``sleep`` are injection points for
-    tests; in normal use the loop builds frames from ``capturer.capture_region``.
-    Returns ``(image, target, frame_count)`` to mirror :func:`perform_capture`.
+    ``source`` (an iterable of ``QImage`` or ``CaptureResult``) and ``sleep`` are
+    injection points for tests; in normal use the loop builds frames from
+    ``capturer.capture_region``. Returns ``(result, target, frame_count)`` to mirror
+    :func:`perform_capture` and keep all front-end post-processing available.
     """
-    from shotquill.imaging import result_to_qimage
-    from shotquill.stitch import ScrollAccumulator
+    from shotquill.imaging import qimage_to_result, result_to_qimage
+    from shotquill.stitch import ScrollAccumulator, StitchError
+
+    if not getattr(capturer, "supports_repeated_region_capture", True):
+        raise CapabilityUnsupported(
+            "scrolling capture",
+            "the Wayland Screenshot portal provides only a single still; "
+            "continuous capture needs ScreenCast/PipeWire support",
+        )
 
     if blocklist is None:
         blocklist = active_blocklist()
@@ -531,14 +543,25 @@ def perform_scrolling_capture(
 
     def _live_source():
         while True:
+            windows = None
+            if blocklist:
+                # Resolve policy before grabbing raw pixels; a failed enumeration
+                # must never degrade into an unredacted frame.
+                windows = _require_blocklist_enumeration(capturer, target, via=via)
             result = capturer.capture_region(region)
             if blocklist:
                 # Same protection as a one-shot region grab: paint out any
                 # blocklisted window overlapping the region before it is stitched.
                 result = _redact_blocked(
-                    result, capturer, blocklist, origin=(region.x, region.y), target=target, via=via
+                    result,
+                    capturer,
+                    blocklist,
+                    origin=(region.x, region.y),
+                    target=target,
+                    via=via,
+                    windows=windows,
                 )
-            yield result_to_qimage(result)
+            yield result
             if scroller is not None:
                 # Negative notches scroll down, revealing lower content — the new
                 # rows the stitcher appends below what is already on the canvas.
@@ -548,11 +571,38 @@ def perform_scrolling_capture(
     frames_iter = iter(source) if source is not None else _live_source()
 
     accumulator = ScrollAccumulator(max_height=max_height, settle=settle, max_frames=max_frames)
-    for img in frames_iter:
-        if not accumulator.add(img):
-            break
+    scale: float | None = None
+    try:
+        for frame in frames_iter:
+            if isinstance(frame, CaptureResult):
+                if scale is None:
+                    scale = frame.scale
+                elif frame.scale != scale:
+                    raise ScrollingCaptureError(
+                        "capture scale changed while scrolling; the frames cannot be aligned"
+                    )
+                image = result_to_qimage(frame)
+            else:
+                image = frame
+                if scale is None:
+                    scale = 1.0
+            try:
+                keep_sampling = accumulator.add(image)
+            except StitchError as exc:
+                raise ScrollingCaptureError(str(exc)) from exc
+            if not keep_sampling:
+                break
+    finally:
+        close = getattr(scroller, "close", None)
+        if callable(close):
+            close()
 
-    return accumulator.result(), target, accumulator.frame_count
+    stitched = accumulator.result()
+    result = qimage_to_result(
+        stitched, scale if scale is not None else 1.0, origin=(region.x, region.y)
+    )
+
+    return result, target, accumulator.frame_count
 
 
 def perform_capture(

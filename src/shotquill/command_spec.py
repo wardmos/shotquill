@@ -282,10 +282,11 @@ REGISTRY: tuple[Command, ...] = (
         mcp_name="capture",
         mcp_description=(
             "Take a screenshot of the full screen (default), one window (by window_id, or "
-            "by app/title match), one monitor (by display index), or a region. Returns the "
-            "image plus a JSON metadata text block. Use max_width (e.g. 1024) to downscale "
-            "large screens and save context. Pass session (a handle from session_start) to "
-            "also file this capture as an observation frame in that recording."
+            "by app/title match), one monitor (by display index), or a region. Set scrolling "
+            "with a region to drive the wheel and stitch a long screenshot. Returns the image "
+            "plus a JSON metadata text block. Use max_width (e.g. 1024) to downscale large "
+            "screens and save context. Pass session (a handle from session_start) to also file "
+            "this capture as an observation frame in that recording."
         ),
         mcp_annotations={"title": "Take a screenshot", "openWorldHint": False},
         params=(
@@ -304,12 +305,12 @@ REGISTRY: tuple[Command, ...] = (
                 "frames into one tall image (manual scroll, or --auto to drive the wheel; stops "
                 "when the view settles or --max-height is reached)",
                 kind="flag",
-                cli_only=True,
+                mcp_help=("With region, drive the wheel and stitch a long screenshot."),
             ),
             Param(
                 "auto",
                 "with --scrolling, drive the scroll automatically by synthesizing the mouse "
-                "wheel (not on Wayland, which blocks synthetic input — scroll manually there). "
+                "wheel (unavailable on Wayland until a ScreenCast/PipeWire capture path exists). "
                 "Point at the area to scroll before it starts.",
                 kind="flag",
                 cli_only=True,
@@ -321,7 +322,7 @@ REGISTRY: tuple[Command, ...] = (
                 kind="int",
                 metavar="PX",
                 default=SCROLL_MAX_HEIGHT_DEFAULT,
-                cli_only=True,
+                mcp_help="Maximum stitched image height in pixels.",
             ),
             Param(
                 "scroll_interval",
@@ -330,7 +331,7 @@ REGISTRY: tuple[Command, ...] = (
                 kind="float",
                 metavar="SEC",
                 default=SCROLL_INTERVAL_DEFAULT,
-                cli_only=True,
+                mcp_help="Seconds to wait between automatic scroll samples.",
             ),
             Param(
                 "scroll_clicks",
@@ -338,7 +339,7 @@ REGISTRY: tuple[Command, ...] = (
                 kind="int",
                 metavar="N",
                 default=SCROLL_CLICKS_DEFAULT,
-                cli_only=True,
+                mcp_help="Mouse-wheel notches to turn between automatic samples.",
             ),
             Param(
                 "output",

@@ -1989,9 +1989,13 @@ def test_make_editor_uses_framed_window_on_wayland(qapp, config, fakes, monkeypa
 class _FakeScroller:
     def __init__(self):
         self.calls = []
+        self.closed = 0
 
     def scroll(self, clicks, *, at=None):
         self.calls.append((clicks, at))
+
+    def close(self):
+        self.closed += 1
 
 
 def _scroll_results(width, frame_h, offsets):
@@ -2041,6 +2045,7 @@ def test_scrolling_region_collects_frames_and_delivers(qapp, config, fakes, monk
     assert delivered[0].height() == 50  # 30 + 10 + 10 stitched
     assert scroller.calls  # the wheel was turned to advance the page
     assert all(clicks < 0 for clicks, _at in scroller.calls)  # downward
+    assert scroller.closed == 1  # pointer/input resources restored
     assert app._scroll is None  # state torn down after delivery
     app.shutdown()
 
@@ -2094,4 +2099,145 @@ def test_scrolling_needs_region_notifies(qapp, config, fakes, monkeypatch):
     app._scrolling_needs_region(5, QRect(0, 0, 2, 2))  # window_selected shape
     app._scrolling_needs_region()  # fullscreen_selected shape
     assert len(notified) == 2
+    app.shutdown()
+
+
+def test_scrolling_menu_reports_unavailable_on_wayland_instead_of_taking_one_shot(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    portal_calls = []
+    monkeypatch.setattr(
+        app_module.headless,
+        "perform_interactive_capture",
+        lambda *args, **kwargs: portal_calls.append(True),
+    )
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._capture_scrolling()
+
+    assert not portal_calls
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_fails_closed_before_capture_when_blocklist_cannot_be_checked(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    active = bl.Blocklist(rules=(bl.BlockRule(name="secret"),))
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app, "_load_blocklist_or_abort", lambda: active)
+    monkeypatch.setattr(app_module, "get_scroller", _FakeScroller)
+    captures = []
+    monkeypatch.setattr(
+        fakes[0],
+        "capture_region",
+        lambda region: captures.append(region) or _scroll_results(10, 30, (0,))[0],
+    )
+
+    def _cannot_list():
+        raise RuntimeError("window server unavailable")
+
+    monkeypatch.setattr(fakes[0], "list_windows", _cannot_list)
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *args, **kwargs: delivered.append(args))
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._scrolling_tick()
+
+    assert not captures  # policy is checked before raw pixels are grabbed
+    assert not delivered
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_keeps_settings_shelved_until_session_ends(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    monkeypatch.setattr(app_module, "get_scroller", _FakeScroller)
+    app._open_settings()
+    dialog = app._settings_dialog
+    app._shelve_settings_dialog()
+    assert not dialog.isVisible()
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._unshelve_settings_dialog()  # overlay destruction callback
+    assert not dialog.isVisible()
+
+    scroller = app._scroll.scroller
+    app._end_scrolling()
+    assert dialog.isVisible()
+    assert scroller.closed == 1
+    app.shutdown()
+
+
+def test_scrolling_runtime_input_failure_stops_and_notifies(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    class _FailingScroller(_FakeScroller):
+        def scroll(self, clicks, *, at=None):
+            raise RuntimeError("input permission revoked")
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app_module, "get_scroller", _FailingScroller)
+    monkeypatch.setattr(fakes[0], "capture_region", lambda region: _scroll_results(10, 30, (0,))[0])
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._scrolling_tick()
+
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_action_retrigger_cancels_active_session(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    scroller = _FakeScroller()
+    monkeypatch.setattr(app_module, "get_scroller", lambda: scroller)
+    opened = []
+    monkeypatch.setattr(app, "_open_smart_overlay", lambda **kwargs: opened.append(kwargs))
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    app._capture_scrolling()
+
+    assert app._scroll is None
+    assert scroller.closed == 1
+    assert not opened
+    app.shutdown()
+
+
+def test_escape_cancels_active_scrolling_session(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QEvent, QRect
+    from PySide6.QtGui import QImage, QKeyEvent
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    scroller = _FakeScroller()
+    monkeypatch.setattr(app_module, "get_scroller", lambda: scroller)
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    assert app.eventFilter(app, event) is True
+    assert app._scroll is None
+    assert scroller.closed == 1
     app.shutdown()

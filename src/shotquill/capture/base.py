@@ -117,6 +117,10 @@ class ScreenCapturer(ABC):
     """
 
     include_cursor: bool = False
+    # Backends that broker isolated still images (the Wayland Screenshot portal)
+    # override this so long capture fails before prompting for a sequence of
+    # unrelated one-shot screenshots.
+    supports_repeated_region_capture: bool = True
 
     @abstractmethod
     def capture_fullscreen(self, exclude_window_ids: frozenset[int] = frozenset()) -> CaptureResult:

@@ -63,6 +63,9 @@ extract text, copy, save, or pin the result without breaking your flow.
     (Settings → *Highlight window after*, off by default) fully highlights a
     window first, lifting its pixels out from under any overlap.
   - **Full screen** (`⌥S`) — every display at once, instantly.
+- **Long screenshots** — frame a scrollable region and let ShotQuill drive the
+  wheel, align overlapping frames, and open one tall result. Available from the
+  tray, CLI, and MCP on macOS, Windows, and X11.
 - **Configurable after-capture flow** — open the annotation editor by default, or
   make captures hands-free by auto-saving, auto-copying, or both.
 - **Annotation editor** — rectangle, rounded-rectangle, and ellipse spotlights
@@ -97,7 +100,7 @@ extract text, copy, save, or pin the result without breaking your flow.
 | --- | --- | --- |
 | **macOS 13+** | Full GUI, smart capture, editor, global hotkeys, window enumeration, on-device OCR, CLI / MCP | Primary and most complete platform; ScreenCaptureKit capture on macOS 14+, with a CoreGraphics fallback on macOS 13. |
 | **Linux / X11** | Full GUI, editor, CLI / MCP, window enumeration, global hotkeys, blocklist redaction | OCR requires Tesseract and the desired language packs. |
-| **Linux / Wayland** | GUI and editor; capture for GUI / CLI / MCP uses `xdg-desktop-portal` and the compositor's picker | No window enumeration by design; global hotkeys require GlobalShortcuts portal support. |
+| **Linux / Wayland** | GUI and editor; capture for GUI / CLI / MCP uses `xdg-desktop-portal` and the compositor's picker | No window enumeration by design; global hotkeys require GlobalShortcuts portal support. Long screenshots need a future ScreenCast/PipeWire stream backend and currently return an explicit unsupported error. |
 | **Windows** | GUI, editor, CLI / MCP, Win32 window enumeration, global hotkeys, launch at login | Release ZIP is x64 and omits OCR; the experimental WinRT backend requires the `windows-ocr` extra in a pip install. |
 
 ---
@@ -243,6 +246,36 @@ on macOS, text labels on Linux/Windows).
 > raises a notification so you can use the tray menu, or bind a compositor-level
 > shortcut to `squill capture` (full screen) / `squill capture --interactive`
 > (the compositor's own picker frames a window, region, or screen).
+
+### Long screenshots
+
+Choose **Long Screenshot** from the tray, then drag around the scrollable viewport.
+ShotQuill moves the pointer into that region, drives the wheel, and aligns each
+overlapping frame into one tall image. The tray action shows the kept-frame count
+and becomes **Stop Long Screenshot** while capture is active; press `Esc` or choose
+that action to cancel. The pointer is restored when the run finishes or stops.
+
+```bash
+squill capture --scrolling --auto --region 100,120,900,700 -o page.png
+squill capture --scrolling --region 100,120,900,700 -o page.png  # scroll by hand
+```
+
+`--max-height`, `--scroll-interval`, and `--scroll-clicks` bound/tune the run.
+The normal capture pipeline still applies after stitching, including `--mask`,
+`--reveal`, `--redact-pii`, `--session`, `--max-width`, and deterministic output.
+The MCP `capture` tool exposes `scrolling`, `max_height`, `scroll_interval`, and
+`scroll_clicks`; MCP scrolling is automatic because a tool call cannot pause for
+interactive wheel input.
+
+Consecutive frames must overlap. Small fixed-position artifacts such as the pointer
+or scrollbar are tolerated, but ShotQuill stops with an explicit error instead of
+silently producing a plausible image with missing content when it cannot establish
+a reliable overlap. An enabled allowlist refuses region-based long capture; an
+active blocklist is checked before every grab and matching windows are redacted.
+
+Long screenshots currently work on macOS, Windows, and X11. Wayland's Screenshot
+portal brokers isolated stills, not a continuous stream, so ShotQuill reports the
+feature as unsupported there until a ScreenCast/PipeWire backend is implemented.
 
 ### What happens after a capture
 
@@ -823,7 +856,7 @@ installed with pip.
 
 ## Roadmap
 
-- [ ] Scrolling / long-page capture
+- [x] Scrolling / long-page capture (macOS, Windows, and X11; Wayland stream backend pending)
 
 Completed work is summarized in [Highlights](#highlights) and the platform
 sections above; version-by-version changes are available in

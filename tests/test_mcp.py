@@ -173,6 +173,10 @@ def test_tools_list_descriptors():
     capture_schema = tools["capture"]["inputSchema"]
     assert "window_id" in capture_schema["properties"]
     assert "display" in capture_schema["properties"]
+    assert {"scrolling", "max_height", "scroll_interval", "scroll_clicks"} <= capture_schema[
+        "properties"
+    ].keys()
+    assert "auto" not in capture_schema["properties"]
     assert capture_schema["additionalProperties"] is False
     assert "path" in tools["ocr"]["inputSchema"]["properties"]
 
@@ -264,6 +268,108 @@ def test_capture_returns_image_and_metadata(fake_capturer, isolated_audit):
     ]
     assert entry["via"] == "mcp"
     assert entry["dest"] == "inline"
+
+
+def test_capture_scrolling_drives_shared_long_capture(fake_capturer, monkeypatch):
+    from shotquill import scroll
+
+    scroller = object()
+    seen = {}
+    monkeypatch.setattr(scroll, "get_scroller", lambda: scroller)
+
+    def _scroll_capture(capturer, region, **kwargs):
+        seen["capturer"] = capturer
+        seen["region"] = region
+        seen.update(kwargs)
+        return fake_capturer._result(), "scrolling region", 4
+
+    monkeypatch.setattr(headless, "perform_scrolling_capture", _scroll_capture)
+    result = call(
+        "capture",
+        {
+            "scrolling": True,
+            "region": {"x": 1, "y": 2, "width": 30, "height": 40},
+            "max_height": 1234,
+            "scroll_interval": 0.2,
+            "scroll_clicks": 2,
+        },
+    )["result"]
+
+    assert result["isError"] is False
+    meta = json.loads(result["content"][1]["text"])
+    assert meta["target"] == "scrolling region"
+    assert seen["capturer"] is fake_capturer
+    assert seen["region"] == Rect(1, 2, 30, 40)
+    assert seen["max_height"] == 1234
+    assert seen["interval"] == 0.2
+    assert seen["scroll_clicks"] == 2
+    assert seen["scroller"] is scroller
+    assert fake_capturer.calls == []
+
+
+def test_capture_scrolling_requires_region_before_backend_access(fake_capturer):
+    result = call("capture", {"scrolling": True})["result"]
+
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "invalid_arguments"
+    assert "requires region" in payload["error"]
+    assert fake_capturer.calls == []
+
+
+@pytest.mark.parametrize(
+    ("key", "bad"),
+    [
+        ("max_height", 0),
+        ("max_height", True),
+        ("scroll_interval", 0),
+        ("scroll_interval", "0.2"),
+        ("scroll_clicks", -1),
+        ("scroll_clicks", 1.5),
+    ],
+)
+def test_capture_scrolling_rejects_invalid_controls(fake_capturer, key, bad):
+    result = call(
+        "capture",
+        {
+            "scrolling": True,
+            "region": {"x": 0, "y": 0, "width": 10, "height": 10},
+            key: bad,
+        },
+    )["result"]
+
+    assert result["isError"] is True
+    assert json.loads(result["content"][0]["text"])["type"] == "invalid_arguments"
+    assert fake_capturer.calls == []
+
+
+def test_capture_scrolling_wayland_still_portal_is_unsupported_before_input(
+    monkeypatch,
+):
+    from shotquill import scroll
+
+    capturer = FakeCapturer()
+    capturer.supports_repeated_region_capture = False
+    monkeypatch.setattr(headless, "get_capturer", lambda include_cursor=False: capturer)
+    monkeypatch.setattr(
+        scroll,
+        "get_scroller",
+        lambda: pytest.fail("input synthesis must not start for a single-still backend"),
+    )
+
+    result = call(
+        "capture",
+        {
+            "scrolling": True,
+            "region": {"x": 0, "y": 0, "width": 10, "height": 10},
+        },
+    )["result"]
+
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["type"] == "unsupported"
+    assert "single still" in payload["error"]
+    assert capturer.calls == []
 
 
 def test_capture_redact_pii_masks_the_matched_box(fake_capturer, monkeypatch):

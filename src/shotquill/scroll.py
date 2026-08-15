@@ -2,17 +2,17 @@
 # Copyright (C) 2026 wardmos
 """Synthesize mouse-wheel scrolling for the automatic long-screenshot path.
 
-Phase 1's long screenshot has the human scroll; this drives the wheel itself so a
-single ``squill capture --scrolling --auto`` walks down a page unattended. It
-leans on ``pynput`` — already a dependency for global hotkeys — whose mouse
-controller wraps the platform's native event synthesis (Quartz on macOS, SendInput
-on Windows, XTest on X11), so one implementation covers all three rather than a
-hand-rolled backend each.
+This drives the wheel so a single ``squill capture --scrolling --auto`` (or MCP
+``capture`` with ``scrolling``) walks down a page unattended. It leans on
+``pynput`` — already a dependency for global hotkeys — whose mouse controller wraps
+the platform's native event synthesis (Quartz on macOS, SendInput on Windows, XTest
+on X11), so one implementation covers all three rather than a hand-rolled backend
+each.
 
-Wayland is the deliberate gap: the compositor refuses synthetic input out of band
-(the same reason global hotkeys are blocked there), so :func:`get_scroller` raises
-:class:`shotquill.headless.CapabilityUnsupported` and the user falls back to plain
-``--scrolling`` and their own scroll wheel.
+Wayland is the deliberate gap: its Screenshot portal provides isolated stills and
+the compositor refuses synthetic input. Until a ScreenCast/PipeWire stream backend
+exists, :func:`get_scroller` raises
+:class:`shotquill.headless.CapabilityUnsupported`.
 
 ``pynput.mouse`` is imported lazily inside the backend, never at module load, so
 this module stays importable on a headless box without a mouse backend (the test
@@ -35,6 +35,10 @@ class Scroller(ABC):
         wheel events land on the region being captured rather than wherever the
         pointer happened to rest."""
 
+    def close(self) -> None:
+        """Release input state after capture (no-op for stateless backends)."""
+        return None
+
 
 class PynputScroller(Scroller):
     """The real backend: pynput's cross-platform mouse controller."""
@@ -43,24 +47,32 @@ class PynputScroller(Scroller):
         from pynput.mouse import Controller
 
         self._mouse = Controller()
+        self._initial_position = tuple(self._mouse.position)
 
     def scroll(self, clicks: int, *, at: tuple[int, int] | None = None) -> None:
         if at is not None:
             self._mouse.position = at
         self._mouse.scroll(0, clicks)
 
+    def close(self) -> None:
+        initial = self._initial_position
+        self._initial_position = None
+        if initial is not None:
+            self._mouse.position = initial
+
 
 def get_scroller() -> Scroller:
     """Return the platform scroller, or refuse on Wayland.
 
-    Wayland blocks out-of-band synthetic input, so auto-scroll is unavailable
-    there by design — distinct from a failure, so the caller (and an agent) can
-    stop retrying and fall back to manual ``--scrolling``."""
+    Wayland blocks both the repeated out-of-band capture and synthetic input this
+    workflow needs. The typed refusal lets callers stop retrying and explain that
+    a ScreenCast/PipeWire backend is required."""
     from shotquill.headless import CapabilityUnsupported, _is_wayland_session
 
     if _is_wayland_session():
         raise CapabilityUnsupported(
             "auto-scroll",
-            "Wayland blocks synthetic input; scroll the page yourself with plain --scrolling",
+            "Wayland long screenshots need continuous ScreenCast/PipeWire capture "
+            "and synthetic input support",
         )
     return PynputScroller()
