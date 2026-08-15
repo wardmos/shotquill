@@ -139,6 +139,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Tools
     "tool.select": {"en": "Select", "zh": "选择"},
     "tool.rect": {"en": "Rectangle", "zh": "矩形"},
+    "tool.rounded_rect": {"en": "Rounded rectangle", "zh": "圆角矩形"},
     "tool.ellipse": {"en": "Ellipse", "zh": "圆"},
     "tool.arrow": {"en": "Arrow", "zh": "箭头"},
     "tool.line": {"en": "Line", "zh": "直线"},
@@ -147,6 +148,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "tool.mosaic": {"en": "Mosaic", "zh": "马赛克"},
     "tool.text": {"en": "Text", "zh": "文字"},
     # Toolbar controls
+    "toolbar.spotlight": {"en": "Spotlight", "zh": "聚光"},
     "toolbar.color": {"en": "Color", "zh": "颜色"},
     "toolbar.width": {"en": "Width ", "zh": "粗细 "},
     "toolbar.font_size": {"en": "Font size ", "zh": "字号 "},

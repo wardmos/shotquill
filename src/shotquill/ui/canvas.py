@@ -41,6 +41,8 @@ from shotquill.ui._debug import crop_log
 from shotquill.ui.geometry import crop_edge_hits
 from shotquill.ui.items.arrow import ArrowItem
 from shotquill.ui.items.mosaic import MosaicItem
+from shotquill.ui.items.rounded_rect import RoundedRectItem
+from shotquill.ui.items.spotlight import SpotlightOverlayItem, SpotlightRegionItem
 from shotquill.ui.tools import Tool
 
 if TYPE_CHECKING:
@@ -52,6 +54,7 @@ _DEFAULT_COLOR = "#ff3b30"
 _DEFAULT_WIDTH = 4
 _DEFAULT_FONT_SIZE = 32
 _NEGLIGIBLE = 3.0
+_SHAPE_TOOLS = (Tool.RECT, Tool.ROUNDED_RECT, Tool.ELLIPSE)
 # Keys the editor window uses to adjust the crop region; the canvas must not
 # swallow them (QGraphicsView would scroll, uselessly — scrollbars are off).
 _CROP_ADJUST_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
@@ -168,6 +171,9 @@ class AnnotationCanvas(QGraphicsView):
         self._background = self._scene.addPixmap(background)
         self._background.setZValue(-1000)
         self._scene.setSceneRect(QRectF(background.rect()))
+        self._spotlight_overlay = SpotlightOverlayItem(self._scene.sceneRect())
+        self._spotlight_overlay.setZValue(self._background.zValue() + 1)
+        self._scene.addItem(self._spotlight_overlay)
 
         self.setRenderHint(QPainter.Antialiasing)
         self.setMouseTracking(True)
@@ -177,6 +183,7 @@ class AnnotationCanvas(QGraphicsView):
         self._color = QColor(_DEFAULT_COLOR)
         self._width = _DEFAULT_WIDTH
         self._font_size = _DEFAULT_FONT_SIZE
+        self._shape_spotlight_enabled = False
         self._z = 0.0
         self._temp_item: QGraphicsItem | None = None
         self._last_hit_item: QGraphicsItem | None = None
@@ -230,12 +237,15 @@ class AnnotationCanvas(QGraphicsView):
         self._background_pixmap = background
         self._background.setPixmap(background)
         self._scene.setSceneRect(QRectF(background.rect()))
+        self._spotlight_overlay.set_scene_rect(self._scene.sceneRect())
 
     def is_pristine(self) -> bool:
-        """True while nothing has been annotated: no undo history, no text edit
-        ever started, and nothing on the scene beyond the background screenshot
-        (an uncommitted text item counts as an annotation)."""
-        return not self._text_started and self._undo.count() == 0 and len(self._scene.items()) == 1
+        """True while no user annotation has started.
+
+        The permanent spotlight overlay is scene infrastructure, not an
+        annotation; an uncommitted text or spotlight region still counts.
+        """
+        return not self._text_started and self._undo.count() == 0 and not self._annotation_items()
 
     def color(self) -> QColor:
         return QColor(self._color)
@@ -256,6 +266,12 @@ class AnnotationCanvas(QGraphicsView):
 
     def set_color(self, color: QColor) -> None:
         self._color = QColor(color)
+
+    def shape_spotlight_enabled(self) -> bool:
+        return self._shape_spotlight_enabled
+
+    def set_shape_spotlight_enabled(self, enabled: bool) -> None:
+        self._shape_spotlight_enabled = bool(enabled)
 
     def set_width(self, width: int) -> None:
         self._width = max(1, int(width))
@@ -354,14 +370,18 @@ class AnnotationCanvas(QGraphicsView):
         return [
             item
             for item in self._scene.items()
-            if item is not self._background and item.scene() is self._scene
+            if item is not self._background
+            and item is not self._spotlight_overlay
+            and item.scene() is self._scene
         ]
 
     def _selected_annotation_items(self) -> list[QGraphicsItem]:
         return [
             item
             for item in self._scene.selectedItems()
-            if item is not self._background and item.scene() is self._scene
+            if item is not self._background
+            and item is not self._spotlight_overlay
+            and item.scene() is self._scene
         ]
 
     def _delete_fallback_item(self) -> QGraphicsItem | None:
@@ -379,7 +399,9 @@ class AnnotationCanvas(QGraphicsView):
         if not self.viewport().rect().contains(pos):
             return None
         item = self.itemAt(pos)
-        return item if item is not self._background else None
+        if item is self._background or item is self._spotlight_overlay:
+            return None
+        return item
 
     def _annotation_item_at_view_pos(self, pos) -> QGraphicsItem | None:
         scene_pos = self.mapToScene(pos)
@@ -539,14 +561,24 @@ class AnnotationCanvas(QGraphicsView):
             path_item = QGraphicsPathItem(self._path)
             path_item.setPen(self._pen(highlighter=tool == Tool.HIGHLIGHTER))
             item = path_item
-        elif tool == Tool.RECT:
-            rect_item = QGraphicsRectItem(QRectF(self._start, self._start))
-            rect_item.setPen(self._pen())
-            item = rect_item
-        elif tool == Tool.ELLIPSE:
-            ellipse_item = QGraphicsEllipseItem(QRectF(self._start, self._start))
-            ellipse_item.setPen(self._pen())
-            item = ellipse_item
+        elif tool in _SHAPE_TOOLS:
+            if self._shape_spotlight_enabled:
+                shape_item = SpotlightRegionItem(
+                    self._spotlight_overlay,
+                    ellipse=tool == Tool.ELLIPSE,
+                    rounded=tool == Tool.ROUNDED_RECT,
+                )
+            elif tool == Tool.RECT:
+                shape_item = QGraphicsRectItem()
+                shape_item.setPen(self._pen())
+            elif tool == Tool.ROUNDED_RECT:
+                shape_item = RoundedRectItem()
+                shape_item.setPen(self._pen())
+            else:
+                shape_item = QGraphicsEllipseItem()
+                shape_item.setPen(self._pen())
+            shape_item.setRect(QRectF(self._start, self._start))
+            item = shape_item
         elif tool == Tool.LINE:
             line_item = QGraphicsLineItem(QLineF(self._start, self._start))
             line_item.setPen(self._pen())
@@ -583,7 +615,7 @@ class AnnotationCanvas(QGraphicsView):
             self._path.lineTo(pos)
             self._last_path_pos = QPointF(pos)
             self._temp_item.setPath(self._path)
-        elif tool in (Tool.RECT, Tool.ELLIPSE):
+        elif tool in _SHAPE_TOOLS:
             self._temp_item.setRect(QRectF(self._start, pos).normalized())
         elif tool in (Tool.LINE, Tool.ARROW):
             self._temp_item.setLine(QLineF(self._start, pos))
@@ -630,6 +662,8 @@ class AnnotationCanvas(QGraphicsView):
             self._mosaic_rect = None
 
         if self._is_negligible(item):
+            if isinstance(item, SpotlightRegionItem):
+                self._spotlight_overlay.remove_region(item)
             self._scene.removeItem(item)
             if self._is_click_release(event.position().toPoint()):
                 self._select_annotation_item(self._press_hit_item)
@@ -730,7 +764,7 @@ class AnnotationCanvas(QGraphicsView):
 
     @staticmethod
     def _is_negligible(item: QGraphicsItem) -> bool:
-        if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+        if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, RoundedRectItem)):
             rect = item.rect()
             return rect.width() < _NEGLIGIBLE and rect.height() < _NEGLIGIBLE
         if isinstance(item, QGraphicsLineItem):  # also covers ArrowItem

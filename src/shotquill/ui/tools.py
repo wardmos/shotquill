@@ -10,6 +10,7 @@ from enum import Enum, auto
 class Tool(Enum):
     SELECT = auto()
     RECT = auto()
+    ROUNDED_RECT = auto()
     ELLIPSE = auto()
     ARROW = auto()
     LINE = auto()

@@ -38,6 +38,7 @@ RESERVED_SHORTCUTS: tuple[QKeySequence.StandardKey, ...] = (
 _TOOLS: list[tuple[str, Tool, str]] = [
     ("tool.select", Tool.SELECT, "select"),
     ("tool.rect", Tool.RECT, "rect"),
+    ("tool.rounded_rect", Tool.ROUNDED_RECT, "rounded_rect"),
     ("tool.ellipse", Tool.ELLIPSE, "ellipse"),
     ("tool.arrow", Tool.ARROW, "arrow"),
     ("tool.line", Tool.LINE, "line"),
@@ -70,7 +71,7 @@ _ICON_SIZES: dict[str, int] = {
     "text": ICON_SIZE,
 }
 
-# Pack the bar tighter than the platform default: with sixteen buttons the
+# Pack the bar tighter than the platform default: with many buttons the
 # per-button padding plus the inter-item spacing and fat separators add up,
 # and once the row no longer fits the shot's width Qt hides the overflow
 # behind an extension chevron the user has to click open. Zeroing the
@@ -144,6 +145,7 @@ def create_toolbar(
     toolbar.setMovable(False)
     group = QActionGroup(toolbar)
     group.setExclusive(True)
+    tool_actions: list[QAction] = []
 
     for key, tool, icon in _TOOLS:
         action = QAction(sized_icon(icon), t(key), toolbar)
@@ -151,9 +153,21 @@ def create_toolbar(
         action.setChecked(tool == Tool.SELECT)
         action.triggered.connect(lambda _checked=False, bound=tool: canvas.set_tool(bound))
         group.addAction(action)
+        tool_actions.append(action)
         toolbar.addAction(action)
 
+    toolbar.tool_actions = tuple(tool_actions)
+
     toolbar.addSeparator()
+
+    # Shape and appearance are independent: spotlight sits with color and size,
+    # outside the mutually exclusive drawing-tool group above.
+    spotlight_action = QAction(sized_icon("spotlight"), t("toolbar.spotlight"), toolbar)
+    spotlight_action.setCheckable(True)
+    spotlight_action.setChecked(canvas.shape_spotlight_enabled())
+    spotlight_action.toggled.connect(canvas.set_shape_spotlight_enabled)
+    toolbar.addAction(spotlight_action)
+    toolbar.spotlight_action = spotlight_action
 
     # The macOS native colour panel can remain behind the frameless always-on-top
     # editor.  Never combine that panel with window modality: an invisible modal
