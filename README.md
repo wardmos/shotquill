@@ -249,11 +249,19 @@ on macOS, text labels on Linux/Windows).
 
 ### Long screenshots
 
-Choose **Long Screenshot** from the tray, then drag around the scrollable viewport.
+First focus the target and move it to the desired starting position. Choose
+**Long Screenshot** from the tray; its dedicated overlay stays dim and tells you
+to drag around the scrollable viewport. A plain click is ignored instead of
+selecting a window or closing the overlay. Releasing the drag starts automatically:
 ShotQuill moves the pointer into that region, drives the wheel, and aligns each
-overlapping frame into one tall image. The tray action shows the kept-frame count
-and becomes **Stop Long Screenshot** while capture is active; press `Esc` or choose
-that action to cancel. The pointer is restored when the run finishes or stops.
+overlapping frame into one tall image.
+
+While capture is active, the tray tooltip shows the kept-frame count and the menu
+action becomes **Stop Long Screenshot**; use that action to cancel. `Esc` cancels
+the selection overlay before capture starts. The pointer is restored when the run
+finishes or stops. If the target does not respond to wheel input, ShotQuill now
+stops after a few seconds with an explicit “no scrolling was detected” error
+instead of opening an ordinary one-frame screenshot.
 
 ```bash
 squill capture --scrolling --auto --region 100,120,900,700 -o page.png

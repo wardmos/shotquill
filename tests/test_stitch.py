@@ -222,6 +222,19 @@ def test_accumulator_waits_for_motion_after_initial_still_frames():
     assert acc.result().height() == 40
 
 
+def test_accumulator_reports_when_scrolling_never_starts():
+    page = _image(10, _tall(10, 30))
+    acc = ScrollAccumulator(max_height=1000, settle=3, max_frames=20, start_frames=3)
+
+    assert acc.add(page) is True
+    assert acc.add(page) is True
+    with pytest.raises(StitchError, match="no scrolling was detected"):
+        acc.add(page)
+
+    assert acc.done is True
+    assert acc.frame_count == 1
+
+
 def test_accumulator_rejects_a_missing_overlap_instead_of_duplicating_frames():
     page = _image(10, _tall(10, 100))
     acc = _acc()

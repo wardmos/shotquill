@@ -45,7 +45,7 @@ from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
 from shotquill.scroll import get_scroller
-from shotquill.stitch import ScrollAccumulator, StitchError
+from shotquill.stitch import NoScrollingDetected, ScrollAccumulator, StitchError
 from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
@@ -332,8 +332,10 @@ class ShotquillApp(QObject):
         if active:
             frames = self._scroll.accumulator.frame_count if self._scroll is not None else 0
             action.setText(f"{t('menu.scrolling_stop')} · {frames}")
+            self._tray.setToolTip(t("tray.scrolling_progress").format(frames=frames))
         else:
             action.setText(t("menu.scrolling"))
+            self._tray.setToolTip("ShotQuill")
 
     def _request_quit(self) -> None:
         """Keep the app alive until the uninstall coordinator is ready."""
@@ -574,20 +576,18 @@ class ShotquillApp(QObject):
             screenshot,
             geometry,
             windows,
-            window_preview=self._window_preview_image,
+            window_preview=None if scrolling else self._window_preview_image,
             hover_switch_delay_ms=self._config.hover_switch_delay_ms(),
+            region_only=scrolling,
         )
         # Region captures carry the full screenshot along so the editor can
         # keep the crop adjustable (arrow-key nudging) until annotation starts.
         # Region and full-screen go through guarded handlers that refuse the
         # grab when the allowlist is on (only specific apps may be captured).
         if scrolling:
-            # A long screenshot only makes sense for a dragged region — that frames
-            # the scroll area. A window/full-screen pick can't, so it just asks the
-            # user to drag instead.
+            # The overlay itself is region-only: clicks stay in place and its
+            # persistent prompt explains that releasing a drag starts the run.
             overlay.region_selected.connect(self._scrolling_region_selected)
-            overlay.window_selected.connect(self._scrolling_needs_region)
-            overlay.fullscreen_selected.connect(self._scrolling_needs_region)
         else:
             overlay.region_selected.connect(self._smart_region_selected)
             overlay.window_selected.connect(self._capture_window_image)
@@ -739,6 +739,7 @@ class ShotquillApp(QObject):
                 max_height=headless.SCROLL_MAX_HEIGHT_DEFAULT,
                 settle=headless.SCROLL_SETTLE_DEFAULT,
                 max_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
+                start_frames=headless.SCROLL_AUTO_START_FRAMES_DEFAULT,
             ),
             scroller=scroller,
             rect=Rect(rect.x(), rect.y(), rect.width(), rect.height()),
@@ -783,6 +784,11 @@ class ShotquillApp(QObject):
                 )
                 return
             stitched = session.accumulator.result()
+        except NoScrollingDetected:
+            _LOG.exception("op=%s scrolling did not start", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_no_motion"))
+            return
         except StitchError as exc:
             _LOG.exception("op=%s scrolling stitch failed", session.operation_id)
             self._end_scrolling()

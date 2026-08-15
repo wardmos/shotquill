@@ -469,6 +469,10 @@ SCROLL_INTERVAL_DEFAULT = 0.4
 # Consecutive unchanged samples that mean "the scroll has stopped" (reached the
 # bottom, or the user let go) — the signal to finish and stitch.
 SCROLL_SETTLE_DEFAULT = 3
+# Manual capture gives the user time to begin moving the page. Automatic capture
+# should fail much sooner when the target ignores synthetic wheel input.
+SCROLL_START_FRAMES_DEFAULT = 25
+SCROLL_AUTO_START_FRAMES_DEFAULT = 8
 # Absolute safety cap on frames, independent of the height cap, so the loop always
 # terminates even if every frame keeps changing (e.g. a live feed in the region).
 SCROLL_MAX_FRAMES_DEFAULT = 600
@@ -570,7 +574,16 @@ def perform_scrolling_capture(
 
     frames_iter = iter(source) if source is not None else _live_source()
 
-    accumulator = ScrollAccumulator(max_height=max_height, settle=settle, max_frames=max_frames)
+    accumulator = ScrollAccumulator(
+        max_height=max_height,
+        settle=settle,
+        max_frames=max_frames,
+        start_frames=(
+            SCROLL_AUTO_START_FRAMES_DEFAULT
+            if scroller is not None
+            else SCROLL_START_FRAMES_DEFAULT
+        ),
+    )
     scale: float | None = None
     try:
         for frame in frames_iter:

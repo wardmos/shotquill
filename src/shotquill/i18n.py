@@ -23,6 +23,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "menu.scrolling": {"en": "Long Screenshot", "zh": "长截图"},
     "menu.scrolling_stop": {"en": "Stop Long Screenshot", "zh": "停止长截图"},
+    "tray.scrolling_progress": {
+        "en": "ShotQuill · Long screenshot · {frames} frames",
+        "zh": "ShotQuill · 长截图 · {frames} 帧",
+    },
     "menu.open_folder": {"en": "Open Save Folder", "zh": "打开保存文件夹"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
@@ -57,8 +61,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "此环境无法进行长截图：{reason}",
     },
     "notify.scrolling_started": {
-        "en": "Long screenshot started. Press Esc or choose Stop Long Screenshot to cancel.",
-        "zh": "长截图已开始。按 Esc 或选择“停止长截图”即可取消。",
+        "en": "Long screenshot started. Use Stop Long Screenshot in the tray to cancel.",
+        "zh": "长截图已开始。可从托盘选择“停止长截图”来取消。",
     },
     "notify.scrolling_cancelled": {
         "en": "Long screenshot cancelled.",
@@ -67,6 +71,11 @@ _STRINGS: dict[str, dict[str, str]] = {
     "notify.scrolling_failed": {
         "en": "Long screenshot stopped: {error}",
         "zh": "长截图已停止：{error}",
+    },
+    "notify.scrolling_no_motion": {
+        "en": "Long screenshot stopped: no scrolling was detected. Focus the target and select "
+        "an area that accepts wheel input.",
+        "zh": "长截图已停止：未检测到滚动。请先激活目标，并框选能响应滚轮的区域。",
     },
     "notify.allowlist_unreadable": {
         "en": "Your allowlist couldn't be read, so ShotQuill won't capture "
@@ -102,6 +111,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Click a window · drag for a region · click here for full screen"
         " · arrows/WASD nudge the cursor · Esc cancels",
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · 方向键/WASD 微移光标 · Esc 取消",
+    },
+    "scrolling.hint": {
+        "en": "Drag around the scrollable area · release to start automatically · Esc cancels",
+        "zh": "拖动框选可滚动区域 · 松开后自动开始 · Esc 取消",
     },
     # Shown on the full-screen crop-adjust surface (CropAdjustOverlay): how to
     # resize/move the selection, apply it, or back out.

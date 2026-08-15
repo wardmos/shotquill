@@ -251,6 +251,25 @@ def test_scrolling_auto_drives_the_scroller():
     assert scroller.closed == 1
 
 
+def test_scrolling_auto_reports_no_motion_and_restores_the_scroller():
+    still = _result(10, range(30))
+    capturer = _SequenceCapturer([still])
+    scroller = _RecordingScroller()
+
+    with pytest.raises(headless.ScrollingCaptureError, match="no scrolling was detected"):
+        headless.perform_scrolling_capture(
+            capturer,
+            REGION,
+            allowlist=None,
+            max_frames=4,
+            scroller=scroller,
+            sleep=lambda *_: None,
+        )
+
+    assert scroller.calls
+    assert scroller.closed == 1
+
+
 class _WindowedCapturer(_SequenceCapturer):
     """A sequence capturer that also reports on-screen windows (for the blocklist)."""
 
@@ -268,9 +287,9 @@ def test_scrolling_redacts_blocklisted_window():
 
     region = Rect(0, 0, 10, 30)
     results = [_result(10, range(off, off + 30)) for off in (0, 10, 20)]
-    # A blocklisted window covers the whole region, so every sampled frame is
-    # redacted to black before stitching.
-    secret = WindowInfo(1, "Secret", "", Rect(0, 0, 10, 30), bundle_id="com.secret")
+    # A blocklisted window covers the left half. Those pixels are black before
+    # stitching, while the visible right half still supplies motion evidence.
+    secret = WindowInfo(1, "Secret", "", Rect(0, 0, 5, 30), bundle_id="com.secret")
     blocklist = bl.Blocklist(rules=(bl.BlockRule(bundle_id="com.secret"),))
     capturer = _WindowedCapturer(results, [secret])
     image, _target, _count = headless.perform_scrolling_capture(
@@ -285,6 +304,7 @@ def test_scrolling_redacts_blocklisted_window():
     image = result_to_qimage(image)
     px = image.pixelColor(0, 0)
     assert (px.red(), px.green(), px.blue()) == (0, 0, 0)  # painted out
+    assert image.height() == 50  # visible pixels still drove the three-frame stitch
 
 
 def test_pynput_scroller_restores_the_original_pointer_position(monkeypatch):

@@ -53,6 +53,10 @@ class StitchError(ValueError):
     """Raised when a frame sequence cannot be stitched without losing content."""
 
 
+class NoScrollingDetected(StitchError):
+    """Raised when an automatic/manual long capture never observes any motion."""
+
+
 def _rows(image: QImage) -> tuple[list[bytes], int, int]:
     """Split an image into a list of per-row RGBA byte strings, plus (w, h).
 
@@ -427,7 +431,10 @@ class ScrollAccumulator:
             ):
                 if self._samples >= min(self._start_frames, self._max_frames):
                     self._done = True
-                    return False
+                    raise NoScrollingDetected(
+                        "no scrolling was detected; focus the target and select an area "
+                        "that accepts wheel input"
+                    )
                 return True
             if dy is None:
                 self._done = True

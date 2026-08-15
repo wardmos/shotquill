@@ -2050,6 +2050,60 @@ def test_scrolling_region_collects_frames_and_delivers(qapp, config, fakes, monk
     app.shutdown()
 
 
+def test_scrolling_capture_uses_a_region_only_overlay(qapp, config, fakes):
+    app = _build_app(qapp, fakes)
+
+    app._capture_scrolling()
+
+    overlay = next(window for window in app._windows if isinstance(window, app_module.SmartOverlay))
+    assert overlay._region_only is True
+    overlay.close()
+    app.shutdown()
+
+
+def test_scrolling_no_motion_stops_with_an_error_instead_of_delivering_one_frame(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    still = _scroll_results(10, 30, (0,))[0]
+    monkeypatch.setattr(fakes[0], "capture_region", lambda region: still)
+    scroller = _FakeScroller()
+    monkeypatch.setattr(app_module, "get_scroller", lambda: scroller)
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *args, **kwargs: delivered.append(args))
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    for _ in range(8):
+        app._scrolling_tick()
+
+    assert delivered == []
+    assert any("no scrolling was detected" in message for message in notified)
+    assert app._scroll is None
+    assert scroller.closed == 1
+    app.shutdown()
+
+
+def test_scrolling_session_updates_and_restores_the_tray_tooltip(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app_module, "get_scroller", _FakeScroller)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    assert app._tray.toolTip() == app_module.t("tray.scrolling_progress").format(frames=0)
+    app._end_scrolling()
+    assert app._tray.toolTip() == "ShotQuill"
+    app.shutdown()
+
+
 def test_scrolling_region_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
