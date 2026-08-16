@@ -50,6 +50,7 @@ from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
+from shotquill.ui.scrolling_status import ScrollingStatus
 from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
 
@@ -182,6 +183,7 @@ class _ScrollSession:
     timer: QTimer
     accumulator: ScrollAccumulator
     scroller: object
+    status: ScrollingStatus
     rect: Rect
     blocklist: object
     operation_id: str
@@ -733,6 +735,7 @@ class ShotquillApp(QObject):
         timer = QTimer(self)
         timer.setInterval(int(headless.SCROLL_INTERVAL_DEFAULT * 1000))
         timer.timeout.connect(self._scrolling_tick)
+        status = ScrollingStatus(QRect(rect))
         self._scroll = _ScrollSession(
             timer=timer,
             accumulator=ScrollAccumulator(
@@ -742,13 +745,15 @@ class ShotquillApp(QObject):
                 start_frames=headless.SCROLL_AUTO_START_FRAMES_DEFAULT,
             ),
             scroller=scroller,
+            status=status,
             rect=Rect(rect.x(), rect.y(), rect.width(), rect.height()),
             blocklist=blocklist,
             operation_id=operation_id,
         )
+        status.stop_requested.connect(self._cancel_scrolling)
         self._app.installEventFilter(self)
         self._set_scrolling_action(True)
-        self._notify(t("notify.scrolling_started"))
+        status.present()
         # The first tick waits one interval, which also lets the overlay tear down
         # so the grab sees the page rather than the dimmed overlay.
         timer.start()
@@ -761,7 +766,16 @@ class ShotquillApp(QObject):
         previous = self._current_debug_id
         self._current_debug_id = session.operation_id
         stitched = None
+        status_hidden = False
         try:
+            status_hidden = session.status.suspend_for_capture()
+            if status_hidden:
+                # Flush the hide to the window server before either enumerating
+                # windows or grabbing pixels. User input processed here may
+                # cancel the run, so re-check the session before continuing.
+                self._app.processEvents()
+                if self._scroll is not session:
+                    return
             # Enforce the blocklist before raw pixels are grabbed. None means
             # enumeration failed and _blocked_on_screen already notified the user.
             blocked = self._blocked_on_screen(session.blocklist)
@@ -776,6 +790,7 @@ class ShotquillApp(QObject):
                     [window.bounds for window in blocked],
                 )
             keep_going = session.accumulator.add(result_to_qimage(result))
+            session.status.set_progress(session.accumulator.frame_count)
             self._set_scrolling_action(True)
             if keep_going:
                 session.scroller.scroll(
@@ -800,6 +815,11 @@ class ShotquillApp(QObject):
             self._notify(t("notify.scrolling_failed").format(error=exc))
             return
         finally:
+            # Keep an overlapping HUD hidden through synthetic wheel delivery as
+            # well as the pixel grab. Otherwise a small/full-screen selection
+            # could put the HUD under the pointer and consume the wheel event.
+            if status_hidden and self._scroll is session:
+                session.status.resume_after_capture()
             self._current_debug_id = previous
 
         self._end_scrolling()
@@ -828,6 +848,8 @@ class ShotquillApp(QObject):
         session.timer.stop()
         session.timer.deleteLater()
         self._app.removeEventFilter(self)
+        session.status.close()
+        session.status.deleteLater()
         try:
             close = getattr(session.scroller, "close", None)
             if callable(close):

@@ -60,10 +60,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Long screenshots aren't available here: {reason}",
         "zh": "此环境无法进行长截图：{reason}",
     },
-    "notify.scrolling_started": {
-        "en": "Long screenshot started. Use Stop Long Screenshot in the tray to cancel.",
-        "zh": "长截图已开始。可从托盘选择“停止长截图”来取消。",
-    },
     "notify.scrolling_cancelled": {
         "en": "Long screenshot cancelled.",
         "zh": "长截图已取消。",
@@ -116,6 +112,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Drag around the scrollable area · release to start automatically · Esc cancels",
         "zh": "拖动框选可滚动区域 · 松开后自动开始 · Esc 取消",
     },
+    "scrolling.status": {
+        "en": "Auto-scrolling · {frames} frames stitched · keep the target unchanged",
+        "zh": "正在自动滚动 · 已拼接 {frames} 帧 · 请勿操作目标窗口",
+    },
+    "scrolling.stop": {"en": "Stop", "zh": "停止"},
     # Shown on the full-screen crop-adjust surface (CropAdjustOverlay): how to
     # resize/move the selection, apply it, or back out.
     "smart.adjust_hint": {

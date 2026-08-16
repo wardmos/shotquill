@@ -2104,6 +2104,82 @@ def test_scrolling_session_updates_and_restores_the_tray_tooltip(qapp, config, f
     app.shutdown()
 
 
+def test_scrolling_session_shows_and_closes_visible_progress(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app_module, "get_scroller", _FakeScroller)
+
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+
+    status = app._scroll.status
+    assert status.isVisible()
+    assert status._label.text() == app_module.t("scrolling.status").format(frames=0)
+
+    app._end_scrolling()
+    assert not status.isVisible()
+    app.shutdown()
+
+
+def test_scrolling_hides_an_overlapping_status_while_grabbing_pixels(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    scroller = _FakeScroller()
+    visibility_during_scroll = []
+
+    def _scroll(clicks, *, at=None):
+        visibility_during_scroll.append(app._scroll.status.isVisible())
+        scroller.calls.append((clicks, at))
+
+    scroller.scroll = _scroll
+    monkeypatch.setattr(app_module, "get_scroller", lambda: scroller)
+    target = qapp.primaryScreen().availableGeometry()
+    visibility_during_capture = []
+
+    def _capture_region(region):
+        visibility_during_capture.append(app._scroll.status.isVisible())
+        return _scroll_results(10, 30, (0,))[0]
+
+    monkeypatch.setattr(fakes[0], "capture_region", _capture_region)
+    app._scrolling_region_selected(QImage(), target)
+    status = app._scroll.status
+    assert status.geometry().intersects(target)
+
+    app._scrolling_tick()
+
+    assert visibility_during_capture == [False]
+    assert visibility_during_scroll == [False]
+    assert status.isVisible()
+    assert status._label.text() == app_module.t("scrolling.status").format(frames=1)
+    app._end_scrolling()
+    app.shutdown()
+
+
+def test_scrolling_visible_stop_button_cancels_the_session(qapp, qtbot, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    scroller = _FakeScroller()
+    monkeypatch.setattr(app_module, "get_scroller", lambda: scroller)
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+    status = app._scroll.status
+
+    qtbot.mouseClick(status._stop_button, Qt.MouseButton.LeftButton)
+
+    assert app._scroll is None
+    assert not status.isVisible()
+    assert scroller.closed == 1
+    app.shutdown()
+
+
 def test_scrolling_region_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
