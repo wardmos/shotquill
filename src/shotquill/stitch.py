@@ -20,9 +20,10 @@ here:
   long image. We detect the unchanging top/bottom bands and keep each exactly
   once — header at the very top, footer at the very bottom.
 
-The matcher keeps an exact fast path, then falls back to sampled pixel similarity.
-That tolerates small fixed-position artifacts such as a pointer or scrollbar while
-still rejecting pairs whose overlap cannot be established reliably.
+The matcher keeps an exact fast path, ranks rare exact rows so flat backgrounds
+and repeated line spacing cannot dominate the decision, then falls back to
+sampled pixel similarity. That tolerates small fixed-position artifacts such as
+a pointer or scrollbar while rejecting pairs without reliable overlap.
 """
 
 from __future__ import annotations
@@ -45,6 +46,10 @@ MATCH_COLUMN_SAMPLES = 64
 MATCH_COARSE_ROW_SAMPLES = 10
 MATCH_COARSE_COLUMN_SAMPLES = 16
 MATCH_CANDIDATE_LIMIT = 16
+MATCH_DISTINCTIVE_ROW_MAX_FREQUENCY = 16
+MATCH_MIN_DISTINCTIVE_SUPPORT = 4.0
+MATCH_MIN_DISTINCTIVE_OVERLAP_FRACTION = 0.02
+MATCH_REPETITIVE_ROW_FRACTION = 0.50
 MATCH_OFFSET_PENALTY = 0.10
 MATCH_MIN_RELIABLE_OVERLAP = 64
 
@@ -161,12 +166,92 @@ def _required_overlap(band: int, min_overlap: int) -> int:
     return min(band, max(1, min_overlap, scaled))
 
 
+def _distinctive_offset_candidates(
+    prev: list[bytes],
+    curr: list[bytes],
+    *,
+    head: int,
+    foot: int,
+    max_dy: int,
+) -> list[tuple[float, int, int]]:
+    """Rank offsets by exact matches of rare, content-bearing rows.
+
+    Uniform backgrounds can occupy hundreds of identical rows and must not count
+    as alignment evidence. Rare rows preserve text and image detail; accumulating
+    their absolute support also keeps a broad noisy overlap ahead of a tiny exact
+    match in repeated content.
+    """
+    end = len(prev) - foot
+    prev_positions: dict[bytes, list[int]] = {}
+    curr_positions: dict[bytes, list[int]] = {}
+    for index, row in enumerate(prev[head:end]):
+        prev_positions.setdefault(row, []).append(index)
+    for index, row in enumerate(curr[head:end]):
+        curr_positions.setdefault(row, []).append(index)
+
+    support: dict[int, float] = {}
+    for row, prev_at in prev_positions.items():
+        curr_at = curr_positions.get(row)
+        if curr_at is None:
+            continue
+        frequency = max(len(prev_at), len(curr_at))
+        if frequency > MATCH_DISTINCTIVE_ROW_MAX_FREQUENCY:
+            continue
+        weight = 1.0 / frequency
+        for prev_index in prev_at:
+            for curr_index in curr_at:
+                dy = prev_index - curr_index
+                if 0 <= dy <= max_dy:
+                    support[dy] = support.get(dy, 0.0) + weight
+
+    return sorted(
+        ((value, -dy, dy) for dy, value in support.items()),
+        reverse=True,
+    )
+
+
+def _repetitive_row_fraction(rows: list[bytes]) -> float:
+    """Fraction of rows belonging to a heavily repeated flat pattern."""
+    if not rows:
+        return 1.0
+    frequencies: dict[bytes, int] = {}
+    for row in rows:
+        frequencies[row] = frequencies.get(row, 0) + 1
+    repetitive = sum(
+        count for count in frequencies.values() if count > MATCH_DISTINCTIVE_ROW_MAX_FREQUENCY
+    )
+    return repetitive / len(rows)
+
+
+def _repetitive_rows_dominate(
+    prev: list[bytes], curr: list[bytes], *, head: int, foot: int
+) -> bool:
+    """Whether sampled-pixel similarity would mostly measure flat background."""
+    end = len(prev) - foot
+    return (
+        min(
+            _repetitive_row_fraction(prev[head:end]),
+            _repetitive_row_fraction(curr[head:end]),
+        )
+        >= MATCH_REPETITIVE_ROW_FRACTION
+    )
+
+
 def _same_position_similar(
     prev: list[bytes], curr: list[bytes], h: int, head: int = 0, foot: int = 0
 ) -> bool:
     """Whether two frames are effectively unchanged at their screen positions."""
     if prev == curr:
         return True
+    distinctive = _distinctive_offset_candidates(prev, curr, head=head, foot=foot, max_dy=0)
+    if distinctive and distinctive[0][0] >= MATCH_MIN_DISTINCTIVE_SUPPORT:
+        support = distinctive[0][0]
+        band = max(1, h - head - foot)
+        if support / band < MATCH_MIN_DISTINCTIVE_OVERLAP_FRACTION:
+            return False
+        return _overlap_similarity(prev, curr, head=head, foot=foot, dy=0) >= SAME_FRAME_MIN_SCORE
+    if _repetitive_rows_dominate(prev, curr, head=head, foot=foot):
+        return False
     return _overlap_similarity(prev, curr, head=head, foot=foot, dy=0) >= SAME_FRAME_MIN_SCORE
 
 
@@ -175,11 +260,11 @@ def _offset_from_rows(
 ) -> int | None:
     """Vertical scroll offset between two frames within the scrolling band.
 
-    Returns the smallest ``dy`` such that ``curr``'s band, shifted up by ``dy``,
-    matches ``prev``'s band over their entire overlap (a ``min_overlap``-row anchor
-    is the cheap first filter; the full overlap then confirms it) — i.e. the content
-    scrolled up by ``dy``. ``0`` means the band is unchanged (no scroll / reached
-    the bottom); ``None`` means no overlap was found (the frames are disjoint,
+    Returns the best-supported ``dy`` such that ``curr``'s band, shifted up by
+    ``dy``, matches ``prev``'s band over their overlap — i.e. the content scrolled
+    up by ``dy``. Exact distinctive rows carry more weight than uniform or repeated
+    backgrounds. ``0`` means the band is unchanged (no scroll / reached the
+    bottom); ``None`` means no reliable overlap was found (the frames are disjoint,
     e.g. a scroll larger than the visible band).
     """
     band = h - head - foot
@@ -203,6 +288,39 @@ def _offset_from_rows(
         # whose entire overlap lines up, not merely its first k rows.
         if prev[head + dy : h - foot] == curr[head : h - foot - dy]:
             return dy
+
+    # Sparse pages can look almost identical at every offset because their
+    # background dominates sampled pixels. Rare exact rows carry the real text
+    # and image structure. Rank by their absolute support so a broad overlap
+    # with a small fixed artifact still beats a tiny repeated match.
+    distinctive_candidates = _distinctive_offset_candidates(
+        prev,
+        curr,
+        head=head,
+        foot=foot,
+        max_dy=max_dy,
+    )
+    saw_distinctive_evidence = False
+    for support, _prefer_smaller, dy in distinctive_candidates[:MATCH_CANDIDATE_LIMIT]:
+        if support < MATCH_MIN_DISTINCTIVE_SUPPORT:
+            break
+        saw_distinctive_evidence = True
+        overlap = band - dy
+        if support / overlap < MATCH_MIN_DISTINCTIVE_OVERLAP_FRACTION:
+            continue
+        if _overlap_similarity(prev, curr, head=head, foot=foot, dy=dy) >= MATCH_MIN_SCORE:
+            return dy
+
+    # Weak periodic matches are evidence of ambiguity, not a valid scroll. Once
+    # exact rows disagree on the offset, sampled background similarity cannot
+    # safely resolve it.
+    if saw_distinctive_evidence:
+        return None
+
+    # With no rare-row support, a flat/repetitive page has no reliable evidence
+    # for the tolerant matcher; rejecting it is safer than silently dropping content.
+    if _repetitive_rows_dominate(prev, curr, head=head, foot=foot):
+        return None
 
     # Coarsely rank every plausible offset, then spend the more expensive sample
     # budget only on the strongest candidates. The overlap penalty prevents a

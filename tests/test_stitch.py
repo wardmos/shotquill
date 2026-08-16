@@ -9,6 +9,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtGui import (  # noqa: E402
     QColor,
     QImage,
+    QPainter,
 )
 
 from shotquill.stitch import (  # noqa: E402
@@ -374,6 +375,43 @@ def test_estimate_offset_prefers_broad_overlap_over_a_short_repeated_match():
                 image.setPixelColor(x, y, marker)
 
     assert estimate_vertical_offset(prev, curr) == 100
+
+
+def test_estimate_offset_uses_content_not_uniform_background():
+    # A dark document has many matching background pixels and repeated line
+    # spacing. The matcher must not mistake the line phase for the scroll.
+    width, page_height, frame_height, scroll = 1600, 2400, 900, 650
+    page = QImage(width, page_height, QImage.Format.Format_RGBA8888)
+    page.fill(QColor(12, 17, 23))
+    painter = QPainter(page)
+    light = QColor(235, 240, 245)
+    subtle = QColor(150, 160, 170)
+    for line in range(40):
+        y = 12 + line * 58
+        for row in range(36):
+            painter.fillRect(60, y + row, 120 + row * 7, 1, light)
+            if row >= 8:
+                x = 480 + ((line * 71 + row * 29) % 380)
+                detail_width = 35 + ((line * 37 + row * 53) % 125)
+                painter.fillRect(x, y + row, detail_width, 1, subtle)
+    painter.end()
+
+    prev = page.copy(0, 0, width, frame_height)
+    curr = page.copy(0, scroll, width, frame_height)
+    disjoint = page.copy(0, 1160, width, frame_height)
+
+    assert estimate_vertical_offset(prev, curr) == scroll
+    assert estimate_vertical_offset(prev, disjoint) is None
+
+    gap_accumulator = _acc()
+    assert gap_accumulator.add(prev) is True
+    with pytest.raises(ScrollAlignmentError):
+        gap_accumulator.add(disjoint)
+
+    accumulator = _acc()
+    assert accumulator.add(prev) is True
+    assert accumulator.add(curr) is True
+    assert accumulator.result() == page.copy(0, 0, width, frame_height + scroll)
 
 
 def test_accumulator_keeps_the_correct_height_with_a_fixed_screen_artifact():
