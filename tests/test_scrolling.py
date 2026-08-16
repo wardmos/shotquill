@@ -4,14 +4,13 @@
 
 The headless loop is driven through its ``source`` injection point (a list of
 frames standing in for live region grabs) so the stitching, settle, and height-cap
-logic is exercised deterministically with no display, timer, or input synthesis.
+logic is exercised deterministically with no display or timer.
 The CLI tests cover the ``--scrolling`` flag's up-front validation, which short-
 circuits before any capture.
 """
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -184,13 +183,12 @@ def test_scrolling_checks_blocklist_before_grabbing_each_frame():
             REGION,
             blocklist=active,
             allowlist=al.Allowlist(),
-            scroller=_RecordingScroller(),
             sleep=lambda *_: None,
         )
     assert capturer.captures == 0
 
 
-# --- auto-scroll (synthetic wheel) -------------------------------------------
+# --- manual scrolling ---------------------------------------------------------
 
 
 def _result(width: int, seeds) -> CaptureResult:
@@ -217,57 +215,43 @@ class _SequenceCapturer:
         return result
 
 
-class _RecordingScroller:
-    def __init__(self):
-        self.calls = []
-        self.closed = 0
+def test_manual_accumulator_waits_through_pauses_until_explicit_finish():
+    from shotquill.stitch import ScrollAccumulator
 
-    def scroll(self, clicks, *, at=None):
-        self.calls.append((clicks, at))
-
-    def close(self):
-        self.closed += 1
-
-
-def test_scrolling_auto_drives_the_scroller():
-    results = [_result(10, range(off, off + 30)) for off in (0, 10, 20)]
-    capturer = _SequenceCapturer(results)
-    scroller = _RecordingScroller()
-    image, _target, count = headless.perform_scrolling_capture(
-        capturer,
-        REGION,
-        allowlist=None,
-        settle=2,
-        scroller=scroller,
-        scroll_clicks=3,
-        sleep=lambda *_: None,
+    first = result_to_qimage(_result(10, range(30)))
+    second = result_to_qimage(_result(10, range(10, 40)))
+    accumulator = ScrollAccumulator(
+        max_height=1000,
+        settle=None,
+        max_frames=20,
+        start_frames=20,
     )
-    image = result_to_qimage(image)
-    assert count == 3
-    assert image.height() == 50  # 30 + 10 + 10
-    # The loop turned the wheel down (negative) at the region centre (5, 15).
-    assert scroller.calls
-    assert all(clicks == -3 and at == (5, 15) for clicks, at in scroller.calls)
-    assert scroller.closed == 1
+
+    assert accumulator.add(first) is True
+    assert accumulator.add(second) is True
+    for _ in range(5):
+        assert accumulator.add(second) is True
+
+    image = accumulator.finish()
+    assert accumulator.done is True
+    assert accumulator.frame_count == 2
+    assert image.height() == 40
 
 
-def test_scrolling_auto_reports_no_motion_and_restores_the_scroller():
-    still = _result(10, range(30))
-    capturer = _SequenceCapturer([still])
-    scroller = _RecordingScroller()
+def test_manual_accumulator_refuses_finish_before_the_user_scrolls():
+    from shotquill.stitch import NoScrollingDetected, ScrollAccumulator
 
-    with pytest.raises(headless.ScrollingCaptureError, match="no scrolling was detected"):
-        headless.perform_scrolling_capture(
-            capturer,
-            REGION,
-            allowlist=None,
-            max_frames=4,
-            scroller=scroller,
-            sleep=lambda *_: None,
-        )
+    still = result_to_qimage(_result(10, range(30)))
+    accumulator = ScrollAccumulator(
+        max_height=1000,
+        settle=None,
+        max_frames=20,
+        start_frames=20,
+    )
+    assert accumulator.add(still) is True
 
-    assert scroller.calls
-    assert scroller.closed == 1
+    with pytest.raises(NoScrollingDetected, match="no scrolling was detected"):
+        accumulator.finish()
 
 
 class _WindowedCapturer(_SequenceCapturer):
@@ -298,50 +282,12 @@ def test_scrolling_redacts_blocklisted_window():
         blocklist=blocklist,
         allowlist=None,
         settle=2,
-        scroller=_RecordingScroller(),
         sleep=lambda *_: None,
     )
     image = result_to_qimage(image)
     px = image.pixelColor(0, 0)
     assert (px.red(), px.green(), px.blue()) == (0, 0, 0)  # painted out
     assert image.height() == 50  # visible pixels still drove the three-frame stitch
-
-
-def test_pynput_scroller_restores_the_original_pointer_position(monkeypatch):
-    from shotquill import scroll
-
-    class _Mouse:
-        def __init__(self):
-            self.position = (17, 23)
-            self.events = []
-
-        def scroll(self, dx, dy):
-            self.events.append((dx, dy))
-
-    mouse = _Mouse()
-    mouse_module = SimpleNamespace(Controller=lambda: mouse)
-    monkeypatch.setitem(sys.modules, "pynput", SimpleNamespace(mouse=mouse_module))
-    monkeypatch.setitem(sys.modules, "pynput.mouse", mouse_module)
-
-    scroller = scroll.PynputScroller()
-    scroller.scroll(-3, at=(5, 6))
-    assert mouse.position == (5, 6)
-    assert mouse.events == [(0, -3)]
-
-    scroller.close()
-    assert mouse.position == (17, 23)
-    scroller.close()  # idempotent teardown must not move the pointer again
-    assert mouse.position == (17, 23)
-
-
-def test_get_scroller_refused_on_wayland(monkeypatch):
-    from shotquill import scroll
-
-    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
-    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
-    with pytest.raises(headless.CapabilityUnsupported) as exc:
-        scroll.get_scroller()
-    assert exc.value.exit_code == headless.EXIT_UNSUPPORTED
 
 
 # --- CLI --scrolling validation (short-circuits before any capture) ----------
@@ -365,10 +311,8 @@ def test_cli_scrolling_runs_the_shared_postprocessing_pipeline(monkeypatch):
 
     args = SimpleNamespace(
         scrolling=True,
-        auto=False,
         max_height=1000,
         scroll_interval=0.01,
-        scroll_clicks=1,
         interactive=False,
         window_id=None,
         app=None,
@@ -468,8 +412,11 @@ def test_cli_scrolling_rejects_non_positive_bounds():
     base = ["capture", "--scrolling", "--region", "0,0,10,10"]
     assert cli.main([*base, "--max-height", "0"]) == 2
     assert cli.main([*base, "--scroll-interval", "0"]) == 2
-    assert cli.main([*base, "--scroll-clicks", "0"]) == 2
 
 
-def test_cli_auto_requires_scrolling():
-    assert cli.main(["capture", "--auto"]) == 2
+@pytest.mark.parametrize("removed_args", (["--auto"], ["--scroll-clicks", "2"]))
+def test_cli_rejects_removed_auto_scroll_options(removed_args):
+    base = ["capture", "--scrolling", "--region", "0,0,10,10"]
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([*base, *removed_args])
+    assert exc_info.value.code == 2

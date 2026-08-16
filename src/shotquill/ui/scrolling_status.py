@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 wardmos
-"""Visible progress and cancellation affordance for a long screenshot.
+"""Visible progress and completion affordance for a long screenshot.
 
 The status HUD stays above normal windows without taking keyboard focus from the
 page being scrolled. It is placed outside the selected region whenever the
@@ -53,9 +53,9 @@ def status_geometry(target: QRect, size: QSize, available: QRect) -> QRect:
 
 
 class ScrollingStatus(QWidget):
-    """Small always-on-top progress HUD with an explicit Stop button."""
+    """Small always-on-top progress HUD with an explicit Finish button."""
 
-    stop_requested = Signal()
+    finish_requested = Signal()
 
     def __init__(self, target: QRect, *, available_geometry: QRect | None = None) -> None:
         super().__init__(
@@ -86,11 +86,11 @@ class ScrollingStatus(QWidget):
         layout.setContentsMargins(14, 9, 9, 9)
         layout.setSpacing(12)
         self._label = QLabel(self)
-        self._stop_button = QPushButton(t("scrolling.stop"), self)
-        self._stop_button.setCursor(Qt.PointingHandCursor)
-        self._stop_button.clicked.connect(self.stop_requested.emit)
+        self._finish_button = QPushButton(t("scrolling.finish"), self)
+        self._finish_button.setCursor(Qt.PointingHandCursor)
+        self._finish_button.clicked.connect(self.finish_requested.emit)
         layout.addWidget(self._label, 1)
-        layout.addWidget(self._stop_button)
+        layout.addWidget(self._finish_button)
 
         self.setStyleSheet(
             """

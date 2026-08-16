@@ -39,12 +39,11 @@ from shotquill.autostart import get_manager as get_autostart_manager
 from shotquill.capture.base import Rect
 from shotquill.config import Config, human_readable_hotkey
 from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
-from shotquill.headless import CapabilityUnsupported, get_capturer
+from shotquill.headless import get_capturer
 from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
-from shotquill.scroll import get_scroller
 from shotquill.stitch import NoScrollingDetected, ScrollAccumulator, StitchError
 from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
@@ -173,8 +172,8 @@ class _HotkeyBridge(QObject):
 
 @dataclass
 class _ScrollSession:
-    """One in-flight long-screenshot capture: its timer, growing stitch, scroller,
-    framed region, and the blocklist snapshot used to redact each sampled frame.
+    """One in-flight long-screenshot capture: its timer, growing stitch, framed
+    region, and the blocklist snapshot used to redact each sampled frame.
 
     Bundled so the lifecycle is atomic — set as one ``self._scroll`` and torn down
     in one place — rather than four parallel attributes that must move in lockstep.
@@ -182,7 +181,6 @@ class _ScrollSession:
 
     timer: QTimer
     accumulator: ScrollAccumulator
-    scroller: object
     status: ScrollingStatus
     rect: Rect
     blocklist: object
@@ -327,13 +325,13 @@ class ShotquillApp(QObject):
         self._quit_action = quit_action
 
     def _set_scrolling_action(self, active: bool) -> None:
-        """Make the tray action double as a visible stop/progress affordance."""
+        """Make the tray action double as a visible finish/progress affordance."""
         action = self._scrolling_action
         if action is None:
             return
         if active:
             frames = self._scroll.accumulator.frame_count if self._scroll is not None else 0
-            action.setText(f"{t('menu.scrolling_stop')} · {frames}")
+            action.setText(f"{t('menu.scrolling_finish')} · {frames}")
             self._tray.setToolTip(t("tray.scrolling_progress").format(frames=frames))
         else:
             action.setText(t("menu.scrolling"))
@@ -490,9 +488,9 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_scrolling(self) -> None:
-        """Long screenshot: frame a region, then auto-scroll and stitch it."""
+        """Long screenshot: frame a region, then sample while the user scrolls."""
         if self._scroll is not None:
-            self._cancel_scrolling()
+            self._finish_scrolling()
             return
         if self._uninstall_interaction_suspended:
             return
@@ -704,7 +702,7 @@ class ShotquillApp(QObject):
         self._notify(t("notify.scrolling_needs_region"))
 
     def _scrolling_region_selected(self, image: QImage, rect: QRect) -> None:
-        """Begin a long screenshot within the framed region: auto-scroll + stitch."""
+        """Begin sampling a framed region while the user scrolls it manually."""
         # A stale timer must not survive a second selection, but Settings should
         # remain hidden while the replacement session is prepared.
         self._end_scrolling(restore_settings=False)
@@ -721,16 +719,6 @@ class ShotquillApp(QObject):
         blocklist = self._load_blocklist_or_abort()
         if blocklist is None:
             return
-        try:
-            scroller = get_scroller()
-        except CapabilityUnsupported as exc:
-            self._notify(t("notify.scrolling_unavailable").format(reason=exc.reason))
-            return
-        except Exception as exc:  # noqa: BLE001 - GUI boundary reports backend failures
-            self._notify(t("notify.scrolling_unavailable").format(reason=exc))
-            _LOG.exception("scrolling input initialization failed")
-            return
-
         operation_id = self._smart_debug_id or debug_log.new_operation_id("scrolling")
         timer = QTimer(self)
         timer.setInterval(int(headless.SCROLL_INTERVAL_DEFAULT * 1000))
@@ -740,17 +728,16 @@ class ShotquillApp(QObject):
             timer=timer,
             accumulator=ScrollAccumulator(
                 max_height=headless.SCROLL_MAX_HEIGHT_DEFAULT,
-                settle=headless.SCROLL_SETTLE_DEFAULT,
+                settle=None,
                 max_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
-                start_frames=headless.SCROLL_AUTO_START_FRAMES_DEFAULT,
+                start_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
             ),
-            scroller=scroller,
             status=status,
             rect=Rect(rect.x(), rect.y(), rect.width(), rect.height()),
             blocklist=blocklist,
             operation_id=operation_id,
         )
-        status.stop_requested.connect(self._cancel_scrolling)
+        status.finish_requested.connect(self._finish_scrolling)
         self._app.installEventFilter(self)
         self._set_scrolling_action(True)
         status.present()
@@ -793,10 +780,6 @@ class ShotquillApp(QObject):
             session.status.set_progress(session.accumulator.frame_count)
             self._set_scrolling_action(True)
             if keep_going:
-                session.scroller.scroll(
-                    -headless.SCROLL_CLICKS_DEFAULT,
-                    at=session.rect.center(),
-                )
                 return
             stitched = session.accumulator.result()
         except NoScrollingDetected:
@@ -815,9 +798,7 @@ class ShotquillApp(QObject):
             self._notify(t("notify.scrolling_failed").format(error=exc))
             return
         finally:
-            # Keep an overlapping HUD hidden through synthetic wheel delivery as
-            # well as the pixel grab. Otherwise a small/full-screen selection
-            # could put the HUD under the pointer and consume the wheel event.
+            # Keep an overlapping HUD out of the sampled pixels.
             if status_hidden and self._scroll is session:
                 session.status.resume_after_capture()
             self._current_debug_id = previous
@@ -825,6 +806,35 @@ class ShotquillApp(QObject):
         self._end_scrolling()
         # A long image spans far past the framed region, so it opens in the plain
         # editor window (origin=None) rather than the region-aligned spotlight.
+        self._current_debug_id = session.operation_id
+        try:
+            self._deliver_capture(stitched)
+        finally:
+            self._current_debug_id = previous
+
+    def _finish_scrolling(self) -> None:
+        """Finish a manually scrolled session and deliver the stitched image."""
+        session = self._scroll
+        if session is None:
+            return
+        previous = self._current_debug_id
+        self._current_debug_id = session.operation_id
+        try:
+            stitched = session.accumulator.finish()
+        except NoScrollingDetected:
+            _LOG.exception("op=%s scrolling did not start", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_no_motion"))
+            return
+        except StitchError as exc:
+            _LOG.exception("op=%s scrolling stitch failed", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_failed").format(error=exc))
+            return
+        finally:
+            self._current_debug_id = previous
+
+        self._end_scrolling()
         self._current_debug_id = session.operation_id
         try:
             self._deliver_capture(stitched)
@@ -840,7 +850,7 @@ class ShotquillApp(QObject):
             self._notify(t("notify.scrolling_cancelled"))
 
     def _end_scrolling(self, *, restore_settings: bool = True) -> None:
-        """Tear down the timer and input driver, restoring pointer and UI state."""
+        """Tear down the timer and restore the long-capture UI state."""
         session = self._scroll
         if session is None:
             return
@@ -850,12 +860,6 @@ class ShotquillApp(QObject):
         self._app.removeEventFilter(self)
         session.status.close()
         session.status.deleteLater()
-        try:
-            close = getattr(session.scroller, "close", None)
-            if callable(close):
-                close()
-        except Exception:  # noqa: BLE001 - teardown remains best effort
-            _LOG.exception("op=%s scrolling input teardown failed", session.operation_id)
         self._set_scrolling_action(False)
         if restore_settings:
             self._unshelve_settings_dialog()

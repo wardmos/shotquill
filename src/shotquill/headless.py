@@ -469,17 +469,12 @@ SCROLL_INTERVAL_DEFAULT = 0.4
 # Consecutive unchanged samples that mean "the scroll has stopped" (reached the
 # bottom, or the user let go) — the signal to finish and stitch.
 SCROLL_SETTLE_DEFAULT = 3
-# Manual capture gives the user time to begin moving the page. Automatic capture
-# should fail much sooner when the target ignores synthetic wheel input.
+# Manual capture gives the user time to begin moving the page before reporting
+# that no scroll was observed.
 SCROLL_START_FRAMES_DEFAULT = 25
-SCROLL_AUTO_START_FRAMES_DEFAULT = 8
 # Absolute safety cap on frames, independent of the height cap, so the loop always
 # terminates even if every frame keeps changing (e.g. a live feed in the region).
 SCROLL_MAX_FRAMES_DEFAULT = 600
-# Wheel notches the auto path turns between samples. Small enough that consecutive
-# frames overlap (the stitcher needs the overlap to align), so a notch's unknown
-# pixel size never matters — the real step is measured from the frames, not assumed.
-SCROLL_CLICKS_DEFAULT = 3
 
 
 def perform_scrolling_capture(
@@ -493,8 +488,6 @@ def perform_scrolling_capture(
     interval: float = SCROLL_INTERVAL_DEFAULT,
     settle: int = SCROLL_SETTLE_DEFAULT,
     max_frames: int = SCROLL_MAX_FRAMES_DEFAULT,
-    scroller=None,
-    scroll_clicks: int = SCROLL_CLICKS_DEFAULT,
     source=None,
     sleep=time.sleep,
 ) -> tuple[CaptureResult, str, int]:
@@ -506,12 +499,9 @@ def perform_scrolling_capture(
     for ``settle`` samples (reached the bottom / the scroll stopped), when the
     stitched height would exceed ``max_height``, or at the ``max_frames`` safety cap.
 
-    With no ``scroller`` it is the manual path — the human scrolls. Pass a
-    ``scroller`` (:func:`shotquill.scroll.get_scroller`) and the loop turns the
-    wheel ``scroll_clicks`` notches between samples. Either mode requires a backend
-    that can sample the same region repeatedly; the Wayland Screenshot portal only
-    brokers isolated stills and is rejected before it prompts. The actual scroll
-    step is measured from the frames, so the notch's pixel size need not be known.
+    The user scrolls the selected area while the loop samples it. The backend must
+    support repeated capture of the same region; the Wayland Screenshot portal only
+    brokers isolated stills and is rejected before it prompts.
 
     Like a fullscreen / region grab it captures a whole rectangle, so an enforcing
     allowlist refuses it (its "only these apps" contract cannot be honoured for a
@@ -541,9 +531,6 @@ def perform_scrolling_capture(
         _refuse_whole_screen_under_allowlist("scrolling", via=via)
 
     target = f"scrolling region {region.x},{region.y},{region.width},{region.height}"
-    # Centre of the region in logical coords, so synthetic wheel events land on the
-    # area being captured rather than wherever the pointer happened to rest.
-    center = region.center()
 
     def _live_source():
         while True:
@@ -566,10 +553,6 @@ def perform_scrolling_capture(
                     windows=windows,
                 )
             yield result
-            if scroller is not None:
-                # Negative notches scroll down, revealing lower content — the new
-                # rows the stitcher appends below what is already on the canvas.
-                scroller.scroll(-scroll_clicks, at=center)
             sleep(interval)
 
     frames_iter = iter(source) if source is not None else _live_source()
@@ -578,37 +561,28 @@ def perform_scrolling_capture(
         max_height=max_height,
         settle=settle,
         max_frames=max_frames,
-        start_frames=(
-            SCROLL_AUTO_START_FRAMES_DEFAULT
-            if scroller is not None
-            else SCROLL_START_FRAMES_DEFAULT
-        ),
+        start_frames=SCROLL_START_FRAMES_DEFAULT,
     )
     scale: float | None = None
-    try:
-        for frame in frames_iter:
-            if isinstance(frame, CaptureResult):
-                if scale is None:
-                    scale = frame.scale
-                elif frame.scale != scale:
-                    raise ScrollingCaptureError(
-                        "capture scale changed while scrolling; the frames cannot be aligned"
-                    )
-                image = result_to_qimage(frame)
-            else:
-                image = frame
-                if scale is None:
-                    scale = 1.0
-            try:
-                keep_sampling = accumulator.add(image)
-            except StitchError as exc:
-                raise ScrollingCaptureError(str(exc)) from exc
-            if not keep_sampling:
-                break
-    finally:
-        close = getattr(scroller, "close", None)
-        if callable(close):
-            close()
+    for frame in frames_iter:
+        if isinstance(frame, CaptureResult):
+            if scale is None:
+                scale = frame.scale
+            elif frame.scale != scale:
+                raise ScrollingCaptureError(
+                    "capture scale changed while scrolling; the frames cannot be aligned"
+                )
+            image = result_to_qimage(frame)
+        else:
+            image = frame
+            if scale is None:
+                scale = 1.0
+        try:
+            keep_sampling = accumulator.add(image)
+        except StitchError as exc:
+            raise ScrollingCaptureError(str(exc)) from exc
+        if not keep_sampling:
+            break
 
     stitched = accumulator.result()
     result = qimage_to_result(

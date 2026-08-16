@@ -30,7 +30,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from shotquill.headless import (
-    SCROLL_CLICKS_DEFAULT,
     SCROLL_INTERVAL_DEFAULT,
     SCROLL_MAX_HEIGHT_DEFAULT,
 )
@@ -282,8 +281,7 @@ REGISTRY: tuple[Command, ...] = (
         mcp_name="capture",
         mcp_description=(
             "Take a screenshot of the full screen (default), one window (by window_id, or "
-            "by app/title match), one monitor (by display index), or a region. Set scrolling "
-            "with a region to drive the wheel and stitch a long screenshot. Returns the image "
+            "by app/title match), one monitor (by display index), or a region. Returns the image "
             "plus a JSON metadata text block. Use max_width (e.g. 1024) to downscale large "
             "screens and save context. Pass session (a handle from session_start) to also file "
             "this capture as an observation frame in that recording."
@@ -301,45 +299,29 @@ REGISTRY: tuple[Command, ...] = (
             ),
             Param(
                 "scrolling",
-                "long screenshot: sample --region while you scroll within it and stitch the "
-                "frames into one tall image (manual scroll, or --auto to drive the wheel; stops "
-                "when the view settles or --max-height is reached)",
-                kind="flag",
-                mcp_help=("With region, drive the wheel and stitch a long screenshot."),
-            ),
-            Param(
-                "auto",
-                "with --scrolling, drive the scroll automatically by synthesizing the mouse "
-                "wheel (unavailable on Wayland until a ScreenCast/PipeWire capture path exists). "
-                "Point at the area to scroll before it starts.",
+                "long screenshot: sample --region while you scroll it by hand and stitch the "
+                "frames into one tall image (stops when the view settles or --max-height is "
+                "reached)",
                 kind="flag",
                 cli_only=True,
             ),
             Param(
                 "max_height",
-                f"cap the stitched long screenshot's height (--scrolling only; "
+                f"cap the stitched long screenshot height (--scrolling only; "
                 f"default {SCROLL_MAX_HEIGHT_DEFAULT})",
                 kind="int",
                 metavar="PX",
                 default=SCROLL_MAX_HEIGHT_DEFAULT,
-                mcp_help="Maximum stitched image height in pixels.",
+                cli_only=True,
             ),
             Param(
                 "scroll_interval",
-                f"seconds between samples while scrolling (--scrolling only; "
+                f"seconds between manual-scroll samples (--scrolling only; "
                 f"default {SCROLL_INTERVAL_DEFAULT})",
                 kind="float",
                 metavar="SEC",
                 default=SCROLL_INTERVAL_DEFAULT,
-                mcp_help="Seconds to wait between automatic scroll samples.",
-            ),
-            Param(
-                "scroll_clicks",
-                f"wheel notches to turn per step in --auto mode (default {SCROLL_CLICKS_DEFAULT})",
-                kind="int",
-                metavar="N",
-                default=SCROLL_CLICKS_DEFAULT,
-                mcp_help="Mouse-wheel notches to turn between automatic samples.",
+                cli_only=True,
             ),
             Param(
                 "output",

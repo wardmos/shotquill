@@ -354,7 +354,9 @@ class ScrollAccumulator:
     blocking CLI loop in :func:`shotquill.headless.perform_scrolling_capture` and
     the GUI's non-blocking ``QTimer`` (each tick feeds one frame). Feed frames with
     :meth:`add`; when it returns ``False`` the scroll has settled or hit a limit,
-    and :meth:`result` returns the finished long image.
+    and :meth:`result` returns the finished long image. A ``settle`` value of
+    ``None`` keeps a manually driven GUI session alive through pauses until
+    :meth:`finish` is called.
 
     Unlike a batch :func:`stitch_vertical`, this keeps only what it needs as it
     goes — the header, the appended new-row strips, the most recent frame (for the
@@ -372,7 +374,7 @@ class ScrollAccumulator:
         self,
         *,
         max_height: int,
-        settle: int,
+        settle: int | None,
         max_frames: int,
         start_frames: int = 25,
         min_overlap: int = DEFAULT_MIN_OVERLAP,
@@ -432,8 +434,7 @@ class ScrollAccumulator:
                 if self._samples >= min(self._start_frames, self._max_frames):
                     self._done = True
                     raise NoScrollingDetected(
-                        "no scrolling was detected; focus the target and select an area "
-                        "that accepts wheel input"
+                        "no scrolling was detected; scroll the selected area before finishing"
                     )
                 return True
             if dy is None:
@@ -451,7 +452,9 @@ class ScrollAccumulator:
             # The view did not move since the last sample. Count it toward the
             # settle threshold and drop the duplicate (don't advance ``prev``).
             self._unchanged += 1
-            if self._unchanged >= self._settle or self._samples >= self._max_frames:
+            if (
+                self._settle is not None and self._unchanged >= self._settle
+            ) or self._samples >= self._max_frames:
                 self._done = True
                 return False
             return True
@@ -484,6 +487,15 @@ class ScrollAccumulator:
         self._body_height = band
         self._sticky_set = True
         self._first = None  # the band/header are captured; drop the full first frame
+
+    def finish(self) -> QImage:
+        """Finish an explicitly controlled manual session and return its image."""
+        self._done = True
+        if not self._sticky_set:
+            raise NoScrollingDetected(
+                "no scrolling was detected; scroll the selected area before finishing"
+            )
+        return self.result()
 
     def result(self) -> QImage:
         """Composite the finished long image, cropped to ``max_height``."""

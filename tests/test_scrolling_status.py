@@ -31,14 +31,14 @@ def test_status_geometry_stays_on_screen_when_the_capture_fills_it():
     assert geometry.intersects(available)
 
 
-def test_status_shows_progress_and_emits_stop(qapp, qtbot):
+def test_status_instructs_manual_scroll_and_emits_finish(qapp, qtbot):
     status = ScrollingStatus(
         QRect(200, 160, 400, 300),
         available_geometry=QRect(0, 0, 1000, 700),
     )
     qtbot.addWidget(status)
-    stopped = []
-    status.stop_requested.connect(lambda: stopped.append(True))
+    finished = []
+    status.finish_requested.connect(lambda: finished.append(True))
 
     status.set_progress(7)
     status.present()
@@ -49,8 +49,8 @@ def test_status_shows_progress_and_emits_stop(qapp, qtbot):
     assert status._label.text() == t("scrolling.status").format(frames=7)
     rendered = status.grab().toImage()
     assert rendered.pixelColor(5, rendered.height() // 2).alpha() >= 200
-    qtbot.mouseClick(status._stop_button, Qt.MouseButton.LeftButton)
-    assert stopped == [True]
+    qtbot.mouseClick(status._finish_button, Qt.MouseButton.LeftButton)
+    assert finished == [True]
 
 
 def test_status_only_hides_during_capture_when_it_overlaps_target(qapp, qtbot):

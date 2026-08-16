@@ -234,15 +234,6 @@ def _capture_image(
     )
     capturer = headless.get_capturer(include_cursor=include_cursor)
     if getattr(args, "scrolling", False):
-        # --auto synthesizes the wheel; resolve the scroller up front so an
-        # unsupported platform (Wayland) fails fast (exit 4) before any capture.
-        scroller = None
-        if getattr(args, "auto", False) and getattr(
-            capturer, "supports_repeated_region_capture", True
-        ):
-            from shotquill import scroll
-
-            scroller = scroll.get_scroller()
         # The frame count is dropped here so ``matched`` keeps its window-
         # ambiguity meaning (1 = unambiguous).
         result, target, _frames = headless.perform_scrolling_capture(
@@ -251,8 +242,6 @@ def _capture_image(
             via="cli",
             max_height=args.max_height,
             interval=args.scroll_interval,
-            scroller=scroller,
-            scroll_clicks=args.scroll_clicks,
         )
         matched = 1
     elif getattr(args, "interactive", False):
@@ -345,10 +334,6 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             return _usage_error("--max-height must be positive")
         if args.scroll_interval <= 0:
             return _usage_error("--scroll-interval must be positive")
-        if args.scroll_clicks <= 0:
-            return _usage_error("--scroll-clicks must be positive")
-    elif args.auto:
-        return _usage_error("--auto only applies to --scrolling")
 
     # --deterministic forces the cursor off so the same scene always encodes the
     # same way; --include-cursor is rejected above, so this just stays the default.

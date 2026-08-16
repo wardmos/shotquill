@@ -124,8 +124,6 @@ build_one() {
     || "$PB" -c "Set :NSScreenCaptureUsageDescription 'ShotQuill captures your screen to take screenshots.'" "$plist"
   "$PB" -c "Add :NSInputMonitoringUsageDescription string 'ShotQuill listens for your configured global screenshot hotkeys.'" "$plist" 2>/dev/null \
     || "$PB" -c "Set :NSInputMonitoringUsageDescription 'ShotQuill listens for your configured global screenshot hotkeys.'" "$plist"
-  "$PB" -c "Add :NSAccessibilityUsageDescription string 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$plist" 2>/dev/null \
-    || "$PB" -c "Set :NSAccessibilityUsageDescription 'ShotQuill may need accessibility access to receive global screenshot hotkeys.'" "$plist"
   "$PB" -c "Set :CFBundleShortVersionString $VERSION" "$plist" 2>/dev/null \
     || "$PB" -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
   "$PB" -c "Set :CFBundleVersion $BUILD_VERSION" "$plist" 2>/dev/null \

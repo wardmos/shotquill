@@ -63,9 +63,9 @@ extract text, copy, save, or pin the result without breaking your flow.
     (Settings → *Highlight window after*, off by default) fully highlights a
     window first, lifting its pixels out from under any overlap.
   - **Full screen** (`⌥S`) — every display at once, instantly.
-- **Long screenshots** — frame a scrollable region and let ShotQuill drive the
-  wheel, align overlapping frames, and open one tall result. Available from the
-  tray, CLI, and MCP on macOS, Windows, and X11.
+- **Long screenshots** — frame a scrollable region, scroll it by hand, and let
+  ShotQuill align overlapping frames into one tall result. Available from the tray
+  and CLI on macOS, Windows, and X11.
 - **Configurable after-capture flow** — open the annotation editor by default, or
   make captures hands-free by auto-saving, auto-copying, or both.
 - **Annotation editor** — rectangle, rounded-rectangle, and ellipse spotlights
@@ -250,40 +250,49 @@ on macOS, text labels on Linux/Windows).
 ### Long screenshots
 
 First focus the target and move it to the desired starting position. Choose
-**Long Screenshot** from the tray; its dedicated overlay stays dim and tells you
-to drag around the scrollable viewport. A plain click is ignored instead of
-selecting a window or closing the overlay. Releasing the drag starts automatically:
-ShotQuill moves the pointer into that region, drives the wheel, and aligns each
-overlapping frame into one tall image.
+**Long Screenshot** from the tray; its dedicated overlay stays dim and asks you
+to drag around the viewport you intend to scroll. A plain click is ignored instead
+of selecting a window or closing the overlay.
 
-After release, a floating status HUD stays visible while ShotQuill auto-scrolls,
-shows the stitched-frame count, and provides an explicit **Stop** button. It is
-placed outside the selected area when possible and is kept out of sampled pixels.
-The tray tooltip shows the same progress and its menu action becomes **Stop Long
-Screenshot**. `Esc` cancels the selection overlay before capture starts. The
-pointer is restored when the run finishes or stops. If the target does not respond
-to wheel input, ShotQuill stops after a few seconds with an explicit “no scrolling
-was detected” error instead of opening an ordinary one-frame screenshot.
+Releasing the drag starts repeated sampling, but ShotQuill does not move the
+pointer or drive the wheel. Scroll the selected viewport yourself in small steps
+so consecutive views overlap. A floating status HUD shows the stitched-frame
+count and an explicit **Finish** button; pauses do not end the GUI session. When
+the required content has been covered, choose **Finish** in the HUD or **Finish
+Long Screenshot** in the tray.
 
-```bash
-squill capture --scrolling --auto --region 100,120,900,700 -o page.png
-squill capture --scrolling --region 100,120,900,700 -o page.png  # scroll by hand
-```
+The HUD is placed outside the selected area when possible and hidden briefly if
+it would otherwise appear in sampled pixels. `Esc` cancels either selection or an
+active session. Choosing **Finish** before any movement reports that no scrolling
+was detected instead of opening an ordinary one-frame screenshot. This workflow
+does not synthesize input and does not require Accessibility (control your
+computer) permission.
 
-`--max-height`, `--scroll-interval`, and `--scroll-clicks` bound/tune the run.
+The CLI supports the same manual-capture model:
+
+~~~bash
+squill capture --scrolling --region 100,120,900,700 -o page.png
+~~~
+
+Scroll the target by hand while the command samples. The CLI finishes when the
+view remains unchanged for several samples, `--max-height` is reached, or its
+safety limit is hit. `--max-height` and `--scroll-interval` bound and tune the run.
 The normal capture pipeline still applies after stitching, including `--mask`,
 `--reveal`, `--redact-pii`, `--session`, `--max-width`, and deterministic output.
-The MCP `capture` tool exposes `scrolling`, `max_height`, `scroll_interval`, and
-`scroll_clicks`; MCP scrolling is automatic because a tool call cannot pause for
-interactive wheel input.
 
-Consecutive frames must overlap. Small fixed-position artifacts such as the pointer
-or scrollbar are tolerated, but ShotQuill stops with an explicit error instead of
-silently producing a plausible image with missing content when it cannot establish
-a reliable overlap. An enabled allowlist refuses region-based long capture; an
-active blocklist is checked before every grab and matching windows are redacted.
+The MCP `capture` tool intentionally does not expose long screenshots while the
+supported workflow requires interactive manual scrolling. Automatic scrolling
+may return later as a separate opt-in feature, but `--auto` and synthetic wheel
+input are not supported now.
 
-Long screenshots currently work on macOS, Windows, and X11. Wayland's Screenshot
+Consecutive frames must overlap. Small fixed-position artifacts such as the
+pointer or scrollbar are tolerated, but ShotQuill stops with an explicit error
+instead of silently producing a plausible image with missing content when it
+cannot establish a reliable overlap. An enabled allowlist refuses region-based
+long capture; an active blocklist is checked before every grab and matching
+windows are redacted.
+
+Long screenshots currently work on macOS, Windows, and X11. Wayland Screenshot
 portal brokers isolated stills, not a continuous stream, so ShotQuill reports the
 feature as unsupported there until a ScreenCast/PipeWire backend is implemented.
 
@@ -866,7 +875,8 @@ installed with pip.
 
 ## Roadmap
 
-- [x] Scrolling / long-page capture (macOS, Windows, and X11; Wayland stream backend pending)
+- [x] Manual scrolling / long-page capture (macOS, Windows, and X11; Wayland stream backend pending)
+- [ ] Optional automatic scrolling (manual scrolling is the only supported workflow today)
 
 Completed work is summarized in [Highlights](#highlights) and the platform
 sections above; version-by-version changes are available in

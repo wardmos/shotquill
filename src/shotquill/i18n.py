@@ -22,7 +22,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.smart": {"en": "Capture", "zh": "截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
     "menu.scrolling": {"en": "Long Screenshot", "zh": "长截图"},
-    "menu.scrolling_stop": {"en": "Stop Long Screenshot", "zh": "停止长截图"},
+    "menu.scrolling_finish": {"en": "Finish Long Screenshot", "zh": "完成长截图"},
     "tray.scrolling_progress": {
         "en": "ShotQuill · Long screenshot · {frames} frames",
         "zh": "ShotQuill · 长截图 · {frames} 帧",
@@ -69,9 +69,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "长截图已停止：{error}",
     },
     "notify.scrolling_no_motion": {
-        "en": "Long screenshot stopped: no scrolling was detected. Focus the target and select "
-        "an area that accepts wheel input.",
-        "zh": "长截图已停止：未检测到滚动。请先激活目标，并框选能响应滚轮的区域。",
+        "en": "Long screenshot stopped: no scrolling was detected. Scroll the selected "
+        "area before choosing Finish.",
+        "zh": "长截图已停止：未检测到滚动。请先滚动所选区域，再点击完成。",
     },
     "notify.allowlist_unreadable": {
         "en": "Your allowlist couldn't be read, so ShotQuill won't capture "
@@ -109,14 +109,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · 方向键/WASD 微移光标 · Esc 取消",
     },
     "scrolling.hint": {
-        "en": "Drag around the scrollable area · release to start automatically · Esc cancels",
-        "zh": "拖动框选可滚动区域 · 松开后自动开始 · Esc 取消",
+        "en": "Drag around the area you will scroll manually · Esc cancels",
+        "zh": "拖动框选要手动滚动的区域 · Esc 取消",
     },
     "scrolling.status": {
-        "en": "Auto-scrolling · {frames} frames stitched · keep the target unchanged",
-        "zh": "正在自动滚动 · 已拼接 {frames} 帧 · 请勿操作目标窗口",
+        "en": "Scroll manually · {frames} frames stitched · choose Finish when done",
+        "zh": "请手动滚动 · 已拼接 {frames} 帧 · 完成后点击完成",
     },
-    "scrolling.stop": {"en": "Stop", "zh": "停止"},
+    "scrolling.finish": {"en": "Finish", "zh": "完成"},
     # Shown on the full-screen crop-adjust surface (CropAdjustOverlay): how to
     # resize/move the selection, apply it, or back out.
     "smart.adjust_hint": {

@@ -424,49 +424,16 @@ def _capture_image(
     ``redact_pii_recognizer`` is given, likely PII is OCR'd and masked after the
     caller masks but before the reveal mosaic."""
     region = _validate_target(args)
-    scrolling = args.get("scrolling", False)
-    if not isinstance(scrolling, bool):
-        raise ValueError("scrolling must be a boolean")
-    if scrolling and region is None:
-        raise ValueError("scrolling capture requires region")
     capturer = headless.get_capturer()
-    if scrolling:
-        max_height = _positive_int(
-            args.get("max_height", headless.SCROLL_MAX_HEIGHT_DEFAULT), "max_height"
-        )
-        interval = _positive_number(
-            args.get("scroll_interval", headless.SCROLL_INTERVAL_DEFAULT),
-            "scroll_interval",
-        )
-        scroll_clicks = _positive_int(
-            args.get("scroll_clicks", headless.SCROLL_CLICKS_DEFAULT),
-            "scroll_clicks",
-        )
-        scroller = None
-        if getattr(capturer, "supports_repeated_region_capture", True):
-            from shotquill import scroll
-
-            scroller = scroll.get_scroller()
-        result, target, _frames = headless.perform_scrolling_capture(
-            capturer,
-            region,
-            via="mcp",
-            max_height=max_height,
-            interval=interval,
-            scroller=scroller,
-            scroll_clicks=scroll_clicks,
-        )
-        matched = 1
-    else:
-        result, target, matched = headless.perform_capture(
-            capturer,
-            window_id=args.get("window_id"),
-            app=args.get("app"),
-            title=args.get("title"),
-            region=region,
-            display=args.get("display"),
-            via="mcp",
-        )
+    result, target, matched = headless.perform_capture(
+        capturer,
+        window_id=args.get("window_id"),
+        app=args.get("app"),
+        title=args.get("title"),
+        region=region,
+        display=args.get("display"),
+        via="mcp",
+    )
     result = headless.apply_masks(result, masks or [])
     if redact_pii_recognizer is not None:
         result = headless.redact_pii(result, redact_pii_recognizer)
