@@ -116,6 +116,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Scroll manually · {frames} frames stitched · choose Finish when done",
         "zh": "请手动滚动 · 已拼接 {frames} 帧 · 完成后点击完成",
     },
+    "scrolling.limit_reached": {
+        "en": "Safety limit reached · {frames} frames stitched · choose Finish to keep them",
+        "zh": "已达到安全上限 · 已拼接 {frames} 帧 · 点击完成保留结果",
+    },
+    "scrolling.alignment_lost": {
+        "en": "Views do not overlap · scroll back slightly, then continue in smaller steps"
+        " · {frames} frames kept",
+        "zh": "当前画面无法衔接 · 请稍微回滚后减小滚动幅度 · 已保留 {frames} 帧",
+    },
     "scrolling.finish": {"en": "Finish", "zh": "完成"},
     # Shown on the full-screen crop-adjust surface (CropAdjustOverlay): how to
     # resize/move the selection, apply it, or back out.

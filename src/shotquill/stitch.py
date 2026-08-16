@@ -53,6 +53,10 @@ class StitchError(ValueError):
     """Raised when a frame sequence cannot be stitched without losing content."""
 
 
+class ScrollAlignmentError(StitchError):
+    """Raised when the latest sample cannot yet align with the last kept frame."""
+
+
 class NoScrollingDetected(StitchError):
     """Raised when an automatic/manual long capture never observes any motion."""
 
@@ -376,7 +380,7 @@ class ScrollAccumulator:
         max_height: int,
         settle: int | None,
         max_frames: int,
-        start_frames: int = 25,
+        start_frames: int | None = 25,
         min_overlap: int = DEFAULT_MIN_OVERLAP,
     ) -> None:
         self._max_height = max_height
@@ -431,23 +435,32 @@ class ScrollAccumulator:
             if dy == 0 or (
                 dy is None and _same_position_similar(self._prev_rows, rows, h, head, foot)
             ):
-                if self._samples >= min(self._start_frames, self._max_frames):
+                if self._start_frames is None and self._samples >= self._max_frames:
+                    self._done = True
+                    return False
+                if self._start_frames is not None and self._samples >= min(
+                    self._start_frames, self._max_frames
+                ):
                     self._done = True
                     raise NoScrollingDetected(
                         "no scrolling was detected; scroll the selected area before finishing"
                     )
                 return True
             if dy is None:
-                self._done = True
-                raise StitchError("no reliable overlap before scrolling started")
+                if self._samples >= self._max_frames:
+                    self._done = True
+                    return False
+                raise ScrollAlignmentError("no reliable overlap before scrolling started")
             self._seed_body(head, foot)
         else:
             dy = _offset_from_rows(
                 self._prev_rows, rows, h, self._head, self._foot, self._min_overlap
             )
         if dy is None:
-            self._done = True
-            raise StitchError("no reliable overlap between scrolling frames")
+            if self._samples >= self._max_frames:
+                self._done = True
+                return False
+            raise ScrollAlignmentError("no reliable overlap between scrolling frames")
         if dy == 0:
             # The view did not move since the last sample. Count it toward the
             # settle threshold and drop the duplicate (don't advance ``prev``).

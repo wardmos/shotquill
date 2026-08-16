@@ -44,7 +44,12 @@ from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
-from shotquill.stitch import NoScrollingDetected, ScrollAccumulator, StitchError
+from shotquill.stitch import (
+    NoScrollingDetected,
+    ScrollAccumulator,
+    ScrollAlignmentError,
+    StitchError,
+)
 from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
@@ -730,7 +735,7 @@ class ShotquillApp(QObject):
                 max_height=headless.SCROLL_MAX_HEIGHT_DEFAULT,
                 settle=None,
                 max_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
-                start_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
+                start_frames=None,
             ),
             status=status,
             rect=Rect(rect.x(), rect.y(), rect.width(), rect.height()),
@@ -752,7 +757,6 @@ class ShotquillApp(QObject):
             return
         previous = self._current_debug_id
         self._current_debug_id = session.operation_id
-        stitched = None
         status_hidden = False
         try:
             status_hidden = session.status.suspend_for_capture()
@@ -781,7 +785,25 @@ class ShotquillApp(QObject):
             self._set_scrolling_action(True)
             if keep_going:
                 return
-            stitched = session.accumulator.result()
+            # Manual capture must never finish on its own. The accumulator still
+            # enforces bounded memory/time, so pause its timer at the limit and
+            # leave the partial result plus Finish/Cancel controls in place.
+            session.timer.stop()
+            session.status.set_limit_reached(session.accumulator.frame_count)
+            _LOG.debug(
+                "op=%s scrolling paused safety_limit frames=%s",
+                session.operation_id,
+                session.accumulator.frame_count,
+            )
+            return
+        except ScrollAlignmentError as exc:
+            # A large wheel step can temporarily leave no shared rows. Keep the
+            # last valid frame and continue sampling so scrolling back restores
+            # alignment instead of discarding the entire manual session.
+            _LOG.debug("op=%s scrolling alignment pending error=%s", session.operation_id, exc)
+            session.status.set_alignment_lost(session.accumulator.frame_count)
+            self._set_scrolling_action(True)
+            return
         except NoScrollingDetected:
             _LOG.exception("op=%s scrolling did not start", session.operation_id)
             self._end_scrolling()
@@ -801,15 +823,6 @@ class ShotquillApp(QObject):
             # Keep an overlapping HUD out of the sampled pixels.
             if status_hidden and self._scroll is session:
                 session.status.resume_after_capture()
-            self._current_debug_id = previous
-
-        self._end_scrolling()
-        # A long image spans far past the framed region, so it opens in the plain
-        # editor window (origin=None) rather than the region-aligned spotlight.
-        self._current_debug_id = session.operation_id
-        try:
-            self._deliver_capture(stitched)
-        finally:
             self._current_debug_id = previous
 
     def _finish_scrolling(self) -> None:

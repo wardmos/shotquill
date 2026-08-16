@@ -128,7 +128,18 @@ class ScrollingStatus(QWidget):
         return QRect(self._target)
 
     def set_progress(self, frames: int) -> None:
-        self._label.setText(t("scrolling.status").format(frames=max(int(frames), 0)))
+        self._set_message(t("scrolling.status").format(frames=max(int(frames), 0)))
+
+    def set_limit_reached(self, frames: int) -> None:
+        """Keep the manual session visible after its bounded sampler pauses."""
+        self._set_message(t("scrolling.limit_reached").format(frames=max(int(frames), 0)))
+
+    def set_alignment_lost(self, frames: int) -> None:
+        """Explain how to recover without discarding the valid partial capture."""
+        self._set_message(t("scrolling.alignment_lost").format(frames=max(int(frames), 0)))
+
+    def _set_message(self, message: str) -> None:
+        self._label.setText(message)
         self.adjustSize()
         self.setGeometry(status_geometry(self._target, self.size(), self._available))
 

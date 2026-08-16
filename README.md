@@ -260,6 +260,12 @@ so consecutive views overlap. A floating status HUD shows the stitched-frame
 count and an explicit **Finish** button; pauses do not end the GUI session. When
 the required content has been covered, choose **Finish** in the HUD or **Finish
 Long Screenshot** in the tray.
+If the built-in height or sampling safety limit is reached first, sampling
+pauses and the HUD asks you to finish or cancel; it never closes the manual
+session or generates an image by itself.
+If one wheel step leaves too little overlap, the HUD keeps the valid partial
+capture and asks you to scroll back slightly before continuing with smaller
+steps; it does not discard or close the session.
 
 The HUD is placed outside the selected area when possible and hidden briefly if
 it would otherwise appear in sampled pixels. `Esc` cancels either selection or an

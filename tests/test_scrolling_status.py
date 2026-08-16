@@ -53,6 +53,24 @@ def test_status_instructs_manual_scroll_and_emits_finish(qapp, qtbot):
     assert finished == [True]
 
 
+def test_status_explains_that_a_safety_limit_needs_explicit_finish(qapp, qtbot):
+    status = ScrollingStatus(
+        QRect(200, 160, 400, 300),
+        available_geometry=QRect(0, 0, 1000, 700),
+    )
+    qtbot.addWidget(status)
+
+    status.set_limit_reached(12)
+    status.present()
+
+    assert status.isVisible()
+    assert status._label.text() == t("scrolling.limit_reached").format(frames=12)
+    assert status._finish_button.isEnabled()
+    status.set_alignment_lost(5)
+    assert status._label.text() == t("scrolling.alignment_lost").format(frames=5)
+    assert status._finish_button.isEnabled()
+
+
 def test_status_only_hides_during_capture_when_it_overlaps_target(qapp, qtbot):
     available = QRect(0, 0, 800, 600)
     outside = ScrollingStatus(

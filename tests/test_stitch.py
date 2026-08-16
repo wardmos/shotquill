@@ -13,6 +13,7 @@ from PySide6.QtGui import (  # noqa: E402
 
 from shotquill.stitch import (  # noqa: E402
     ScrollAccumulator,
+    ScrollAlignmentError,
     StitchError,
     detect_sticky_bands,
     estimate_vertical_offset,
@@ -235,12 +236,16 @@ def test_accumulator_reports_when_scrolling_never_starts():
     assert acc.frame_count == 1
 
 
-def test_accumulator_rejects_a_missing_overlap_instead_of_duplicating_frames():
+def test_accumulator_can_recover_after_a_missing_overlap():
     page = _image(10, _tall(10, 100))
     acc = _acc()
     assert acc.add(_crop(page, 0, 30)) is True
-    with pytest.raises(StitchError, match="overlap"):
+    with pytest.raises(ScrollAlignmentError, match="overlap"):
         acc.add(_crop(page, 60, 30))
+    assert acc.done is False
+
+    assert acc.add(_crop(page, 10, 30)) is True
+    assert acc.frame_count == 2
 
 
 def test_accumulator_stops_at_max_height():
