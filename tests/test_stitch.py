@@ -427,3 +427,66 @@ def test_accumulator_keeps_the_correct_height_with_a_fixed_screen_artifact():
     for image in frames:
         assert acc.add(image) is True
     assert acc.result().height() == 50
+
+
+def _fixed_sidebar_frames() -> tuple[list[QImage], QImage, QColor, int, int]:
+    """GitHub-like frames: sparse scrolling content beside a fixed navigation rail."""
+    sidebar_width = 96
+    page_width = 288
+    frame_height = 240
+    scroll = 150
+    background = QColor(13, 17, 23)
+
+    page = QImage(page_width, frame_height + scroll * 2, QImage.Format.Format_RGBA8888)
+    page.fill(background)
+    painter = QPainter(page)
+    for card in range(7):
+        top = 18 + card * 82
+        painter.fillRect(18, top, page_width - 36, 1, QColor(55, 62, 72))
+        painter.fillRect(24, top + 14, 70 + card * 11, 7, QColor(235, 240, 245))
+        painter.fillRect(24, top + 35, 150 + (card % 3) * 24, 4, QColor(145, 155, 166))
+    painter.end()
+
+    sidebar = QImage(sidebar_width, frame_height, QImage.Format.Format_RGBA8888)
+    sidebar.fill(background)
+    painter = QPainter(sidebar)
+    for item in range(9):
+        top = 10 + item * 25
+        painter.fillRect(8, top, 12, 12, QColor(40, 190, 95))
+        painter.fillRect(28, top + 3, 48 + (item % 2) * 16, 6, QColor(195, 202, 211))
+    painter.end()
+
+    frames: list[QImage] = []
+    for offset in (0, scroll, scroll * 2):
+        frame = QImage(
+            sidebar_width + page_width,
+            frame_height,
+            QImage.Format.Format_RGBA8888,
+        )
+        frame.fill(background)
+        painter = QPainter(frame)
+        painter.drawImage(0, 0, sidebar)
+        painter.drawImage(sidebar_width, 0, page.copy(0, offset, page_width, frame_height))
+        painter.end()
+        frames.append(frame)
+    return frames, page, background, sidebar_width, scroll
+
+
+def test_accumulator_aligns_scrolling_content_beside_a_fixed_sidebar():
+    frames, page, background, sidebar_width, scroll = _fixed_sidebar_frames()
+
+    assert estimate_vertical_offset(frames[0], frames[1]) == scroll
+
+    acc = _acc()
+    for frame in frames:
+        assert acc.add(frame) is True
+    out = acc.result()
+
+    assert out.height() == frames[0].height() + scroll * 2
+    assert out.copy(sidebar_width, 0, page.width(), page.height()) == page
+    # The fixed navigation is shown once in the initial viewport. Its lower
+    # fragments must not be pasted again with every newly appended strip.
+    for y in range(frames[0].height(), out.height()):
+        assert out.pixelColor(sidebar_width // 2, y) == background
+
+    assert stitch_vertical(frames) == out

@@ -15,10 +15,12 @@ here:
   frame, on purpose, so there is something to align on). Pasting whole frames
   would duplicate that band; we measure the per-pair vertical offset and append
   only the genuinely new rows.
-* **Sticky header / footer.** A fixed top bar or bottom bar repeats identically in
-  every frame at the same position. Left in, it would march down the middle of the
-  long image. We detect the unchanging top/bottom bands and keep each exactly
-  once — header at the very top, footer at the very bottom.
+* **Sticky chrome.** Fixed headers, footers, and side rails repeat at the same
+  screen position while the document moves. Left in, they would march down the
+  long image and can also pull alignment toward a false offset. We keep
+  top/bottom bands once and use independently moving vertical tiles to align
+  around side rails; persistent side content is replaced by its background below
+  the initial viewport.
 
 The matcher keeps an exact fast path, ranks rare exact rows so flat backgrounds
 and repeated line spacing cannot dominate the decision, then falls back to
@@ -52,6 +54,19 @@ MATCH_MIN_DISTINCTIVE_OVERLAP_FRACTION = 0.02
 MATCH_REPETITIVE_ROW_FRACTION = 0.50
 MATCH_OFFSET_PENALTY = 0.10
 MATCH_MIN_RELIABLE_OVERLAP = 64
+MATCH_TILE_TARGET_WIDTH = 48
+MATCH_TILE_MAX_COUNT = 64
+MATCH_TILE_MIN_SCROLL_FRACTION = 0.30
+MATCH_TILE_MIN_SCROLL_COUNT = 2
+MATCH_TILE_MIN_DISTINCTIVE_SUPPORT = 0.25
+MATCH_TILE_MIN_DISTINCTIVE_DENSITY = 0.004
+MATCH_TILE_MIN_TOTAL_SUPPORT = 4.0
+FIXED_SIDE_BLOCK_WIDTH = 8
+FIXED_SIDE_ROW_SAMPLES = 96
+FIXED_SIDE_MIN_MATCH = 0.80
+FIXED_SIDE_MIN_PREFERENCE = 0.02
+FIXED_SIDE_MIN_FRACTION = 0.03
+FIXED_SIDE_MIN_PIXELS = 24
 
 
 class StitchError(ValueError):
@@ -255,7 +270,7 @@ def _same_position_similar(
     return _overlap_similarity(prev, curr, head=head, foot=foot, dy=0) >= SAME_FRAME_MIN_SCORE
 
 
-def _offset_from_rows(
+def _offset_from_rows_single(
     prev: list[bytes], curr: list[bytes], h: int, head: int, foot: int, min_overlap: int
 ) -> int | None:
     """Vertical scroll offset between two frames within the scrolling band.
@@ -351,6 +366,297 @@ def _offset_from_rows(
     return best_dy
 
 
+def _tile_bounds(width: int) -> list[tuple[int, int]]:
+    """Split the image into narrow vertical tiles without producing empty slices."""
+    if width <= 0:
+        return []
+    count = min(
+        MATCH_TILE_MAX_COUNT,
+        max(1, (width + MATCH_TILE_TARGET_WIDTH - 1) // MATCH_TILE_TARGET_WIDTH),
+    )
+    edges = [round(index * width / count) for index in range(count + 1)]
+    return [
+        (left, right) for left, right in zip(edges[:-1], edges[1:], strict=True) if right > left
+    ]
+
+
+def _tile_offset_evidence(
+    prev: list[bytes],
+    curr: list[bytes],
+    *,
+    head: int,
+    foot: int,
+    min_overlap: int,
+) -> list[tuple[int, int, int | None, float]]:
+    """Return each vertical tile's independently supported scroll offset.
+
+    Full rows are a mixture of motions on pages with a fixed navigation rail:
+    the rail votes for zero while the document votes for the real scroll. Rare
+    exact row fragments let the wider moving region win without trusting flat
+    background pixels.
+    """
+    if not prev:
+        return []
+    width = len(prev[0]) // 4
+    band = len(prev) - head - foot
+    required_overlap = _required_overlap(band, min_overlap)
+    max_dy = band - required_overlap
+    if max_dy < 0:
+        return []
+
+    evidence: list[tuple[int, int, int | None, float]] = []
+    for left, right in _tile_bounds(width):
+        start = left * 4
+        end = right * 4
+        prev_tile = [row[start:end] for row in prev]
+        curr_tile = [row[start:end] for row in curr]
+        winner: int | None = None
+        winner_support = 0.0
+        ranked: list[tuple[float, float, int, int]] = []
+        candidates = _distinctive_offset_candidates(
+            prev_tile,
+            curr_tile,
+            head=head,
+            foot=foot,
+            max_dy=max_dy,
+        )
+        for support, _prefer_smaller, dy in candidates[:MATCH_CANDIDATE_LIMIT]:
+            if support < MATCH_TILE_MIN_DISTINCTIVE_SUPPORT:
+                break
+            overlap = band - dy
+            density = support / overlap
+            if density < MATCH_TILE_MIN_DISTINCTIVE_DENSITY:
+                continue
+            if (
+                _overlap_similarity(prev_tile, curr_tile, head=head, foot=foot, dy=dy)
+                < MATCH_MIN_SCORE
+            ):
+                continue
+            ranked.append((density, support, -dy, dy))
+        if ranked:
+            _density, winner_support, _prefer_smaller, winner = max(ranked)
+        evidence.append((left, right, winner, winner_support))
+    return evidence
+
+
+def _tile_scroll_consensus(
+    evidence: list[tuple[int, int, int | None, float]], width: int
+) -> int | None:
+    """Choose a positive offset backed by multiple independently moving tiles."""
+    votes: dict[int, tuple[int, int, float]] = {}
+    for left, right, dy, support in evidence:
+        if dy is None or dy <= 0:
+            continue
+        vote_width, count, total_support = votes.get(dy, (0, 0, 0.0))
+        votes[dy] = (vote_width + right - left, count + 1, total_support + support)
+    if not votes:
+        return None
+    dy, (vote_width, count, support) = max(
+        votes.items(),
+        key=lambda item: (item[1][0], item[1][1], item[1][2], -item[0]),
+    )
+    minimum_width = max(
+        MATCH_TILE_TARGET_WIDTH * MATCH_TILE_MIN_SCROLL_COUNT,
+        round(width * MATCH_TILE_MIN_SCROLL_FRACTION),
+    )
+    if (
+        count < MATCH_TILE_MIN_SCROLL_COUNT
+        or vote_width < minimum_width
+        or support < MATCH_TILE_MIN_TOTAL_SUPPORT
+    ):
+        return None
+    return dy
+
+
+def _side_motion_blocks(
+    prev: list[bytes],
+    curr: list[bytes],
+    *,
+    head: int,
+    foot: int,
+    dy: int,
+) -> list[tuple[int, int, str]]:
+    """Classify narrow column blocks as fixed, scrolling, or visually ambiguous."""
+    if not prev or dy <= 0:
+        return []
+    width = len(prev[0]) // 4
+    band = len(prev) - head - foot
+    overlap = band - dy
+    positions = _sample_positions(overlap, FIXED_SIDE_ROW_SAMPLES)
+    if not positions:
+        return []
+
+    blocks: list[tuple[int, int, str]] = []
+    for left in range(0, width, FIXED_SIDE_BLOCK_WIDTH):
+        right = min(width, left + FIXED_SIDE_BLOCK_WIDTH)
+        same = shifted = total = 0
+        patterns: set[bytes] = set()
+        for row in positions:
+            same_row = prev[head + row]
+            shifted_row = prev[head + dy + row]
+            curr_row = curr[head + row]
+            patterns.add(curr_row[left * 4 : right * 4])
+            for x in range(left, right):
+                start = x * 4
+                end = start + 4
+                same += same_row[start:end] == curr_row[start:end]
+                shifted += shifted_row[start:end] == curr_row[start:end]
+                total += 1
+        same_score = same / total
+        shifted_score = shifted / total
+        if same_score >= 0.995 and len(patterns) >= 3:
+            # A genuinely fixed control can be vertically periodic, making the
+            # shifted comparison tie at 1.0. Exact same-position identity plus
+            # real visual variation distinguishes it from a blank page margin.
+            motion = "fixed"
+        elif (
+            same_score >= FIXED_SIDE_MIN_MATCH
+            and same_score >= shifted_score + FIXED_SIDE_MIN_PREFERENCE
+        ):
+            motion = "fixed"
+        elif (
+            shifted_score >= FIXED_SIDE_MIN_MATCH
+            and shifted_score >= same_score + FIXED_SIDE_MIN_PREFERENCE
+        ):
+            motion = "scrolling"
+        else:
+            motion = "ambiguous"
+        blocks.append((left, right, motion))
+    return blocks
+
+
+def _fixed_side_bands(
+    prev: list[bytes],
+    curr: list[bytes],
+    *,
+    head: int,
+    foot: int,
+    dy: int,
+) -> tuple[int, int]:
+    """Width of persistent leading/trailing side chrome around moving content."""
+    blocks = _side_motion_blocks(prev, curr, head=head, foot=foot, dy=dy)
+    if not blocks:
+        return (0, 0)
+    width = blocks[-1][1]
+    minimum = max(FIXED_SIDE_MIN_PIXELS, round(width * FIXED_SIDE_MIN_FRACTION))
+    scrolling = [
+        index for index, (_left, _right, motion) in enumerate(blocks) if motion == "scrolling"
+    ]
+    if not scrolling:
+        return (0, 0)
+
+    first_scrolling = scrolling[0]
+    last_scrolling = scrolling[-1]
+    left_edges = [
+        right
+        for index, (_left, right, motion) in enumerate(blocks)
+        if index < first_scrolling and motion == "fixed"
+    ]
+    right_edges = [
+        left
+        for index, (left, _right, motion) in enumerate(blocks)
+        if index > last_scrolling and motion == "fixed"
+    ]
+    left_band = max(left_edges, default=0)
+    right_start = min(right_edges, default=width)
+    right_band = width - right_start
+    if left_band < minimum:
+        left_band = 0
+    if right_band < minimum:
+        right_band = 0
+    return left_band, right_band
+
+
+def _alignment_from_rows(
+    prev: list[bytes],
+    curr: list[bytes],
+    h: int,
+    head: int,
+    foot: int,
+    min_overlap: int,
+) -> tuple[int | None, int, int]:
+    """Resolve mixed fixed/scrolling motion and describe persistent side bands."""
+    width = len(prev[0]) // 4 if prev else 0
+    evidence = _tile_offset_evidence(
+        prev,
+        curr,
+        head=head,
+        foot=foot,
+        min_overlap=min_overlap,
+    )
+    tiled_dy = _tile_scroll_consensus(evidence, width)
+    full_dy = _offset_from_rows_single(prev, curr, h, head, foot, min_overlap)
+    tiled_sides = (0, 0)
+    if tiled_dy is not None:
+        tiled_sides = _fixed_side_bands(
+            prev,
+            curr,
+            head=head,
+            foot=foot,
+            dy=tiled_dy,
+        )
+        # The tiled override exists for mixed motion around fixed side chrome.
+        # Without such a region, sparse periodic fragments must neither override
+        # the full-frame result nor turn a disjoint pair into a plausible partial.
+        if tiled_sides == (0, 0) and tiled_dy != full_dy:
+            tiled_dy = None
+    dy = tiled_dy if tiled_dy is not None else full_dy
+    if dy is None or dy <= 0:
+        return dy, 0, 0
+    if tiled_dy == dy:
+        left, right = tiled_sides
+    else:
+        left, right = _fixed_side_bands(prev, curr, head=head, foot=foot, dy=dy)
+    return dy, left, right
+
+
+def _offset_from_rows(
+    prev: list[bytes], curr: list[bytes], h: int, head: int, foot: int, min_overlap: int
+) -> int | None:
+    return _alignment_from_rows(prev, curr, h, head, foot, min_overlap)[0]
+
+
+def _dominant_band_rgba(rows: list[bytes], left: int, right: int) -> tuple[int, int, int, int]:
+    """Sample the most common color in a fixed side band for its extension fill."""
+    if not rows or right <= left:
+        return (0, 0, 0, 255)
+    counts: dict[bytes, int] = {}
+    for y in _sample_positions(len(rows), 64):
+        row = rows[y]
+        for relative_x in _sample_positions(right - left, 32):
+            start = (left + relative_x) * 4
+            pixel = row[start : start + 4]
+            counts[pixel] = counts.get(pixel, 0) + 1
+    pixel = max(counts, key=counts.get)
+    return pixel[0], pixel[1], pixel[2], pixel[3]
+
+
+def _fill_fixed_sides(
+    image: QImage,
+    left: int,
+    right: int,
+    left_rgba: tuple[int, int, int, int],
+    right_rgba: tuple[int, int, int, int],
+) -> None:
+    """Remove repeated side chrome from an appended strip in place."""
+    if left <= 0 and right <= 0:
+        return
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QPainter
+
+    painter = QPainter(image)
+    try:
+        if left > 0:
+            painter.fillRect(QRect(0, 0, left, image.height()), QColor(*left_rgba))
+        if right > 0:
+            painter.fillRect(
+                QRect(image.width() - right, 0, right, image.height()),
+                QColor(*right_rgba),
+            )
+    finally:
+        painter.end()
+
+
 def detect_sticky_bands(prev: QImage, curr: QImage) -> tuple[int, int]:
     """Height of the unchanging top and bottom bands shared by two frames.
 
@@ -438,11 +744,26 @@ def stitch_vertical(frames: list[QImage], *, min_overlap: int = DEFAULT_MIN_OVER
     # Pass 2: per-pair offsets under the global sticky bands. A disjoint pair is
     # an explicit failure: appending it would hide an unknown content gap.
     offsets: list[int] = []
+    side_bands: list[tuple[int, int]] = []
     for i in range(1, len(imgs)):
-        dy = _offset_from_rows(rows_list[i - 1], rows_list[i], h, head, foot, min_overlap)
+        dy, left_i, right_i = _alignment_from_rows(
+            rows_list[i - 1],
+            rows_list[i],
+            h,
+            head,
+            foot,
+            min_overlap,
+        )
         if dy is None:
             raise StitchError(f"no reliable overlap between frames {i} and {i + 1}")
         offsets.append(dy)
+        if dy > 0:
+            side_bands.append((left_i, right_i))
+
+    left_fixed = min((left for left, _right in side_bands), default=0)
+    right_fixed = min((right for _left, right in side_bands), default=0)
+    left_fill = _dominant_band_rgba(rows_list[0], 0, left_fixed)
+    right_fill = _dominant_band_rgba(rows_list[0], width - right_fixed, width)
 
     total_h = h + sum(offsets)
     canvas = QImage(width, total_h, QImage.Format.Format_RGBA8888)
@@ -460,10 +781,14 @@ def stitch_vertical(frames: list[QImage], *, min_overlap: int = DEFAULT_MIN_OVER
             if dy <= 0:
                 continue
             src_y = h - foot - dy
-            painter.drawImage(QRect(0, y, width, dy), imgs[i], QRect(0, src_y, width, dy))
+            strip = imgs[i].copy(0, src_y, width, dy)
+            _fill_fixed_sides(strip, left_fixed, right_fixed, left_fill, right_fill)
+            painter.drawImage(QRect(0, y, width, dy), strip)
             y += dy
         if foot > 0:
-            painter.drawImage(QRect(0, y, width, foot), imgs[-1], QRect(0, h - foot, width, foot))
+            footer = imgs[-1].copy(0, h - foot, width, foot)
+            _fill_fixed_sides(footer, left_fixed, right_fixed, left_fill, right_fill)
+            painter.drawImage(QRect(0, y, width, foot), footer)
     finally:
         painter.end()
     return canvas
@@ -483,11 +808,11 @@ class ScrollAccumulator:
     Unlike a batch :func:`stitch_vertical`, this keeps only what it needs as it
     goes — the header, the appended new-row strips, the most recent frame (for the
     footer), and the previous frame's rows (for the next comparison) — so memory is
-    bounded by the *output* size plus one frame, not by the frame count. A sticky
-    header / footer is detected from the first pair that actually moves and excluded
-    from the offset match (so initial timer samples cannot freeze the whole viewport
-    into a "sticky" band). It is kept once at the top / bottom. After movement starts,
-    a frame that did not move (offset ``0``) is counted toward
+    bounded by the *output* size plus one frame, not by the frame count. Sticky
+    top/bottom bands and side rails are detected from the first pair that actually
+    moves and excluded from repeated output (so initial timer samples cannot
+    freeze the whole viewport into a "sticky" band). After movement starts, a
+    frame that did not move (offset ``0``) is counted toward
     ``settle`` and dropped. The capture stops after ``settle`` still frames, once
     the height would exceed ``max_height``, or at the ``max_frames`` safety cap.
     """
@@ -513,6 +838,10 @@ class ScrollAccumulator:
         self._body: list[QImage] = []  # new-row strips, in scroll order (already cropped)
         self._head = 0
         self._foot = 0
+        self._left_fixed = 0
+        self._right_fixed = 0
+        self._left_fill = (0, 0, 0, 255)
+        self._right_fill = (0, 0, 0, 255)
         self._sticky_set = False
         self._body_height = 0
         self._width = 0
@@ -549,7 +878,14 @@ class ScrollAccumulator:
             raise StitchError("scrolling frame size changed during capture")
         if not self._sticky_set:
             head, foot = _sticky_from_rows(self._prev_rows, rows, h)
-            dy = _offset_from_rows(self._prev_rows, rows, h, head, foot, self._min_overlap)
+            dy, left_fixed, right_fixed = _alignment_from_rows(
+                self._prev_rows,
+                rows,
+                h,
+                head,
+                foot,
+                self._min_overlap,
+            )
             if dy == 0 or (
                 dy is None and _same_position_similar(self._prev_rows, rows, h, head, foot)
             ):
@@ -569,10 +905,23 @@ class ScrollAccumulator:
                     self._done = True
                     return False
                 raise ScrollAlignmentError("no reliable overlap before scrolling started")
+            self._left_fixed = left_fixed
+            self._right_fixed = right_fixed
+            self._left_fill = _dominant_band_rgba(self._prev_rows, 0, left_fixed)
+            self._right_fill = _dominant_band_rgba(
+                self._prev_rows,
+                w - right_fixed,
+                w,
+            )
             self._seed_body(head, foot)
         else:
-            dy = _offset_from_rows(
-                self._prev_rows, rows, h, self._head, self._foot, self._min_overlap
+            dy, _left_fixed, _right_fixed = _alignment_from_rows(
+                self._prev_rows,
+                rows,
+                h,
+                self._head,
+                self._foot,
+                self._min_overlap,
             )
         if dy is None:
             if self._samples >= self._max_frames:
@@ -592,7 +941,15 @@ class ScrollAccumulator:
         self._unchanged = 0
         new_rows = dy
         src_y = h - self._foot - dy
-        self._body.append(image.copy(0, src_y, w, new_rows))
+        strip = image.copy(0, src_y, w, new_rows)
+        _fill_fixed_sides(
+            strip,
+            self._left_fixed,
+            self._right_fixed,
+            self._left_fill,
+            self._right_fill,
+        )
+        self._body.append(strip)
         self._body_height += new_rows
         self._last = image
         self._prev_rows = rows
@@ -655,10 +1012,22 @@ class ScrollAccumulator:
                 painter.drawImage(QRect(0, y, self._width, strip.height()), strip)
                 y += strip.height()
             if self._foot > 0 and self._last is not None:
+                footer = self._last.copy(
+                    0,
+                    self._frame_h - self._foot,
+                    self._width,
+                    self._foot,
+                )
+                _fill_fixed_sides(
+                    footer,
+                    self._left_fixed,
+                    self._right_fixed,
+                    self._left_fill,
+                    self._right_fill,
+                )
                 painter.drawImage(
                     QRect(0, y, self._width, self._foot),
-                    self._last,
-                    QRect(0, self._frame_h - self._foot, self._width, self._foot),
+                    footer,
                 )
         finally:
             painter.end()
