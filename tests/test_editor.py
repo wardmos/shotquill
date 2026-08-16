@@ -302,6 +302,24 @@ def test_near_screen_sized_capture_keeps_bottom_toolbar_on_screen(qtbot, config,
     assert toolbar_bottom <= available.bottom()
 
 
+def test_tall_unplaced_capture_keeps_finish_toolbar_on_screen(qtbot, config):
+    """A long image has no screen origin, but its output bar must stay reachable."""
+    available = QGuiApplication.primaryScreen().availableGeometry()
+    window = EditorWindow(_image(400, available.height() * 3), config)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
+
+    outputs = window._toolbar.outputs_toolbar
+    output_bottom = outputs.mapToGlobal(QPoint(0, outputs.height() - 1))
+
+    assert window.frameGeometry().height() <= available.height()
+    assert available.contains(output_bottom)
+    assert outputs.widgetForAction(window._copy_action).isVisible()
+    assert outputs.widgetForAction(window._save_action).isVisible()
+
+
 def test_toolbar_placement_follows_the_pointer():
     # The toolbar lands in the corner nearest the pointer: (area, right-align)
     # per quadrant of the capture rect; no origin keeps the classic top-left.

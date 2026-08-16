@@ -204,9 +204,12 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
             # raise_ keeps the editor above the dim layer.
             self._backdrop.show()
             self.raise_()
-        if self._origin is not None and not self._placed:
+        if not self._placed:
             self._placed = True
-            self._place_over_origin()
+            if self._origin is not None:
+                self._place_over_origin()
+            else:
+                self._fit_unplaced_to_screen()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
 
     def changeEvent(self, event) -> None:
@@ -273,6 +276,36 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         # The framed shell re-places its top-level window over the new crop.
         self._place_over_origin()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+
+    def _fit_unplaced_to_screen(self) -> None:
+        """Keep an origin-less editor, such as a long screenshot, fully reachable."""
+        self.layout().activate()
+        viewport = self._canvas.viewport()
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+
+        # The requested viewport may be capped at 900 px, yet its two toolbar
+        # rows and window frame can still make the whole editor taller than the
+        # desktop. Shrink only the viewport; fitInView scales the image afterward.
+        chrome = self.frameGeometry().size() - viewport.size()
+        target = QSize(
+            min(viewport.width(), max(1, available.width() - chrome.width())),
+            min(viewport.height(), max(1, available.height() - chrome.height())),
+        )
+        self.resize(self.size() + (target - viewport.size()))
+
+        # No capture origin exists to position a long image, so retain the window
+        # manager placement where possible and clamp only the off-screen portion.
+        frame = self.frameGeometry()
+        max_left = max(available.left(), available.right() - frame.width() + 1)
+        max_top = max(available.top(), available.bottom() - frame.height() + 1)
+        clamped = QPoint(
+            min(max(frame.left(), available.left()), max_left),
+            min(max(frame.top(), available.top()), max_top),
+        )
+        self.move(self.pos() + (clamped - frame.topLeft()))
 
     def _place_over_origin(self) -> None:
         """Open the editor so the screenshot appears to stay where it was shot.
