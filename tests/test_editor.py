@@ -303,7 +303,7 @@ def test_near_screen_sized_capture_keeps_bottom_toolbar_on_screen(qtbot, config,
 
 
 def test_tall_unplaced_capture_keeps_finish_toolbar_on_screen(qtbot, config):
-    """A long image has no screen origin, but its output bar must stay reachable."""
+    """A long image keeps one reachable toolbar row above the image."""
     available = QGuiApplication.primaryScreen().availableGeometry()
     window = EditorWindow(_image(400, available.height() * 3), config)
     qtbot.addWidget(window)
@@ -311,11 +311,15 @@ def test_tall_unplaced_capture_keeps_finish_toolbar_on_screen(qtbot, config):
     window.show()
     qtbot.waitExposed(window)
 
-    outputs = window._toolbar.outputs_toolbar
+    toolbar = window._toolbar
+    outputs = toolbar.outputs_toolbar
     output_bottom = outputs.mapToGlobal(QPoint(0, outputs.height() - 1))
 
     assert window.frameGeometry().height() <= available.height()
     assert available.contains(output_bottom)
+    assert window.toolBarArea(toolbar) == Qt.TopToolBarArea
+    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
+    assert toolbar.geometry().top() == outputs.geometry().top()
     assert outputs.widgetForAction(window._copy_action).isVisible()
     assert outputs.widgetForAction(window._save_action).isVisible()
 
@@ -353,15 +357,19 @@ def test_toolbar_moves_to_bottom_right_when_pointer_ends_there(qtbot, config, mo
     window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
     toolbar = window._toolbar
     outputs = toolbar.outputs_toolbar
-    # The tool row follows the pointer; the no-collapse copy/save bar takes the
-    # opposite edge so the two never share (and widen) a row.
+    # The tool row follows the pointer, with the no-collapse copy/save section
+    # kept beside it on the same edge.
     assert window.toolBarArea(toolbar) == Qt.BottomToolBarArea
-    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
-    # Right alignment pushes the copy/save bar's buttons to the trailing edge via
-    # an expanding spacer ahead of its actions.
-    assert isinstance(outputs.actions()[0], QWidgetAction)
+    assert window.toolBarArea(outputs) == Qt.BottomToolBarArea
+    assert toolbar.geometry().top() == outputs.geometry().top()
+    assert toolbar.geometry().right() <= outputs.geometry().left()
+    # Right alignment pushes the complete row to the trailing edge via an
+    # expanding spacer ahead of the annotation actions.
+    assert isinstance(toolbar.actions()[0], QWidgetAction)
 
 
 def test_copy_and_save_stay_visible_when_the_editor_is_narrow(qtbot, config, monkeypatch):
@@ -384,11 +392,9 @@ def test_copy_and_save_stay_visible_when_the_editor_is_narrow(qtbot, config, mon
     assert outputs.widgetForAction(window._save_action).isVisible()
 
 
-def test_outputs_take_the_opposite_edge_and_dont_widen_a_narrow_shot(qtbot, config):
-    # The no-collapse outputs bar sits in the opposite edge's area, so the window
-    # minimum width is the wider single bar rather than the sum of both — a narrow
-    # shot keeps its width (the canvas stays exactly over the capture) and copy/
-    # save stay visible.
+def test_outputs_share_the_tool_edge_on_a_narrow_shot(qtbot, config):
+    # Copy/save remain the trailing part of the same row even when the annotation
+    # section has to fold for a narrow capture.
     origin = QRect(100, 100, 80, 100)  # narrower than the tool row plus outputs
     screenshot = _image(400, 300)
     window = EditorWindow(
@@ -400,8 +406,11 @@ def test_outputs_take_the_opposite_edge_and_dont_widen_a_narrow_shot(qtbot, conf
     qtbot.waitExposed(window)
     toolbar = window._toolbar
     outputs = toolbar.outputs_toolbar
-    assert window.toolBarArea(toolbar) != window.toolBarArea(outputs)
-    assert window._canvas.viewport().size() == origin.size()
+    assert window.toolBarArea(toolbar) == window.toolBarArea(outputs)
+    assert toolbar.geometry().top() == outputs.geometry().top()
+    assert toolbar.geometry().right() <= outputs.geometry().left()
+    # The finish buttons establish the row's minimum width on exceptionally
+    # narrow images; the editor may therefore be slightly wider than the image.
     assert outputs.widgetForAction(window._copy_action).isVisible()
     assert outputs.widgetForAction(window._save_action).isVisible()
 
@@ -414,11 +423,15 @@ def test_toolbar_stays_top_left_when_pointer_ends_there(qtbot, config, monkeypat
     window = EditorWindow(_image(), config, origin)
     qtbot.addWidget(window)
     window.setAttribute(Qt.WA_DeleteOnClose, False)
+    window.show()
+    qtbot.waitExposed(window)
     toolbar = window._toolbar
     outputs = toolbar.outputs_toolbar
     assert window.toolBarArea(toolbar) == Qt.TopToolBarArea
-    assert window.toolBarArea(outputs) == Qt.BottomToolBarArea
-    assert not isinstance(outputs.actions()[0], QWidgetAction)
+    assert window.toolBarArea(outputs) == Qt.TopToolBarArea
+    assert toolbar.geometry().top() == outputs.geometry().top()
+    assert toolbar.geometry().right() <= outputs.geometry().left()
+    assert not isinstance(toolbar.actions()[0], QWidgetAction)
 
 
 def test_editor_places_canvas_over_origin_with_bottom_toolbar(qtbot, config, monkeypatch):
