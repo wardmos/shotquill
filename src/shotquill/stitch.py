@@ -814,19 +814,26 @@ class ScrollAccumulator:
     freeze the whole viewport into a "sticky" band). After movement starts, a
     frame that did not move (offset ``0``) is counted toward
     ``settle`` and dropped. The capture stops after ``settle`` still frames, once
-    the height would exceed ``max_height``, or at the ``max_frames`` safety cap.
+    the height would exceed ``max_height`` or ``max_pixels``, or at the
+    ``max_frames`` safety cap.
     """
 
     def __init__(
         self,
         *,
         max_height: int,
+        max_pixels: int | None = None,
         settle: int | None,
         max_frames: int,
         start_frames: int | None = 25,
         min_overlap: int = DEFAULT_MIN_OVERLAP,
     ) -> None:
+        if max_height <= 0:
+            raise ValueError("max_height must be positive")
+        if max_pixels is not None and max_pixels <= 0:
+            raise ValueError("max_pixels must be positive")
         self._max_height = max_height
+        self._max_pixels = max_pixels
         self._settle = settle
         self._max_frames = max_frames
         self._start_frames = start_frames
@@ -856,6 +863,15 @@ class ScrollAccumulator:
         return self._count
 
     @property
+    def max_height(self) -> int:
+        """Effective height cap, tightened after the first frame if necessary."""
+        return self._max_height
+
+    @property
+    def max_pixels(self) -> int | None:
+        return self._max_pixels
+
+    @property
     def done(self) -> bool:
         return self._done
 
@@ -866,6 +882,12 @@ class ScrollAccumulator:
         rows, w, h = _rows(image)
         self._samples += 1
         if self._prev_rows is None:
+            if self._max_pixels is not None:
+                pixel_limited_height = self._max_pixels // w if w > 0 else 0
+                if pixel_limited_height <= 0:
+                    self._done = True
+                    raise StitchError("scrolling frame is wider than the pixel budget")
+                self._max_height = min(self._max_height, pixel_limited_height)
             self._first = image
             self._last = image
             self._prev_rows = rows
@@ -939,7 +961,8 @@ class ScrollAccumulator:
                 return False
             return True
         self._unchanged = 0
-        new_rows = dy
+        remaining = self._max_height - (self._head + self._body_height + self._foot)
+        new_rows = min(dy, remaining)
         src_y = h - self._foot - dy
         strip = image.copy(0, src_y, w, new_rows)
         _fill_fixed_sides(
@@ -991,10 +1014,9 @@ class ScrollAccumulator:
             # Never scrolled past the first frame — it is the whole result.
             if self._first is None:
                 raise ValueError("ScrollAccumulator has no frames")
-            image = self._first.copy()
-            if image.height() > self._max_height:
-                image = image.copy(0, 0, image.width(), self._max_height)
-            return image
+            if self._first.height() > self._max_height:
+                return self._first.copy(0, 0, self._first.width(), self._max_height)
+            return self._first.copy()
 
         from PySide6.QtCore import QRect
         from PySide6.QtGui import QImage, QPainter

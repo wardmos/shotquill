@@ -63,7 +63,9 @@ The parts agents rely on:
   and `--max-width` downscales before the image reaches a vision model.
 - **Stitch a scrollable region into one long capture.** `--scrolling` requires
   `--region X,Y,W,H` and samples while you scroll the target by hand.
-  `--max-height` and `--scroll-interval` bound and tune the run;
+  `--max-height` defaults to 20,000 px and has a 50,000 px hard ceiling;
+  a 64-million-pixel width × height budget automatically lowers the effective
+  height for wide or HiDPI captures. `--scroll-interval` tunes the run;
   the command finishes after the view settles or a safety limit is reached.
   The stitched `CaptureResult` then follows the ordinary pipeline, so
   `--mask`, `--reveal`, `--redact-pii`,

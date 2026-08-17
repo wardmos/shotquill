@@ -332,6 +332,10 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             return _usage_error("--scrolling needs --region (the area to scroll within)")
         if args.max_height <= 0:
             return _usage_error("--max-height must be positive")
+        if args.max_height > headless.SCROLL_MAX_HEIGHT_HARD_LIMIT:
+            return _usage_error(
+                f"--max-height cannot exceed {headless.SCROLL_MAX_HEIGHT_HARD_LIMIT}"
+            )
         if args.scroll_interval <= 0:
             return _usage_error("--scroll-interval must be positive")
 

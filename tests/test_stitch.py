@@ -265,6 +265,49 @@ def test_accumulator_caps_a_single_frame_to_max_height():
     assert acc.result().height() == 20
 
 
+def test_accumulator_tightens_height_to_total_pixel_budget():
+    page = _image(10, _tall(10, 100))
+    acc = ScrollAccumulator(
+        max_height=80,
+        max_pixels=450,
+        settle=3,
+        max_frames=600,
+    )
+
+    assert acc.add(_crop(page, 0, 30)) is True
+    assert acc.max_height == 45
+    assert acc.add(_crop(page, 10, 30)) is True
+    assert acc.add(_crop(page, 20, 30)) is False
+    result = acc.result()
+    assert (result.width(), result.height()) == (10, 45)
+    assert result.width() * result.height() <= 450
+
+
+def test_accumulator_keeps_requested_height_for_a_narrow_region():
+    page = _image(5, _tall(5, 120))
+    acc = ScrollAccumulator(
+        max_height=80,
+        max_pixels=450,
+        settle=3,
+        max_frames=600,
+    )
+
+    assert acc.add(_crop(page, 0, 30)) is True
+    assert acc.max_height == 80
+
+
+def test_accumulator_rejects_a_frame_wider_than_the_pixel_budget():
+    acc = ScrollAccumulator(
+        max_height=80,
+        max_pixels=5,
+        settle=3,
+        max_frames=600,
+    )
+
+    with pytest.raises(StitchError, match="pixel budget"):
+        acc.add(_image(10, _tall(10, 10)))
+
+
 def test_accumulator_counts_still_samples_toward_max_frames():
     page = _image(10, _tall(10, 100))
     first, moved = _crop(page, 0, 30), _crop(page, 10, 30)

@@ -20,6 +20,11 @@ import time
 from typing import TYPE_CHECKING
 
 from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
+from shotquill.config import (
+    SCROLL_MAX_HEIGHT_DEFAULT,
+    SCROLL_MAX_HEIGHT_HARD_LIMIT,
+    SCROLL_MAX_PIXELS,
+)
 
 if TYPE_CHECKING:
     from typing import BinaryIO
@@ -459,10 +464,6 @@ def perform_interactive_capture(
     return capturer.capture_interactive(), "interactive", 1
 
 
-# Default ceiling for a stitched long screenshot. A long page is tall but not
-# unbounded; the cap stops a runaway scroll (an animation that never settles, a
-# page that lazy-loads forever) from growing the canvas without limit.
-SCROLL_MAX_HEIGHT_DEFAULT = 20000
 # How long to rest between samples in the live (manual-scroll) loop — long enough
 # that the user can advance the page, short enough to feel responsive.
 SCROLL_INTERVAL_DEFAULT = 0.4
@@ -485,6 +486,7 @@ def perform_scrolling_capture(
     allowlist=None,
     via: str = "cli",
     max_height: int = SCROLL_MAX_HEIGHT_DEFAULT,
+    max_pixels: int = SCROLL_MAX_PIXELS,
     interval: float = SCROLL_INTERVAL_DEFAULT,
     settle: int = SCROLL_SETTLE_DEFAULT,
     max_frames: int = SCROLL_MAX_FRAMES_DEFAULT,
@@ -497,7 +499,9 @@ def perform_scrolling_capture(
     stitches the rest into one tall image
     (:class:`shotquill.stitch.ScrollAccumulator`). It stops when the view settles
     for ``settle`` samples (reached the bottom / the scroll stopped), when the
-    stitched height would exceed ``max_height``, or at the ``max_frames`` safety cap.
+    stitched height would exceed ``max_height`` or ``max_pixels``, or at the
+    ``max_frames`` safety cap. The pixel limit uses the first captured frame's
+    physical width, so wide and HiDPI regions receive a lower effective height.
 
     The user scrolls the selected area while the loop samples it. The backend must
     support repeated capture of the same region; the Wayland Screenshot portal only
@@ -558,7 +562,8 @@ def perform_scrolling_capture(
     frames_iter = iter(source) if source is not None else _live_source()
 
     accumulator = ScrollAccumulator(
-        max_height=max_height,
+        max_height=min(max_height, SCROLL_MAX_HEIGHT_HARD_LIMIT),
+        max_pixels=max_pixels,
         settle=settle,
         max_frames=max_frames,
         start_frames=SCROLL_START_FRAMES_DEFAULT,

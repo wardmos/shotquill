@@ -267,6 +267,12 @@ If one wheel step leaves too little overlap, the HUD keeps the valid partial
 capture and asks you to scroll back slightly before continuing with smaller
 steps; it does not discard or close the session.
 
+Settings offers a target height of **20,000 px** (default), **30,000 px**, or
+**40,000 px**. A separate **50,000 px** hard ceiling applies to every long
+screenshot. ShotQuill also limits the result to 64 million pixels using the
+captured image's actual pixel width, so a narrow region can reach the selected
+height while a wide or HiDPI region stops earlier.
+
 The HUD is placed outside the selected area when possible and hidden briefly if
 it would otherwise appear in sampled pixels. `Esc` cancels either selection or an
 active session. Choosing **Finish** before any movement reports that no scrolling
@@ -282,7 +288,9 @@ squill capture --scrolling --region 100,120,900,700 -o page.png
 
 Scroll the target by hand while the command samples. The CLI finishes when the
 view remains unchanged for several samples, `--max-height` is reached, or its
-safety limit is hit. `--max-height` and `--scroll-interval` bound and tune the run.
+safety limit is hit. `--max-height` defaults to 20,000 px and cannot exceed
+50,000 px; the same 64-million-pixel width × height budget may lower the effective
+height. `--scroll-interval` tunes the sampling cadence.
 The normal capture pipeline still applies after stitching, including `--mask`,
 `--reveal`, `--redact-pii`, `--session`, `--max-width`, and deterministic output.
 
@@ -527,6 +535,8 @@ Open **Settings…** from the menu-bar icon:
 - **Language** — English / 中文.
 - **Save folder** & **image format** (PNG / JPG).
 - **Hotkeys** for both capture modes.
+- **Long screenshot height** — 20,000 px (default), 30,000 px, or 40,000 px;
+  wide selections may stop earlier at the total-pixel safety limit.
 - **Highlight window after** — a delay before the hovered window fully lights up
   in smart capture, lifting its pixels out from under any overlap (off by
   default).

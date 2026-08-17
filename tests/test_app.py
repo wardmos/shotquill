@@ -2034,6 +2034,23 @@ def test_scrolling_region_collects_frames_and_delivers(qapp, config, fakes, monk
     app.shutdown()
 
 
+def test_scrolling_region_uses_configured_height_and_pixel_budget(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    config.set_scrolling_max_height(40_000)
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app_module.headless, "SCROLL_MAX_PIXELS", 123_456)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    assert app._scroll.accumulator.max_height == 40_000
+    assert app._scroll.accumulator.max_pixels == 123_456
+    app._cancel_scrolling(notify=False)
+    app.shutdown()
+
+
 @pytest.mark.parametrize(
     ("max_height", "max_frames", "expected_height"),
     ((35, 600, 35), (1000, 2, 40)),
@@ -2053,7 +2070,7 @@ def test_scrolling_safety_limit_pauses_until_explicit_finish(
 
     app = _build_app(qapp, fakes)
     app._allowlist = app_module.al.Allowlist()
-    monkeypatch.setattr(app_module.headless, "SCROLL_MAX_HEIGHT_DEFAULT", max_height)
+    monkeypatch.setattr(app._config, "scrolling_max_height", lambda: max_height)
     monkeypatch.setattr(app_module.headless, "SCROLL_MAX_FRAMES_DEFAULT", max_frames)
     results = _scroll_results(10, 30, (0, 10))
     state = {"i": 0}

@@ -134,6 +134,21 @@ def test_scrolling_caps_at_max_height():
     assert image.height() == 45  # grown past the cap, then cropped back to it
 
 
+def test_scrolling_caps_output_by_actual_frame_pixel_width():
+    page = _page(10, 100)
+    frames = [_crop(page, off, 30) for off in (0, 10, 20, 30, 40)]
+    image, _target, _count = headless.perform_scrolling_capture(
+        _DummyCapturer(),
+        REGION,
+        allowlist=None,
+        max_height=80,
+        max_pixels=450,
+        source=frames,
+    )
+    image = result_to_qimage(image)
+    assert (image.width(), image.height()) == (10, 45)
+
+
 def test_scrolling_refused_when_allowlist_enabled():
     locked = al.Allowlist(enabled=True, rules=(bl.BlockRule(bundle_id="com.apple.Terminal"),))
     with pytest.raises(headless.CaptureBlocked) as exc:
@@ -412,6 +427,11 @@ def test_cli_scrolling_rejects_non_positive_bounds():
     base = ["capture", "--scrolling", "--region", "0,0,10,10"]
     assert cli.main([*base, "--max-height", "0"]) == 2
     assert cli.main([*base, "--scroll-interval", "0"]) == 2
+
+
+def test_cli_scrolling_rejects_height_above_hard_limit():
+    base = ["capture", "--scrolling", "--region", "0,0,10,10"]
+    assert cli.main([*base, "--max-height", "50001"]) == 2
 
 
 @pytest.mark.parametrize("removed_args", (["--auto"], ["--scroll-clicks", "2"]))

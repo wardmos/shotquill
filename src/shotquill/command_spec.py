@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from shotquill.headless import (
     SCROLL_INTERVAL_DEFAULT,
     SCROLL_MAX_HEIGHT_DEFAULT,
+    SCROLL_MAX_HEIGHT_HARD_LIMIT,
 )
 
 # Shown in every CLI ``--help``: agents discover the exit-code contract the same
@@ -308,7 +309,9 @@ REGISTRY: tuple[Command, ...] = (
             Param(
                 "max_height",
                 f"cap the stitched long screenshot height (--scrolling only; "
-                f"default {SCROLL_MAX_HEIGHT_DEFAULT})",
+                f"default {SCROLL_MAX_HEIGHT_DEFAULT}, hard limit "
+                f"{SCROLL_MAX_HEIGHT_HARD_LIMIT}; wide regions may stop earlier at the "
+                "total-pixel limit)",
                 kind="int",
                 metavar="PX",
                 default=SCROLL_MAX_HEIGHT_DEFAULT,

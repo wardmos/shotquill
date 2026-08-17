@@ -223,6 +223,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.hotkey_enabled": {"en": "Enable", "zh": "启用"},
     "settings.smart": {"en": "Capture", "zh": "截图"},
     "settings.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
+    "settings.scrolling_max_height": {
+        "en": "Long screenshot height",
+        "zh": "长截图最大高度",
+    },
+    "settings.scrolling_max_height_tip": {
+        "en": "Target height. Wide selections may stop earlier to stay within the pixel limit.",
+        "zh": "目标高度；较宽的选区可能提前停止，以满足总像素限制。",
+    },
     "settings.editor_copy": {"en": "Copy in Editor", "zh": "编辑器内复制"},
     "settings.editor_save": {"en": "Save in Editor", "zh": "编辑器内保存"},
     "settings.editor_key_conflict": {

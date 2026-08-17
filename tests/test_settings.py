@@ -108,6 +108,32 @@ def test_dialog_save_persists_hover_switch(qtbot, config):
     assert config.hover_switch_delay_ms() == 0
 
 
+def test_dialog_offers_and_prefills_scrolling_max_height(qtbot, config):
+    config.set_scrolling_max_height(30_000)
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert [dialog._scrolling_max_height.itemData(i) for i in range(3)] == [
+        20_000,
+        30_000,
+        40_000,
+    ]
+    assert [dialog._scrolling_max_height.itemText(i) for i in range(3)] == [
+        "20,000 px",
+        "30,000 px",
+        "40,000 px",
+    ]
+    assert dialog._scrolling_max_height.currentData() == 30_000
+
+
+def test_dialog_save_persists_scrolling_max_height(qtbot, config):
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    dialog._scrolling_max_height.setCurrentIndex(dialog._scrolling_max_height.findData(40_000))
+    dialog._save_and_accept()
+    assert config.scrolling_max_height() == 40_000
+
+
 def test_dialog_prefills_region_adjust_from_config(qtbot, config):
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)

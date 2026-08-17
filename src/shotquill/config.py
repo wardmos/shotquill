@@ -64,6 +64,15 @@ def default_save_dir() -> str:
 # Screenshots leave the mouse pointer out by default; including it is opt-in.
 DEFAULT_INCLUDE_CURSOR = False
 
+# Long screenshots default to the original 20,000 px target. Settings exposes
+# three deliberate choices; the CLI may request up to the separate hard ceiling.
+# The pixel budget is evaluated against the captured frame's physical width, so
+# HiDPI captures and wide selections cannot bypass the memory guard.
+SCROLL_MAX_HEIGHT_DEFAULT = 20_000
+SCROLL_MAX_HEIGHT_CHOICES = (20_000, 30_000, 40_000)
+SCROLL_MAX_HEIGHT_HARD_LIMIT = 50_000
+SCROLL_MAX_PIXELS = 64_000_000
+
 # Capture feedback: a brief screen flash is on by default; the shutter sound is
 # off by default (opt-in, to stay quiet and unobtrusive).
 DEFAULT_FLASH = True
@@ -207,6 +216,17 @@ class Config:
 
     def set_include_cursor(self, enabled: bool) -> None:
         self._settings.setValue("capture/include_cursor", bool(enabled))
+
+    def scrolling_max_height(self) -> int:
+        """Configured target height; unknown stored values fall back safely."""
+        value = _to_int(
+            self._settings.value("capture/scrolling_max_height"),
+            SCROLL_MAX_HEIGHT_DEFAULT,
+        )
+        return value if value in SCROLL_MAX_HEIGHT_CHOICES else SCROLL_MAX_HEIGHT_DEFAULT
+
+    def set_scrolling_max_height(self, max_height: int) -> None:
+        self._settings.setValue("capture/scrolling_max_height", int(max_height))
 
     def flash_on_capture(self) -> bool:
         return _to_bool(self._settings.value("feedback/flash"), DEFAULT_FLASH)

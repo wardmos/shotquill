@@ -732,7 +732,8 @@ class ShotquillApp(QObject):
         self._scroll = _ScrollSession(
             timer=timer,
             accumulator=ScrollAccumulator(
-                max_height=headless.SCROLL_MAX_HEIGHT_DEFAULT,
+                max_height=self._config.scrolling_max_height(),
+                max_pixels=headless.SCROLL_MAX_PIXELS,
                 settle=None,
                 max_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
                 start_frames=None,

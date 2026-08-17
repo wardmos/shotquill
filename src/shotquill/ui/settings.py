@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from shotquill import permissions
-from shotquill.config import HOVER_SWITCH_NEVER, TOOLBAR_STYLES
+from shotquill.config import HOVER_SWITCH_NEVER, SCROLL_MAX_HEIGHT_CHOICES, TOOLBAR_STYLES
 from shotquill.hotkeys.combo import parse_combo, to_pynput_combo
 from shotquill.i18n import LANGUAGE_NAMES, LANGUAGES, t
 from shotquill.permissions import PermissionStatus
@@ -306,6 +306,14 @@ class SettingsDialog(QDialog):
         form.addRow(t("settings.smart"), self._smart)
         form.addRow(t("settings.fullscreen"), self._fullscreen)
 
+        self._scrolling_max_height = QComboBox()
+        for choice in SCROLL_MAX_HEIGHT_CHOICES:
+            self._scrolling_max_height.addItem(f"{choice:,} px", choice)
+        height_index = self._scrolling_max_height.findData(config.scrolling_max_height())
+        self._scrolling_max_height.setCurrentIndex(height_index)
+        self._scrolling_max_height.setToolTip(t("settings.scrolling_max_height_tip"))
+        form.addRow(t("settings.scrolling_max_height"), self._scrolling_max_height)
+
         self._editor_copy = _EditorKeyRow(
             config.editor_hotkey("editor_copy"), config.hotkey_enabled("editor_copy")
         )
@@ -515,6 +523,7 @@ class SettingsDialog(QDialog):
         self._config.set_editor_hotkey("editor_save", self._editor_save.sequence())
         self._config.set_hotkey_enabled("editor_copy", self._editor_copy.enabled())
         self._config.set_hotkey_enabled("editor_save", self._editor_save.enabled())
+        self._config.set_scrolling_max_height(self._scrolling_max_height.currentData())
         self._config.set_auto_save_after_capture(self._auto_save.isChecked())
         self._config.set_auto_copy_after_capture(self._auto_copy.isChecked())
         self._config.set_include_cursor(self._include_cursor.isChecked())
