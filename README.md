@@ -267,11 +267,11 @@ If one wheel step leaves too little overlap, the HUD keeps the valid partial
 capture and asks you to scroll back slightly before continuing with smaller
 steps; it does not discard or close the session.
 
-Settings offers a target height of **20,000 px** (default), **30,000 px**, or
-**40,000 px**. A separate **50,000 px** hard ceiling applies to every long
-screenshot. ShotQuill also limits the result to 64 million pixels using the
-captured image's actual pixel width, so a narrow region can reach the selected
-height while a wide or HiDPI region stops earlier.
+Settings offers a target height of **20,000 px** (default), **30,000 px**,
+**40,000 px**, or **50,000 px**. The last option is also the hard ceiling for
+every long screenshot. ShotQuill additionally limits the result to 64 million
+pixels using the captured image's actual pixel width, so a narrow region can
+reach the selected height while a wide or HiDPI region stops earlier.
 
 The HUD is placed outside the selected area when possible and hidden briefly if
 it would otherwise appear in sampled pixels. `Esc` cancels either selection or an
@@ -535,8 +535,8 @@ Open **Settings…** from the menu-bar icon:
 - **Language** — English / 中文.
 - **Save folder** & **image format** (PNG / JPG).
 - **Hotkeys** for both capture modes.
-- **Long screenshot height** — 20,000 px (default), 30,000 px, or 40,000 px;
-  wide selections may stop earlier at the total-pixel safety limit.
+- **Long screenshot height** — 20,000 px (default), 30,000 px, 40,000 px, or
+  50,000 px; wide selections may stop earlier at the total-pixel safety limit.
 - **Highlight window after** — a delay before the hovered window fully lights up
   in smart capture, lifting its pixels out from under any overlap (off by
   default).

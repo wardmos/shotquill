@@ -2038,14 +2038,14 @@ def test_scrolling_region_uses_configured_height_and_pixel_budget(qapp, config, 
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QImage
 
-    config.set_scrolling_max_height(40_000)
+    config.set_scrolling_max_height(50_000)
     app = _build_app(qapp, fakes)
     app._allowlist = app_module.al.Allowlist()
     monkeypatch.setattr(app_module.headless, "SCROLL_MAX_PIXELS", 123_456)
 
     app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
 
-    assert app._scroll.accumulator.max_height == 40_000
+    assert app._scroll.accumulator.max_height == 50_000
     assert app._scroll.accumulator.max_pixels == 123_456
     app._cancel_scrolling(notify=False)
     app.shutdown()

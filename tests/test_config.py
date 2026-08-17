@@ -104,7 +104,7 @@ def test_scrolling_height_limits_are_safe_and_configurable():
     )
 
     assert SCROLL_MAX_HEIGHT_DEFAULT == 20_000
-    assert SCROLL_MAX_HEIGHT_CHOICES == (20_000, 30_000, 40_000)
+    assert SCROLL_MAX_HEIGHT_CHOICES == (20_000, 30_000, 40_000, 50_000)
     assert SCROLL_MAX_HEIGHT_HARD_LIMIT == 50_000
     assert SCROLL_MAX_PIXELS == 64_000_000
 
@@ -252,12 +252,14 @@ def test_scrolling_max_height_round_trip_and_default(config):
     assert config.scrolling_max_height() == 30_000
     config.set_scrolling_max_height(40_000)
     assert config.scrolling_max_height() == 40_000
+    config.set_scrolling_max_height(50_000)
+    assert config.scrolling_max_height() == 50_000
 
 
 def test_scrolling_max_height_unknown_value_falls_back(config):
     from shotquill.config import SCROLL_MAX_HEIGHT_DEFAULT
 
-    config.set_scrolling_max_height(50_000)
+    config.set_scrolling_max_height(45_000)
     assert config.scrolling_max_height() == SCROLL_MAX_HEIGHT_DEFAULT
 
 

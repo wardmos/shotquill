@@ -113,15 +113,18 @@ def test_dialog_offers_and_prefills_scrolling_max_height(qtbot, config):
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
 
-    assert [dialog._scrolling_max_height.itemData(i) for i in range(3)] == [
+    assert dialog._scrolling_max_height.count() == 4
+    assert [dialog._scrolling_max_height.itemData(i) for i in range(4)] == [
         20_000,
         30_000,
         40_000,
+        50_000,
     ]
-    assert [dialog._scrolling_max_height.itemText(i) for i in range(3)] == [
+    assert [dialog._scrolling_max_height.itemText(i) for i in range(4)] == [
         "20,000 px",
         "30,000 px",
         "40,000 px",
+        "50,000 px",
     ]
     assert dialog._scrolling_max_height.currentData() == 30_000
 
@@ -129,9 +132,9 @@ def test_dialog_offers_and_prefills_scrolling_max_height(qtbot, config):
 def test_dialog_save_persists_scrolling_max_height(qtbot, config):
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
-    dialog._scrolling_max_height.setCurrentIndex(dialog._scrolling_max_height.findData(40_000))
+    dialog._scrolling_max_height.setCurrentIndex(dialog._scrolling_max_height.findData(50_000))
     dialog._save_and_accept()
-    assert config.scrolling_max_height() == 40_000
+    assert config.scrolling_max_height() == 50_000
 
 
 def test_dialog_prefills_region_adjust_from_config(qtbot, config):

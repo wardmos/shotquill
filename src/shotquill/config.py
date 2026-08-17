@@ -65,11 +65,11 @@ def default_save_dir() -> str:
 DEFAULT_INCLUDE_CURSOR = False
 
 # Long screenshots default to the original 20,000 px target. Settings exposes
-# three deliberate choices; the CLI may request up to the separate hard ceiling.
+# four deliberate choices through the hard ceiling; the CLI accepts the same range.
 # The pixel budget is evaluated against the captured frame's physical width, so
 # HiDPI captures and wide selections cannot bypass the memory guard.
 SCROLL_MAX_HEIGHT_DEFAULT = 20_000
-SCROLL_MAX_HEIGHT_CHOICES = (20_000, 30_000, 40_000)
+SCROLL_MAX_HEIGHT_CHOICES = (20_000, 30_000, 40_000, 50_000)
 SCROLL_MAX_HEIGHT_HARD_LIMIT = 50_000
 SCROLL_MAX_PIXELS = 64_000_000
 
