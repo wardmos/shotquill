@@ -362,27 +362,6 @@ def _positive_int_or_zero(value, name: str) -> int:
     return value
 
 
-def _positive_int(value, name: str) -> int:
-    """Validate a strictly positive integer MCP argument."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be a positive integer")
-    if value <= 0:
-        raise ValueError(f"{name} must be positive")
-    return value
-
-
-def _positive_number(value, name: str) -> float:
-    """Validate a finite, strictly positive numeric MCP argument."""
-    import math
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be a positive number")
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise ValueError(f"{name} must be positive")
-    return number
-
-
 def _confined_save_path(save_path: str) -> Path:
     """Resolve an agent-supplied capture ``save_path``, confined to the save folder.
 
