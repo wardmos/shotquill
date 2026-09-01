@@ -21,6 +21,12 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Tray menu
     "menu.smart": {"en": "Capture", "zh": "截图"},
     "menu.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
+    "menu.scrolling": {"en": "Long Screenshot", "zh": "长截图"},
+    "menu.scrolling_finish": {"en": "Finish Long Screenshot", "zh": "完成长截图"},
+    "tray.scrolling_progress": {
+        "en": "ShotQuill · Long screenshot · {frames} frames",
+        "zh": "ShotQuill · 长截图 · {frames} 帧",
+    },
     "menu.open_folder": {"en": "Open Save Folder", "zh": "打开保存文件夹"},
     "menu.settings": {"en": "Settings…", "zh": "设置…"},
     "menu.about": {"en": "About ShotQuill", "zh": "关于 ShotQuill"},
@@ -45,6 +51,27 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Your allowlist is on, so only specific apps can be captured — "
         "full-screen and region capture are off. Pick an allowlisted window.",
         "zh": "你的白名单已开启，只能截取指定应用——全屏和区域截图已停用。请选择白名单内的窗口。",
+    },
+    "notify.scrolling_needs_region": {
+        "en": "A long screenshot needs a region — drag to frame the area to scroll.",
+        "zh": "长截图需要先框选一个区域——请拖拽框出要滚动的范围。",
+    },
+    "notify.scrolling_unavailable": {
+        "en": "Long screenshots aren't available here: {reason}",
+        "zh": "此环境无法进行长截图：{reason}",
+    },
+    "notify.scrolling_cancelled": {
+        "en": "Long screenshot cancelled.",
+        "zh": "长截图已取消。",
+    },
+    "notify.scrolling_failed": {
+        "en": "Long screenshot stopped: {error}",
+        "zh": "长截图已停止：{error}",
+    },
+    "notify.scrolling_no_motion": {
+        "en": "Long screenshot stopped: no scrolling was detected. Scroll the selected "
+        "area before choosing Finish.",
+        "zh": "长截图已停止：未检测到滚动。请先滚动所选区域，再点击完成。",
     },
     "notify.allowlist_unreadable": {
         "en": "Your allowlist couldn't be read, so ShotQuill won't capture "
@@ -81,6 +108,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         " · arrows/WASD nudge the cursor · Esc cancels",
         "zh": "点击窗口截图 · 拖动框选区域 · 点此截全屏 · 方向键/WASD 微移光标 · Esc 取消",
     },
+    "scrolling.hint": {
+        "en": "Drag around the area you will scroll manually · Esc cancels",
+        "zh": "拖动框选要手动滚动的区域 · Esc 取消",
+    },
+    "scrolling.status": {
+        "en": "Scroll manually · {frames} frames stitched · choose Finish when done",
+        "zh": "请手动滚动 · 已拼接 {frames} 帧 · 完成后点击完成",
+    },
+    "scrolling.limit_reached": {
+        "en": "Safety limit reached · {frames} frames stitched · choose Finish to keep them",
+        "zh": "已达到安全上限 · 已拼接 {frames} 帧 · 点击完成保留结果",
+    },
+    "scrolling.alignment_lost": {
+        "en": "Views do not overlap · scroll back slightly, then continue in smaller steps"
+        " · {frames} frames kept",
+        "zh": "当前画面无法衔接 · 请稍微回滚后减小滚动幅度 · 已保留 {frames} 帧",
+    },
+    "scrolling.finish": {"en": "Finish", "zh": "完成"},
     # Shown on the full-screen crop-adjust surface (CropAdjustOverlay): how to
     # resize/move the selection, apply it, or back out.
     "smart.adjust_hint": {
@@ -178,6 +223,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.hotkey_enabled": {"en": "Enable", "zh": "启用"},
     "settings.smart": {"en": "Capture", "zh": "截图"},
     "settings.fullscreen": {"en": "Full Screen", "zh": "全屏截图"},
+    "settings.scrolling_max_height": {
+        "en": "Long screenshot height",
+        "zh": "长截图最大高度",
+    },
+    "settings.scrolling_max_height_tip": {
+        "en": "Target height. Wide selections may stop earlier to stay within the pixel limit.",
+        "zh": "目标高度；较宽的选区可能提前停止，以满足总像素限制。",
+    },
     "settings.editor_copy": {"en": "Copy in Editor", "zh": "编辑器内复制"},
     "settings.editor_save": {"en": "Save in Editor", "zh": "编辑器内保存"},
     "settings.editor_key_conflict": {

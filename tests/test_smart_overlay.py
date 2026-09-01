@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap  # noqa: E402
+from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from shotquill.capture.base import Rect, WindowInfo  # noqa: E402
@@ -154,6 +154,55 @@ def test_tiny_move_counts_as_click_not_drag(qtbot):
 
     assert region == []
     assert windows == [42]
+
+
+def test_region_only_click_keeps_overlay_open_and_never_selects_a_target(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), region_only=True)
+    regions, windows, fullscreen = [], [], []
+    overlay.region_selected.connect(lambda image, rect: regions.append((image, rect)))
+    overlay.window_selected.connect(lambda window_id, rect: windows.append(window_id))
+    overlay.fullscreen_selected.connect(lambda: fullscreen.append(True))
+
+    _move(overlay, 70, 25)
+    _press(overlay, 70, 25)
+    _release(overlay, 70, 25)
+
+    assert regions == []
+    assert windows == []
+    assert fullscreen == []
+    assert overlay._closed is False
+    assert overlay._origin is None
+    assert overlay._current is None
+    assert overlay._hover is None
+    assert overlay._pending_hover is None
+
+
+def test_region_only_drag_still_emits_the_selected_region(qtbot):
+    overlay = _overlay(qtbot, windows=_windows(), region_only=True)
+    received = []
+    overlay.region_selected.connect(lambda image, rect: received.append(rect))
+
+    _drag_region(overlay, 10, 10, 40, 30)
+
+    assert received == [QRect(10, 10, 30, 20)]
+
+
+def test_region_only_paints_the_long_screenshot_instruction(qtbot, monkeypatch):
+    overlay = _overlay(qtbot, region_only=True)
+    hints = []
+    monkeypatch.setattr(
+        overlay,
+        "_draw_hint",
+        lambda painter, **options: hints.append(options),
+    )
+    canvas = _screenshot(100, 50)
+    painter = QPainter(canvas)
+    try:
+        overlay._paint_all(painter)
+    finally:
+        painter.end()
+
+    assert hints == [{"key": "scrolling.hint", "top": True}]
 
 
 def test_crossing_drag_threshold_repaints_the_whole_overlay(qtbot, monkeypatch):

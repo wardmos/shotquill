@@ -158,27 +158,21 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
             self._status_badge.setStyleSheet(_BADGE_STYLE)
             self._status_badge.hide()
 
-        # The tool row lands in the corner nearest the pointer (e.g. the
+        # The complete toolbar row lands in the corner nearest the pointer (e.g.
         # bottom-right after a region drag towards the bottom of the screen), so
         # finishing a shot never means crossing the whole capture.
         area, align_right = _toolbar_placement(QCursor.pos(), origin)
-        self.addToolBar(area, toolbar)
-        # The copy/save finish buttons never fold, so they go on a sibling bar in
-        # the opposite edge's area rather than sharing the tool row's. Sharing a
-        # row would peg the window's minimum width to the sum of both bars — wider
-        # than a narrow shot, which then stretches the canvas off the capture; in
-        # separate areas the minimum is just the wider single bar. It also keeps
-        # each edge a single row, so the shot still lands exactly on its capture.
+        # Copy/save use a no-collapse sibling section, but it stays beside the
+        # annotation section on the same edge so every editor presents one
+        # continuous row with the finish actions last.
         outputs = toolbar.outputs_toolbar
         if align_right:
-            # Hug copy/save to the pointer's horizontal side: a leading expanding
-            # spacer pushes them to the trailing edge of their (slack-absorbing,
-            # since it's the only bar in its area) row.
+            # A leading expanding spacer pushes both sections to the trailing edge.
             spacer = QWidget()
             spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            outputs.insertWidget(outputs.actions()[0], spacer)
-        opposite = Qt.BottomToolBarArea if area == Qt.TopToolBarArea else Qt.TopToolBarArea
-        self.addToolBar(opposite, outputs)
+            toolbar.insertWidget(toolbar.actions()[0], spacer)
+        self.addToolBar(area, toolbar)
+        self.addToolBar(area, outputs)
         # Resolves the (configurable, possibly disabled) finish keys and sets the
         # matching tooltips; re-run by the app whenever Settings changes.
         self.reload_finish_keys()
@@ -204,9 +198,12 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
             # raise_ keeps the editor above the dim layer.
             self._backdrop.show()
             self.raise_()
-        if self._origin is not None and not self._placed:
+        if not self._placed:
             self._placed = True
-            self._place_over_origin()
+            if self._origin is not None:
+                self._place_over_origin()
+            else:
+                self._fit_unplaced_to_screen()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
 
     def changeEvent(self, event) -> None:
@@ -273,6 +270,36 @@ class EditorWindow(EditorCoreMixin, QMainWindow):
         # The framed shell re-places its top-level window over the new crop.
         self._place_over_origin()
         self._canvas.fitInView(self._canvas.sceneRect(), Qt.KeepAspectRatio)
+
+    def _fit_unplaced_to_screen(self) -> None:
+        """Keep an origin-less editor, such as a long screenshot, fully reachable."""
+        self.layout().activate()
+        viewport = self._canvas.viewport()
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+
+        # The requested viewport may be capped at 900 px, yet its toolbar row and
+        # window frame can still make the whole editor taller than the
+        # desktop. Shrink only the viewport; fitInView scales the image afterward.
+        chrome = self.frameGeometry().size() - viewport.size()
+        target = QSize(
+            min(viewport.width(), max(1, available.width() - chrome.width())),
+            min(viewport.height(), max(1, available.height() - chrome.height())),
+        )
+        self.resize(self.size() + (target - viewport.size()))
+
+        # No capture origin exists to position a long image, so retain the window
+        # manager placement where possible and clamp only the off-screen portion.
+        frame = self.frameGeometry()
+        max_left = max(available.left(), available.right() - frame.width() + 1)
+        max_top = max(available.top(), available.bottom() - frame.height() + 1)
+        clamped = QPoint(
+            min(max(frame.left(), available.left()), max_left),
+            min(max(frame.top(), available.top()), max_top),
+        )
+        self.move(self.pos() + (clamped - frame.topLeft()))
 
     def _place_over_origin(self) -> None:
         """Open the editor so the screenshot appears to stay where it was shot.

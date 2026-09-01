@@ -95,6 +95,20 @@ def test_hover_switch_defaults():
     assert HOVER_SWITCH_NEVER < 0
 
 
+def test_scrolling_height_limits_are_safe_and_configurable():
+    from shotquill.config import (
+        SCROLL_MAX_HEIGHT_CHOICES,
+        SCROLL_MAX_HEIGHT_DEFAULT,
+        SCROLL_MAX_HEIGHT_HARD_LIMIT,
+        SCROLL_MAX_PIXELS,
+    )
+
+    assert SCROLL_MAX_HEIGHT_DEFAULT == 20_000
+    assert SCROLL_MAX_HEIGHT_CHOICES == (20_000, 30_000, 40_000, 50_000)
+    assert SCROLL_MAX_HEIGHT_HARD_LIMIT == 50_000
+    assert SCROLL_MAX_PIXELS == 64_000_000
+
+
 def test_to_int_parses_qsettings_strings():
     # QSettings can round-trip ints as strings depending on the backend.
     assert _to_int("3000", 0) == 3000
@@ -228,6 +242,25 @@ def test_hover_switch_delay_round_trip_and_default(config):
     # Any negative value (e.g. hand-edited prefs) normalizes to NEVER.
     config.set_hover_switch_delay_ms(-42)
     assert config.hover_switch_delay_ms() == HOVER_SWITCH_NEVER
+
+
+def test_scrolling_max_height_round_trip_and_default(config):
+    from shotquill.config import SCROLL_MAX_HEIGHT_DEFAULT
+
+    assert config.scrolling_max_height() == SCROLL_MAX_HEIGHT_DEFAULT
+    config.set_scrolling_max_height(30_000)
+    assert config.scrolling_max_height() == 30_000
+    config.set_scrolling_max_height(40_000)
+    assert config.scrolling_max_height() == 40_000
+    config.set_scrolling_max_height(50_000)
+    assert config.scrolling_max_height() == 50_000
+
+
+def test_scrolling_max_height_unknown_value_falls_back(config):
+    from shotquill.config import SCROLL_MAX_HEIGHT_DEFAULT
+
+    config.set_scrolling_max_height(45_000)
+    assert config.scrolling_max_height() == SCROLL_MAX_HEIGHT_DEFAULT
 
 
 def test_config_persists_across_instances(config):

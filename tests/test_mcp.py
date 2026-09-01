@@ -173,6 +173,9 @@ def test_tools_list_descriptors():
     capture_schema = tools["capture"]["inputSchema"]
     assert "window_id" in capture_schema["properties"]
     assert "display" in capture_schema["properties"]
+    assert {"scrolling", "max_height", "scroll_interval", "scroll_clicks", "auto"}.isdisjoint(
+        capture_schema["properties"]
+    )
     assert capture_schema["additionalProperties"] is False
     assert "path" in tools["ocr"]["inputSchema"]["properties"]
 

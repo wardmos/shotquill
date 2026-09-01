@@ -205,21 +205,7 @@ class QtGrabCapturer(ScreenCapturer):
 
 
 def _qimage_to_result(image, scale: float, origin: tuple[int, int] = (0, 0)) -> CaptureResult:
-    """Flatten a QImage into the raw-RGBA CaptureResult the pipeline expects."""
-    from PySide6.QtGui import QImage
+    """Compatibility wrapper for the shared image conversion helper."""
+    from shotquill.imaging import qimage_to_result
 
-    image = image.convertToFormat(QImage.Format.Format_RGBA8888)
-    raw = bytes(image.constBits())
-    row = image.width() * 4
-    stride = image.bytesPerLine()
-    if stride != row:
-        # Qt may pad scanlines; CaptureResult pixels are tightly packed.
-        raw = b"".join(raw[y * stride : y * stride + row] for y in range(image.height()))
-    return CaptureResult(
-        width=image.width(),
-        height=image.height(),
-        scale=float(scale),
-        pixels=raw,
-        origin_x=int(origin[0]),
-        origin_y=int(origin[1]),
-    )
+    return qimage_to_result(image, scale, origin)

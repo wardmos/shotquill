@@ -44,6 +44,7 @@ squill capture --deterministic -o shot.png # byte-stable output for golden tests
 squill capture --mask 40,12,180,20 -o shot.png  # black out a rectangle before output
 squill capture --reveal 40,12,180,20 -o shot.png # mosaic all but this rectangle
 squill capture --redact-pii -o shot.png   # OCR and mask likely PII before output
+squill capture --scrolling --region 100,120,900,700 -o page.png # manually scroll region
 squill window list --json                     # list windows, front-most first
 squill display list                           # list monitors and their indexes
 squill ocr --app safari                   # screen → on-device OCR, one step
@@ -60,6 +61,21 @@ The parts agents rely on:
   defaults to a private temp dir — pass `-o` to keep a shot. `--json` swaps
   the bare path for one JSON object (path, target, size, ambiguity count),
   and `--max-width` downscales before the image reaches a vision model.
+- **Stitch a scrollable region into one long capture.** `--scrolling` requires
+  `--region X,Y,W,H` and samples while you scroll the target by hand.
+  `--max-height` defaults to 20,000 px and has a 50,000 px hard ceiling;
+  a 64-million-pixel width × height budget automatically lowers the effective
+  height for wide or HiDPI captures. `--scroll-interval` tunes the run;
+  the command finishes after the view settles or a safety limit is reached.
+  The stitched `CaptureResult` then follows the ordinary pipeline, so
+  `--mask`, `--reveal`, `--redact-pii`,
+  `--session`, `--max-width`, and deterministic encoding all
+  compose normally. MCP does not expose long capture while manual scrolling is
+  the supported workflow. Every frame pair must have a reliable overlap; a
+  pointer/scrollbar-sized artifact is tolerated, while a gap returns an explicit
+  error instead of a corrupted-looking success. Available on macOS, Windows,
+  and X11. Wayland returns `unsupported` until ShotQuill has a continuous
+  ScreenCast/PipeWire backend.
 - **Byte-stable captures for tests.** `--deterministic` pins the embedded DPI
   and strips PNG timestamp/text chunks (and forces the cursor off), so identical
   pixels always encode to identical bytes — what a golden-image diff or content

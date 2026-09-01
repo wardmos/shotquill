@@ -148,6 +148,15 @@ class _UsageError(Exception):
     """Raised by shared validation helpers; ``main`` paths turn it into exit 2."""
 
 
+def _flags_set(*pairs, present=lambda value: value is not None) -> list[str]:
+    """Names of the ``(name, value)`` pairs whose value was actually supplied.
+
+    Shared by the mutually-exclusive-flag checks. ``present`` defaults to
+    "not None" (the right test for a target option); pass ``bool`` for repeatable
+    lists / boolean flags where an empty list or ``False`` means "not given"."""
+    return [name for name, value in pairs if present(value)]
+
+
 def _validate_target(args: argparse.Namespace):
     """Check the shared target options and return the parsed region (or None)."""
     if args.app is not None and not args.app.strip():
@@ -224,7 +233,18 @@ def _capture_image(
         include_cursor,
     )
     capturer = headless.get_capturer(include_cursor=include_cursor)
-    if getattr(args, "interactive", False):
+    if getattr(args, "scrolling", False):
+        # The frame count is dropped here so ``matched`` keeps its window-
+        # ambiguity meaning (1 = unambiguous).
+        result, target, _frames = headless.perform_scrolling_capture(
+            capturer,
+            region,
+            via="cli",
+            max_height=args.max_height,
+            interval=args.scroll_interval,
+        )
+        matched = 1
+    elif getattr(args, "interactive", False):
         # The compositor frames the shot and hands back the user's selection.
         # An enforcing allowlist refuses it (the picker can land on any window
         # or the whole screen — same contract as a fullscreen grab). An active
@@ -281,21 +301,43 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     if args.interactive:
         # The picker chooses the target, so an explicit target option is a
         # contradiction — refuse it rather than silently honour one or the other.
-        conflicts = [
-            name
-            for name, value in (
-                ("--window-id", args.window_id),
-                ("--app", args.app),
-                ("--title", args.title),
-                ("--region", args.region),
-                ("--display", args.display),
-            )
-            if value is not None
-        ]
+        conflicts = _flags_set(
+            ("--window-id", args.window_id),
+            ("--app", args.app),
+            ("--title", args.title),
+            ("--region", args.region),
+            ("--display", args.display),
+        )
         if conflicts:
             return _usage_error(
                 "--interactive picks the target itself; it conflicts with " + ", ".join(conflicts)
             )
+
+    if args.scrolling:
+        # The long screenshot scrolls within a framed --region, so the other target
+        # modes contradict it.
+        if args.interactive:
+            return _usage_error("--scrolling and --interactive cannot be combined")
+        target_conflicts = _flags_set(
+            ("--window-id", args.window_id),
+            ("--app", args.app),
+            ("--title", args.title),
+            ("--display", args.display),
+        )
+        if target_conflicts:
+            return _usage_error(
+                "--scrolling captures a --region; it conflicts with " + ", ".join(target_conflicts)
+            )
+        if not args.region:
+            return _usage_error("--scrolling needs --region (the area to scroll within)")
+        if args.max_height <= 0:
+            return _usage_error("--max-height must be positive")
+        if args.max_height > headless.SCROLL_MAX_HEIGHT_HARD_LIMIT:
+            return _usage_error(
+                f"--max-height cannot exceed {headless.SCROLL_MAX_HEIGHT_HARD_LIMIT}"
+            )
+        if args.scroll_interval <= 0:
+            return _usage_error("--scroll-interval must be positive")
 
     # --deterministic forces the cursor off so the same scene always encodes the
     # same way; --include-cursor is rejected above, so this just stays the default.

@@ -29,6 +29,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from shotquill.headless import (
+    SCROLL_INTERVAL_DEFAULT,
+    SCROLL_MAX_HEIGHT_DEFAULT,
+    SCROLL_MAX_HEIGHT_HARD_LIMIT,
+)
+
 # Shown in every CLI ``--help``: agents discover the exit-code contract the same
 # way they discover the flags. Kept here so cli.py and the docs generator share
 # one copy.
@@ -276,10 +282,10 @@ REGISTRY: tuple[Command, ...] = (
         mcp_name="capture",
         mcp_description=(
             "Take a screenshot of the full screen (default), one window (by window_id, or "
-            "by app/title match), one monitor (by display index), or a region. Returns the "
-            "image plus a JSON metadata text block. Use max_width (e.g. 1024) to downscale "
-            "large screens and save context. Pass session (a handle from session_start) to "
-            "also file this capture as an observation frame in that recording."
+            "by app/title match), one monitor (by display index), or a region. Returns the image "
+            "plus a JSON metadata text block. Use max_width (e.g. 1024) to downscale large "
+            "screens and save context. Pass session (a handle from session_start) to also file "
+            "this capture as an observation frame in that recording."
         ),
         mcp_annotations={"title": "Take a screenshot", "openWorldHint": False},
         params=(
@@ -290,6 +296,34 @@ REGISTRY: tuple[Command, ...] = (
                 "region, or screen (Wayland only for now; meant for a compositor-bound hotkey "
                 "where global key grabs are blocked)",
                 kind="flag",
+                cli_only=True,
+            ),
+            Param(
+                "scrolling",
+                "long screenshot: sample --region while you scroll it by hand and stitch the "
+                "frames into one tall image (stops when the view settles or --max-height is "
+                "reached)",
+                kind="flag",
+                cli_only=True,
+            ),
+            Param(
+                "max_height",
+                f"cap the stitched long screenshot height (--scrolling only; "
+                f"default {SCROLL_MAX_HEIGHT_DEFAULT}, hard limit "
+                f"{SCROLL_MAX_HEIGHT_HARD_LIMIT}; wide regions may stop earlier at the "
+                "total-pixel limit)",
+                kind="int",
+                metavar="PX",
+                default=SCROLL_MAX_HEIGHT_DEFAULT,
+                cli_only=True,
+            ),
+            Param(
+                "scroll_interval",
+                f"seconds between manual-scroll samples (--scrolling only; "
+                f"default {SCROLL_INTERVAL_DEFAULT})",
+                kind="float",
+                metavar="SEC",
+                default=SCROLL_INTERVAL_DEFAULT,
                 cli_only=True,
             ),
             Param(

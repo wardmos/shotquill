@@ -1981,3 +1981,496 @@ def test_make_editor_uses_framed_window_on_wayland(qapp, config, fakes, monkeypa
         assert isinstance(editor, EditorWindow)
     finally:
         editor.close()
+
+
+# --- long screenshot (scrolling) ---------------------------------------------
+
+
+def _scroll_results(width, frame_h, offsets):
+    """Pre-baked region grabs: distinct-per-row crops of a tall virtual page."""
+
+    def _res(start):
+        seeds = list(range(start, start + frame_h))
+        px = bytearray()
+        for s in seeds:
+            px += bytes([s % 251, (s * 7) % 251, (s * 13) % 251, 255]) * width
+        return CaptureResult(width=width, height=frame_h, scale=1.0, pixels=bytes(px))
+
+    return [_res(off) for off in offsets]
+
+
+def test_scrolling_region_collects_frames_and_delivers(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+    capturer = fakes[0]
+    results = _scroll_results(10, 30, (0, 10, 20))
+    state = {"i": 0}
+
+    def _capture_region(region):
+        result = results[min(state["i"], len(results) - 1)]
+        state["i"] += 1
+        return result
+
+    monkeypatch.setattr(capturer, "capture_region", _capture_region)
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *a, **k: delivered.append(image))
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    # The QTimer is never spun in the test; the user scrolls while ticks sample.
+    for _ in range(6):
+        app._scrolling_tick()
+
+    assert delivered == []  # a pause never finishes a manual session
+    app._finish_scrolling()
+
+    assert delivered, "the finished long screenshot was never delivered"
+    assert delivered[0].height() == 50  # 30 + 10 + 10 stitched
+    assert app._scroll is None  # state torn down after delivery
+    app.shutdown()
+
+
+def test_scrolling_region_uses_configured_height_and_pixel_budget(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    config.set_scrolling_max_height(50_000)
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app_module.headless, "SCROLL_MAX_PIXELS", 123_456)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    assert app._scroll.accumulator.max_height == 50_000
+    assert app._scroll.accumulator.max_pixels == 123_456
+    app._cancel_scrolling(notify=False)
+    app.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("max_height", "max_frames", "expected_height"),
+    ((35, 600, 35), (1000, 2, 40)),
+)
+def test_scrolling_safety_limit_pauses_until_explicit_finish(
+    qapp,
+    qtbot,
+    config,
+    fakes,
+    monkeypatch,
+    max_height,
+    max_frames,
+    expected_height,
+):
+    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app._config, "scrolling_max_height", lambda: max_height)
+    monkeypatch.setattr(app_module.headless, "SCROLL_MAX_FRAMES_DEFAULT", max_frames)
+    results = _scroll_results(10, 30, (0, 10))
+    state = {"i": 0}
+
+    def _capture_region(region):
+        result = results[min(state["i"], len(results) - 1)]
+        state["i"] += 1
+        return result
+
+    monkeypatch.setattr(fakes[0], "capture_region", _capture_region)
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *args: delivered.append(image))
+
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+    session = app._scroll
+    app._scrolling_tick()
+    app._scrolling_tick()
+
+    assert app._scroll is session
+    assert session.timer.isActive() is False
+    assert session.status.isVisible()
+    assert session.status._label.text() == app_module.t("scrolling.limit_reached").format(frames=2)
+    assert delivered == []
+
+    qtbot.mouseClick(session.status._finish_button, Qt.MouseButton.LeftButton)
+
+    assert app._scroll is None
+    assert delivered and delivered[0].height() == expected_height
+    app.shutdown()
+
+
+def test_scrolling_alignment_gap_keeps_session_open_and_can_recover(
+    qapp, qtbot, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    results = _scroll_results(10, 30, (0, 10, 60, 20))
+    state = {"i": 0}
+
+    def _capture_region(region):
+        result = results[min(state["i"], len(results) - 1)]
+        state["i"] += 1
+        return result
+
+    monkeypatch.setattr(fakes[0], "capture_region", _capture_region)
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *args: delivered.append(image))
+
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+    session = app._scroll
+    app._scrolling_tick()
+    app._scrolling_tick()
+    app._scrolling_tick()
+
+    assert app._scroll is session
+    assert session.timer.isActive()
+    assert session.status._label.text() == app_module.t("scrolling.alignment_lost").format(frames=2)
+    assert delivered == []
+
+    app._scrolling_tick()
+
+    assert app._scroll is session
+    assert session.status._label.text() == app_module.t("scrolling.status").format(frames=3)
+    qtbot.mouseClick(session.status._finish_button, Qt.MouseButton.LeftButton)
+
+    assert app._scroll is None
+    assert delivered and delivered[0].height() == 50
+    app.shutdown()
+
+
+def test_scrolling_capture_uses_a_region_only_overlay(qapp, config, fakes):
+    app = _build_app(qapp, fakes)
+
+    app._capture_scrolling()
+
+    overlay = next(window for window in app._windows if isinstance(window, app_module.SmartOverlay))
+    assert overlay._region_only is True
+    overlay.close()
+    app.shutdown()
+
+
+def test_scrolling_finish_without_motion_reports_error_instead_of_delivering_one_frame(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    still = _scroll_results(10, 30, (0,))[0]
+    monkeypatch.setattr(fakes[0], "capture_region", lambda region: still)
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *args, **kwargs: delivered.append(args))
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._scrolling_tick()
+    app._finish_scrolling()
+
+    assert delivered == []
+    assert any("no scrolling was detected" in message for message in notified)
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_session_updates_and_restores_the_tray_tooltip(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    assert app._tray.toolTip() == app_module.t("tray.scrolling_progress").format(frames=0)
+    app._end_scrolling()
+    assert app._tray.toolTip() == "ShotQuill"
+    app.shutdown()
+
+
+def test_scrolling_session_shows_and_closes_visible_progress(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+
+    status = app._scroll.status
+    assert status.isVisible()
+    assert status._label.text() == app_module.t("scrolling.status").format(frames=0)
+
+    app._end_scrolling()
+    assert not status.isVisible()
+    app.shutdown()
+
+
+def test_scrolling_hides_an_overlapping_status_while_grabbing_pixels(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    target = qapp.primaryScreen().availableGeometry()
+    visibility_during_capture = []
+
+    def _capture_region(region):
+        visibility_during_capture.append(app._scroll.status.isVisible())
+        return _scroll_results(10, 30, (0,))[0]
+
+    monkeypatch.setattr(fakes[0], "capture_region", _capture_region)
+    app._scrolling_region_selected(QImage(), target)
+    status = app._scroll.status
+    assert status.geometry().intersects(target)
+
+    app._scrolling_tick()
+
+    assert visibility_during_capture == [False]
+    assert status.isVisible()
+    assert status._label.text() == app_module.t("scrolling.status").format(frames=1)
+    app._end_scrolling()
+    app.shutdown()
+
+
+def test_scrolling_visible_finish_button_delivers_the_session(
+    qapp, qtbot, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    results = _scroll_results(10, 30, (0, 10))
+    state = {"i": 0}
+
+    def _capture_region(region):
+        result = results[min(state["i"], len(results) - 1)]
+        state["i"] += 1
+        return result
+
+    monkeypatch.setattr(fakes[0], "capture_region", _capture_region)
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *args: delivered.append(image))
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+    status = app._scroll.status
+    app._scrolling_tick()
+    app._scrolling_tick()
+
+    qtbot.mouseClick(status._finish_button, Qt.MouseButton.LeftButton)
+
+    assert app._scroll is None
+    assert not status.isVisible()
+    assert delivered and delivered[0].height() == 40
+    app.shutdown()
+
+
+def test_scrolling_region_refused_when_allowlist_enabled(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+    from shotquill import blocklist as bl
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist(enabled=True, rules=(bl.BlockRule(name="terminal"),))
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *a, **k: delivered.append(a))
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    assert not delivered
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_region_starts_without_an_input_synthesis_backend(qapp, config, fakes):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    from shotquill import allowlist as al
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = al.Allowlist()  # disabled
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    assert app._scroll is not None
+    assert not hasattr(app._scroll, "scroller")
+    app._cancel_scrolling(notify=False)
+    app.shutdown()
+
+
+def test_scrolling_needs_region_notifies(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+
+    app = _build_app(qapp, fakes)
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+    app._scrolling_needs_region(5, QRect(0, 0, 2, 2))  # window_selected shape
+    app._scrolling_needs_region()  # fullscreen_selected shape
+    assert len(notified) == 2
+    app.shutdown()
+
+
+def test_scrolling_menu_reports_unavailable_on_wayland_instead_of_taking_one_shot(
+    qapp, config, fakes, monkeypatch
+):
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(qapp, "platformName", lambda: "wayland")
+    portal_calls = []
+    monkeypatch.setattr(
+        app_module.headless,
+        "perform_interactive_capture",
+        lambda *args, **kwargs: portal_calls.append(True),
+    )
+    notified = []
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._capture_scrolling()
+
+    assert not portal_calls
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_fails_closed_before_capture_when_blocklist_cannot_be_checked(
+    qapp, config, fakes, monkeypatch
+):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    active = bl.Blocklist(rules=(bl.BlockRule(name="secret"),))
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app, "_load_blocklist_or_abort", lambda: active)
+    captures = []
+    monkeypatch.setattr(
+        fakes[0],
+        "capture_region",
+        lambda region: captures.append(region) or _scroll_results(10, 30, (0,))[0],
+    )
+
+    def _cannot_list():
+        raise RuntimeError("window server unavailable")
+
+    monkeypatch.setattr(fakes[0], "list_windows", _cannot_list)
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *args, **kwargs: delivered.append(args))
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._scrolling_tick()
+
+    assert not captures  # policy is checked before raw pixels are grabbed
+    assert not delivered
+    assert notified
+    assert app._scroll is None
+    app.shutdown()
+
+
+def test_scrolling_keeps_settings_shelved_until_session_ends(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    monkeypatch.setattr(app_module, "SettingsDialog", _FakeSettingsDialog)
+    app._open_settings()
+    dialog = app._settings_dialog
+    app._shelve_settings_dialog()
+    assert not dialog.isVisible()
+
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._unshelve_settings_dialog()  # overlay destruction callback
+    assert not dialog.isVisible()
+
+    app._end_scrolling()
+    assert dialog.isVisible()
+    app.shutdown()
+
+
+def test_scrolling_action_retrigger_finishes_active_session(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    results = _scroll_results(10, 30, (0, 10))
+    state = {"i": 0}
+
+    def _capture_region(region):
+        result = results[min(state["i"], len(results) - 1)]
+        state["i"] += 1
+        return result
+
+    monkeypatch.setattr(fakes[0], "capture_region", _capture_region)
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *args: delivered.append(image))
+    opened = []
+    monkeypatch.setattr(app, "_open_smart_overlay", lambda **kwargs: opened.append(kwargs))
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+    app._scrolling_tick()
+    app._scrolling_tick()
+
+    app._capture_scrolling()
+
+    assert app._scroll is None
+    assert delivered and delivered[0].height() == 40
+    assert not opened
+    app.shutdown()
+
+
+def test_escape_cancels_active_scrolling_session(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QEvent, QRect
+    from PySide6.QtGui import QImage, QKeyEvent
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    delivered = []
+    monkeypatch.setattr(app, "_deliver_capture", lambda image, *args: delivered.append(image))
+    app._scrolling_region_selected(QImage(), QRect(0, 0, 10, 30))
+
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    assert app.eventFilter(app, event) is True
+    assert app._scroll is None
+    assert delivered == []
+    app.shutdown()
+
+
+def test_scrolling_no_motion_limit_waits_for_explicit_finish(qapp, config, fakes, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage
+
+    app = _build_app(qapp, fakes)
+    app._allowlist = app_module.al.Allowlist()
+    monkeypatch.setattr(app_module.headless, "SCROLL_MAX_FRAMES_DEFAULT", 2)
+    still = _scroll_results(10, 30, (0,))[0]
+    monkeypatch.setattr(fakes[0], "capture_region", lambda region: still)
+    delivered, notified = [], []
+    monkeypatch.setattr(app, "_deliver_capture", lambda *args, **kwargs: delivered.append(args))
+    monkeypatch.setattr(app, "_notify", notified.append)
+
+    app._scrolling_region_selected(QImage(), QRect(100, 100, 300, 300))
+    session = app._scroll
+    app._scrolling_tick()
+    app._scrolling_tick()
+
+    assert app._scroll is session
+    assert session.timer.isActive() is False
+    assert session.status._label.text() == app_module.t("scrolling.limit_reached").format(frames=1)
+    assert delivered == []
+
+    app._finish_scrolling()
+
+    assert app._scroll is None
+    assert delivered == []
+    assert any("no scrolling was detected" in message for message in notified)
+    app.shutdown()

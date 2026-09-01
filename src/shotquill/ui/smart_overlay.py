@@ -26,6 +26,10 @@ editor; folding it into the editor removed one mode from the flow.
 Esc or a right-click cancels. This folds the old ``RegionOverlay`` and
 ``WindowPicker`` into one interaction.
 
+``region_only=True`` turns this into the dedicated long-screenshot framing
+surface: window/full-screen hover targets are disabled, a persistent instruction
+explains the drag-to-start gesture, and a plain click leaves the overlay open.
+
 Hovered windows show a *live preview*: the frozen desktop screenshot renders
 windows as they were stacked, so a partially covered window would preview with
 its occluder baked in. Instead the overlay asks ``window_preview`` (a callable
@@ -168,17 +172,22 @@ class SmartOverlay(QWidget):
         windows: list[WindowInfo],
         window_preview: Callable[[int], QImage | None] | None = None,
         hover_switch_delay_ms: int = DEFAULT_HOVER_SWITCH_DELAY_MS,
+        region_only: bool = False,
     ) -> None:
         super().__init__()
         self._screenshot = screenshot
         self._pixmap = QPixmap.fromImage(screenshot)
         self._geometry = geometry
-        self._windows = windows
+        self._region_only = bool(region_only)
+        # Region-only callers (long screenshots) must never look like the normal
+        # click-a-window/full-screen picker. Discard those targets up front so
+        # hover preview work cannot start accidentally.
+        self._windows = [] if self._region_only else windows
         # Window bounds are global; the overlay's coordinates are relative to the
         # virtual desktop origin, so shift them once for hit-testing and drawing.
         self._boxes = [
             (w.bounds.x - geometry.x(), w.bounds.y - geometry.y(), w.bounds.width, w.bounds.height)
-            for w in windows
+            for w in self._windows
         ]
         # Ratio between native screenshot pixels and logical overlay points.
         self._sx = screenshot.width() / max(geometry.width(), 1)
@@ -224,7 +233,7 @@ class SmartOverlay(QWidget):
         # At most one fetch is in flight: sweeping the pointer across many
         # windows must not pile worker threads onto the window server. When a
         # fetch lands and the hover has moved on, the ready handler re-arms.
-        self._window_preview = window_preview
+        self._window_preview = None if self._region_only else window_preview
         self._previews: dict[int, QPixmap | None] = {}
         self._preview_busy = False
         self._closed = False
@@ -380,6 +389,10 @@ class SmartOverlay(QWidget):
         has_selection = self._origin is not None and self._current is not None
         if self._dragging and has_selection:
             self._paint_region(painter)
+        elif self._region_only:
+            # Keep the frozen desktop dim: unlike smart capture, no window or
+            # full-screen target is selectable in this mode.
+            pass
         elif self._hover is not None:
             self._paint_window(painter)
             self._paint_pending_window(painter)
@@ -392,6 +405,8 @@ class SmartOverlay(QWidget):
             self._paint_guides(painter)
             self._paint_cursor(painter)
             self._paint_loupe(painter)
+        if self._region_only:
+            self._draw_hint(painter, key="scrolling.hint", top=True)
 
     def _paint_region(self, painter: QPainter) -> None:
         sel = self._selection()
@@ -541,12 +556,17 @@ class SmartOverlay(QWidget):
             font=self.font(),
         )
 
-    def _draw_hint(self, painter: QPainter) -> None:
-        hint = t("smart.hint")
+    def _draw_hint(self, painter: QPainter, *, key: str = "smart.hint", top: bool = False) -> None:
+        hint = t(key)
         painter.setFont(self._label_font(14))
         metrics = painter.fontMetrics()
-        box = QRect(0, 0, metrics.horizontalAdvance(hint) + 32, 40)
-        box.moveCenter(self.rect().center())
+        width = min(metrics.horizontalAdvance(hint) + 32, max(self.width() - 16, 1))
+        box = QRect(0, 0, width, 40)
+        if top:
+            box.moveLeft(self.rect().center().x() - box.width() // 2)
+            box.moveTop(24)
+        else:
+            box.moveCenter(self.rect().center())
         painter.fillRect(box, QColor(0, 0, 0, 180))
         painter.setPen(Qt.white)
         painter.drawText(box, Qt.AlignCenter, hint)
@@ -593,6 +613,16 @@ class SmartOverlay(QWidget):
             dirty = self._union_regions(
                 self._selection_dirty_region(old_selection),
                 self._selection_dirty_region(self._selection()),
+                self._cursor_dirty_region(old_cursor),
+                self._cursor_dirty_region(pos),
+            )
+            self._refresh(dirty)
+            return
+        if self._region_only:
+            self._hover_timer.stop()
+            self._hover = None
+            self._pending_hover = None
+            dirty = self._union_regions(
                 self._cursor_dirty_region(old_cursor),
                 self._cursor_dirty_region(pos),
             )
@@ -735,7 +765,8 @@ class SmartOverlay(QWidget):
             # A quick move-and-click means "the thing under the cursor", even
             # when the debounced highlight hasn't caught up yet (and this is
             # the only way the highlight moves under HOVER_SWITCH_NEVER).
-            self._commit_pending_hover()
+            if not self._region_only:
+                self._commit_pending_hover()
             self._origin = pos
             self._current = pos
             self._dragging = False
@@ -751,6 +782,14 @@ class SmartOverlay(QWidget):
         self._current = pos
         if self._dragging:
             self._accept_region()
+        elif self._region_only:
+            # A click is not a valid long-screenshot target. Keep the dedicated
+            # overlay open so the user can immediately try the instructed drag,
+            # instead of closing and forcing them back through the tray menu.
+            self._origin = None
+            self._current = None
+            self._press_hover = None
+            self._refresh()
         else:
             self._accept_target(self._press_hover)
 
@@ -760,7 +799,7 @@ class SmartOverlay(QWidget):
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self._dragging:
                 self._accept_region()
-            else:
+            elif not self._region_only:
                 # Like a click: confirm what's under the pointer, even when the
                 # debounced highlight hasn't caught up with it yet.
                 self._commit_pending_hover()
@@ -828,6 +867,8 @@ class SmartOverlay(QWidget):
         self.close()
 
     def _accept_target(self, hover: int | None) -> None:
+        if self._region_only:
+            return
         self._closed = True  # one outcome only — see _accept_region
         if hover is not None:
             window = self._windows[hover]

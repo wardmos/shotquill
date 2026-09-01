@@ -58,6 +58,8 @@ def _ensure_gui_app() -> None:
 class PortalScreenCapturer(ScreenCapturer):
     """Full-screen / region capture through xdg-desktop-portal (Wayland)."""
 
+    supports_repeated_region_capture = False
+
     def __init__(self, include_cursor: bool = False) -> None:
         # The portal decides whether the cursor is drawn; keep the flag for the
         # ScreenCapturer contract (include_cursor is documented best-effort).

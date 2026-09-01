@@ -63,6 +63,9 @@ extract text, copy, save, or pin the result without breaking your flow.
     (Settings → *Highlight window after*, off by default) fully highlights a
     window first, lifting its pixels out from under any overlap.
   - **Full screen** (`⌥S`) — every display at once, instantly.
+- **Long screenshots** — frame a scrollable region, scroll it by hand, and let
+  ShotQuill align overlapping frames into one tall result. Available from the tray
+  and CLI on macOS, Windows, and X11.
 - **Configurable after-capture flow** — open the annotation editor by default, or
   make captures hands-free by auto-saving, auto-copying, or both.
 - **Annotation editor** — rectangle, rounded-rectangle, and ellipse spotlights
@@ -97,7 +100,7 @@ extract text, copy, save, or pin the result without breaking your flow.
 | --- | --- | --- |
 | **macOS 13+** | Full GUI, smart capture, editor, global hotkeys, window enumeration, on-device OCR, CLI / MCP | Primary and most complete platform; ScreenCaptureKit capture on macOS 14+, with a CoreGraphics fallback on macOS 13. |
 | **Linux / X11** | Full GUI, editor, CLI / MCP, window enumeration, global hotkeys, blocklist redaction | OCR requires Tesseract and the desired language packs. |
-| **Linux / Wayland** | GUI and editor; capture for GUI / CLI / MCP uses `xdg-desktop-portal` and the compositor's picker | No window enumeration by design; global hotkeys require GlobalShortcuts portal support. |
+| **Linux / Wayland** | GUI and editor; capture for GUI / CLI / MCP uses `xdg-desktop-portal` and the compositor's picker | No window enumeration by design; global hotkeys require GlobalShortcuts portal support. Long screenshots need a future ScreenCast/PipeWire stream backend and currently return an explicit unsupported error. |
 | **Windows** | GUI, editor, CLI / MCP, Win32 window enumeration, global hotkeys, launch at login | Release ZIP is x64 and omits OCR; the experimental WinRT backend requires the `windows-ocr` extra in a pip install. |
 
 ---
@@ -243,6 +246,69 @@ on macOS, text labels on Linux/Windows).
 > raises a notification so you can use the tray menu, or bind a compositor-level
 > shortcut to `squill capture` (full screen) / `squill capture --interactive`
 > (the compositor's own picker frames a window, region, or screen).
+
+### Long screenshots
+
+First focus the target and move it to the desired starting position. Choose
+**Long Screenshot** from the tray; its dedicated overlay stays dim and asks you
+to drag around the viewport you intend to scroll. A plain click is ignored instead
+of selecting a window or closing the overlay.
+
+Releasing the drag starts repeated sampling, but ShotQuill does not move the
+pointer or drive the wheel. Scroll the selected viewport yourself in small steps
+so consecutive views overlap. A floating status HUD shows the stitched-frame
+count and an explicit **Finish** button; pauses do not end the GUI session. When
+the required content has been covered, choose **Finish** in the HUD or **Finish
+Long Screenshot** in the tray.
+If the built-in height or sampling safety limit is reached first, sampling
+pauses and the HUD asks you to finish or cancel; it never closes the manual
+session or generates an image by itself.
+If one wheel step leaves too little overlap, the HUD keeps the valid partial
+capture and asks you to scroll back slightly before continuing with smaller
+steps; it does not discard or close the session.
+
+Settings offers a target height of **20,000 px** (default), **30,000 px**,
+**40,000 px**, or **50,000 px**. The last option is also the hard ceiling for
+every long screenshot. ShotQuill additionally limits the result to 64 million
+pixels using the captured image's actual pixel width, so a narrow region can
+reach the selected height while a wide or HiDPI region stops earlier.
+
+The HUD is placed outside the selected area when possible and hidden briefly if
+it would otherwise appear in sampled pixels. `Esc` cancels either selection or an
+active session. Choosing **Finish** before any movement reports that no scrolling
+was detected instead of opening an ordinary one-frame screenshot. This workflow
+does not synthesize input and does not require Accessibility (control your
+computer) permission.
+
+The CLI supports the same manual-capture model:
+
+~~~bash
+squill capture --scrolling --region 100,120,900,700 -o page.png
+~~~
+
+Scroll the target by hand while the command samples. The CLI finishes when the
+view remains unchanged for several samples, `--max-height` is reached, or its
+safety limit is hit. `--max-height` defaults to 20,000 px and cannot exceed
+50,000 px; the same 64-million-pixel width × height budget may lower the effective
+height. `--scroll-interval` tunes the sampling cadence.
+The normal capture pipeline still applies after stitching, including `--mask`,
+`--reveal`, `--redact-pii`, `--session`, `--max-width`, and deterministic output.
+
+The MCP `capture` tool intentionally does not expose long screenshots while the
+supported workflow requires interactive manual scrolling. Automatic scrolling
+may return later as a separate opt-in feature, but `--auto` and synthetic wheel
+input are not supported now.
+
+Consecutive frames must overlap. Small fixed-position artifacts such as the
+pointer or scrollbar are tolerated, but ShotQuill stops with an explicit error
+instead of silently producing a plausible image with missing content when it
+cannot establish a reliable overlap. An enabled allowlist refuses region-based
+long capture; an active blocklist is checked before every grab and matching
+windows are redacted.
+
+Long screenshots currently work on macOS, Windows, and X11. Wayland Screenshot
+portal brokers isolated stills, not a continuous stream, so ShotQuill reports the
+feature as unsupported there until a ScreenCast/PipeWire backend is implemented.
 
 ### What happens after a capture
 
@@ -469,6 +535,8 @@ Open **Settings…** from the menu-bar icon:
 - **Language** — English / 中文.
 - **Save folder** & **image format** (PNG / JPG).
 - **Hotkeys** for both capture modes.
+- **Long screenshot height** — 20,000 px (default), 30,000 px, 40,000 px, or
+  50,000 px; wide selections may stop earlier at the total-pixel safety limit.
 - **Highlight window after** — a delay before the hovered window fully lights up
   in smart capture, lifting its pixels out from under any overlap (off by
   default).
@@ -823,7 +891,8 @@ installed with pip.
 
 ## Roadmap
 
-- [ ] Scrolling / long-page capture
+- [x] Manual scrolling / long-page capture (macOS, Windows, and X11; Wayland stream backend pending)
+- [ ] Optional automatic scrolling (manual scrolling is the only supported workflow today)
 
 Completed work is summarized in [Highlights](#highlights) and the platform
 sections above; version-by-version changes are available in

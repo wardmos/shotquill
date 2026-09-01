@@ -17,6 +17,7 @@ from shotquill.imaging import (  # noqa: E402
     downscale_to_max,
     frame_diff_fraction,
     image_diff_box,
+    qimage_to_result,
     result_to_qimage,
 )
 
@@ -84,6 +85,27 @@ def test_result_to_qimage_is_detached_from_source_bytes():
     del result
     # Touching every pixel after dropping the source would crash on a dangling view.
     assert image.pixelColor(1, 1).alpha() == 255
+
+
+def test_qimage_to_result_flattens_stride_and_preserves_capture_geometry():
+    # Wrap rows with four bytes of padding to exercise tight CaptureResult packing.
+    backing = bytearray(32)
+    image = QImage(backing, 3, 2, 16, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(10, 20, 30, 255))
+
+    result = qimage_to_result(image, scale=2.0, origin=(-4, 7))
+
+    assert (result.width, result.height, result.scale) == (3, 2, 2.0)
+    assert (result.origin_x, result.origin_y) == (-4, 7)
+    assert len(result.pixels) == 3 * 2 * 4
+    restored = result_to_qimage(result)
+    pixel = restored.pixelColor(2, 1)
+    assert (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()) == (
+        10,
+        20,
+        30,
+        255,
+    )
 
 
 def _solid(width: int, height: int) -> QImage:

@@ -16,9 +16,15 @@ invalid (e.g. an image past the size cap).
 from __future__ import annotations
 
 import sys
+import time
 from typing import TYPE_CHECKING
 
 from shotquill.capture.base import CaptureResult, DisplayInfo, Rect, ScreenCapturer, WindowInfo
+from shotquill.config import (
+    SCROLL_MAX_HEIGHT_DEFAULT,
+    SCROLL_MAX_HEIGHT_HARD_LIMIT,
+    SCROLL_MAX_PIXELS,
+)
 
 if TYPE_CHECKING:
     from typing import BinaryIO
@@ -96,6 +102,10 @@ class CaptureBlocked(HeadlessError):
     privacy feature working, not an error to retry."""
 
     exit_code = EXIT_BLOCKED
+
+
+class ScrollingCaptureError(HeadlessError):
+    """Long capture stopped because consecutive frames could not be aligned."""
 
 
 class ImageInputTooLarge(HeadlessError):
@@ -452,6 +462,139 @@ def perform_interactive_capture(
     if allowlist:
         _refuse_whole_screen_under_allowlist("interactive", via=via)
     return capturer.capture_interactive(), "interactive", 1
+
+
+# How long to rest between samples in the live (manual-scroll) loop — long enough
+# that the user can advance the page, short enough to feel responsive.
+SCROLL_INTERVAL_DEFAULT = 0.4
+# Consecutive unchanged samples that mean "the scroll has stopped" (reached the
+# bottom, or the user let go) — the signal to finish and stitch.
+SCROLL_SETTLE_DEFAULT = 3
+# Manual capture gives the user time to begin moving the page before reporting
+# that no scroll was observed.
+SCROLL_START_FRAMES_DEFAULT = 25
+# Absolute safety cap on frames, independent of the height cap, so the loop always
+# terminates even if every frame keeps changing (e.g. a live feed in the region).
+SCROLL_MAX_FRAMES_DEFAULT = 600
+
+
+def perform_scrolling_capture(
+    capturer: ScreenCapturer,
+    region: Rect,
+    *,
+    blocklist=None,
+    allowlist=None,
+    via: str = "cli",
+    max_height: int = SCROLL_MAX_HEIGHT_DEFAULT,
+    max_pixels: int = SCROLL_MAX_PIXELS,
+    interval: float = SCROLL_INTERVAL_DEFAULT,
+    settle: int = SCROLL_SETTLE_DEFAULT,
+    max_frames: int = SCROLL_MAX_FRAMES_DEFAULT,
+    source=None,
+    sleep=time.sleep,
+) -> tuple[CaptureResult, str, int]:
+    """Capture a long screenshot by sampling ``region`` while the content scrolls.
+
+    The loop grabs the region on a timer, drops samples that did not move, and
+    stitches the rest into one tall image
+    (:class:`shotquill.stitch.ScrollAccumulator`). It stops when the view settles
+    for ``settle`` samples (reached the bottom / the scroll stopped), when the
+    stitched height would exceed ``max_height`` or ``max_pixels``, or at the
+    ``max_frames`` safety cap. The pixel limit uses the first captured frame's
+    physical width, so wide and HiDPI regions receive a lower effective height.
+
+    The user scrolls the selected area while the loop samples it. The backend must
+    support repeated capture of the same region; the Wayland Screenshot portal only
+    brokers isolated stills and is rejected before it prompts.
+
+    Like a fullscreen / region grab it captures a whole rectangle, so an enforcing
+    allowlist refuses it (its "only these apps" contract cannot be honoured for a
+    region of everything). A blocklisted window overlapping the region is redacted
+    out of every sampled frame, exactly as it is for a one-shot region grab.
+
+    ``source`` (an iterable of ``QImage`` or ``CaptureResult``) and ``sleep`` are
+    injection points for tests; in normal use the loop builds frames from
+    ``capturer.capture_region``. Returns ``(result, target, frame_count)`` to mirror
+    :func:`perform_capture` and keep all front-end post-processing available.
+    """
+    from shotquill.imaging import qimage_to_result, result_to_qimage
+    from shotquill.stitch import ScrollAccumulator, StitchError
+
+    if not getattr(capturer, "supports_repeated_region_capture", True):
+        raise CapabilityUnsupported(
+            "scrolling capture",
+            "the Wayland Screenshot portal provides only a single still; "
+            "continuous capture needs ScreenCast/PipeWire support",
+        )
+
+    if blocklist is None:
+        blocklist = active_blocklist()
+    if allowlist is None:
+        allowlist = active_allowlist()
+    if allowlist:
+        _refuse_whole_screen_under_allowlist("scrolling", via=via)
+
+    target = f"scrolling region {region.x},{region.y},{region.width},{region.height}"
+
+    def _live_source():
+        while True:
+            windows = None
+            if blocklist:
+                # Resolve policy before grabbing raw pixels; a failed enumeration
+                # must never degrade into an unredacted frame.
+                windows = _require_blocklist_enumeration(capturer, target, via=via)
+            result = capturer.capture_region(region)
+            if blocklist:
+                # Same protection as a one-shot region grab: paint out any
+                # blocklisted window overlapping the region before it is stitched.
+                result = _redact_blocked(
+                    result,
+                    capturer,
+                    blocklist,
+                    origin=(region.x, region.y),
+                    target=target,
+                    via=via,
+                    windows=windows,
+                )
+            yield result
+            sleep(interval)
+
+    frames_iter = iter(source) if source is not None else _live_source()
+
+    accumulator = ScrollAccumulator(
+        max_height=min(max_height, SCROLL_MAX_HEIGHT_HARD_LIMIT),
+        max_pixels=max_pixels,
+        settle=settle,
+        max_frames=max_frames,
+        start_frames=SCROLL_START_FRAMES_DEFAULT,
+    )
+    scale: float | None = None
+    for frame in frames_iter:
+        if isinstance(frame, CaptureResult):
+            if scale is None:
+                scale = frame.scale
+            elif frame.scale != scale:
+                raise ScrollingCaptureError(
+                    "capture scale changed while scrolling; the frames cannot be aligned"
+                )
+            image = result_to_qimage(frame)
+        else:
+            image = frame
+            if scale is None:
+                scale = 1.0
+        try:
+            keep_sampling = accumulator.add(image)
+        except StitchError as exc:
+            raise ScrollingCaptureError(str(exc)) from exc
+        if not keep_sampling:
+            break
+
+    stitched = accumulator.result()
+    result = qimage_to_result(
+        stitched, scale if scale is not None else 1.0, origin=(region.x, region.y)
+    )
+
+    return result, target, accumulator.frame_count
 
 
 def perform_capture(

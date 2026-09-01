@@ -16,16 +16,27 @@ import shlex
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, QRect, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QEvent, QObject, QProcess, QRect, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QIcon,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog, QSystemTrayIcon
 
 from shotquill import __version__, debug_log, headless, permissions, redact, uninstall
 from shotquill import allowlist as al
 from shotquill import blocklist as bl
 from shotquill.autostart import get_manager as get_autostart_manager
+from shotquill.capture.base import Rect
 from shotquill.config import Config, human_readable_hotkey
 from shotquill.desktop_id import LINUX_GUI_DESKTOP_FILE_NAME
 from shotquill.headless import get_capturer
@@ -33,10 +44,17 @@ from shotquill.hotkeys import get_manager as get_hotkey_manager
 from shotquill.hotkeys.base import HotkeyUnavailable
 from shotquill.i18n import set_language, t
 from shotquill.imaging import result_to_qimage
+from shotquill.stitch import (
+    NoScrollingDetected,
+    ScrollAccumulator,
+    ScrollAlignmentError,
+    StitchError,
+)
 from shotquill.ui.editor import EditorWindow, RegionContext
 from shotquill.ui.editor_core import EditorCoreMixin
 from shotquill.ui.feedback import CaptureFeedback
 from shotquill.ui.pinned import PinnedWindow
+from shotquill.ui.scrolling_status import ScrollingStatus
 from shotquill.ui.settings import SettingsDialog
 from shotquill.ui.smart_overlay import SmartOverlay, present_overlay
 
@@ -157,6 +175,23 @@ class _HotkeyBridge(QObject):
     fullscreen_requested = Signal()
 
 
+@dataclass
+class _ScrollSession:
+    """One in-flight long-screenshot capture: its timer, growing stitch, framed
+    region, and the blocklist snapshot used to redact each sampled frame.
+
+    Bundled so the lifecycle is atomic — set as one ``self._scroll`` and torn down
+    in one place — rather than four parallel attributes that must move in lockstep.
+    """
+
+    timer: QTimer
+    accumulator: ScrollAccumulator
+    status: ScrollingStatus
+    rect: Rect
+    blocklist: object
+    operation_id: str
+
+
 class _UninstallProbeBridge(QObject):
     """Returns slow installer inspection results to the Qt thread."""
 
@@ -203,6 +238,7 @@ class ShotquillApp(QObject):
         self._uninstall_interaction_suspended = False
         self._capture_actions: tuple[QAction, ...] = ()
         self._quit_action: QAction | None = None
+        self._scrolling_action: QAction | None = None
         self._pending_permission_prompt: str | None = None
         # Blocklisted windows on screen for the current smart-capture session
         # (id → window); refused on click, skipped in the hover preview.
@@ -218,6 +254,9 @@ class ShotquillApp(QObject):
         self._allowlist = al.Allowlist()
         self._smart_screenshot = None
         self._smart_geometry = None
+        # The live long-screenshot session, set up by _scrolling_region_selected and
+        # driven by a QTimer tick; ``None`` when no scroll capture is in flight.
+        self._scroll: _ScrollSession | None = None
         self._current_debug_id: str | None = None
         self._smart_debug_id: str | None = None
 
@@ -257,9 +296,12 @@ class ShotquillApp(QObject):
         smart.triggered.connect(self._capture_smart)
         fullscreen = QAction(f"{t('menu.fullscreen')}\t{fullscreen_key}", menu)
         fullscreen.triggered.connect(self._capture_fullscreen)
+        scrolling = QAction(t("menu.scrolling"), menu)
+        scrolling.triggered.connect(self._capture_scrolling)
         captures_enabled = not self._uninstall_interaction_suspended
         smart.setEnabled(captures_enabled)
         fullscreen.setEnabled(captures_enabled)
+        scrolling.setEnabled(captures_enabled)
         open_folder = QAction(t("menu.open_folder"), menu)
         open_folder.triggered.connect(self._open_save_folder)
         settings = QAction(t("menu.settings"), menu)
@@ -272,6 +314,7 @@ class ShotquillApp(QObject):
 
         menu.addAction(smart)
         menu.addAction(fullscreen)
+        menu.addAction(scrolling)
         menu.addSeparator()
         menu.addAction(open_folder)
         menu.addAction(settings)
@@ -281,8 +324,23 @@ class ShotquillApp(QObject):
 
         self._tray.setContextMenu(menu)
         self._menu = menu  # keep a reference
-        self._capture_actions = (smart, fullscreen)
+        self._capture_actions = (smart, fullscreen, scrolling)
+        self._scrolling_action = scrolling
+        self._set_scrolling_action(self._scroll is not None)
         self._quit_action = quit_action
+
+    def _set_scrolling_action(self, active: bool) -> None:
+        """Make the tray action double as a visible finish/progress affordance."""
+        action = self._scrolling_action
+        if action is None:
+            return
+        if active:
+            frames = self._scroll.accumulator.frame_count if self._scroll is not None else 0
+            action.setText(f"{t('menu.scrolling_finish')} · {frames}")
+            self._tray.setToolTip(t("tray.scrolling_progress").format(frames=frames))
+        else:
+            action.setText(t("menu.scrolling"))
+            self._tray.setToolTip("ShotQuill")
 
     def _request_quit(self) -> None:
         """Keep the app alive until the uninstall coordinator is ready."""
@@ -377,6 +435,8 @@ class ShotquillApp(QObject):
     def _unshelve_settings_dialog(self) -> None:
         if not self._settings_shelved:
             return
+        if self._scroll is not None:
+            return  # long capture is still sampling; keep ShotQuill out of its frames
         if any(isinstance(window, SmartOverlay) for window in self._windows):
             return  # another capture overlay is still up; its close retries
         self._settings_shelved = False
@@ -387,6 +447,8 @@ class ShotquillApp(QObject):
     def _capture_fullscreen(self) -> None:
         if self._uninstall_interaction_suspended:
             return
+        if self._scroll is not None:
+            self._cancel_scrolling(notify=False)
         operation_id = debug_log.new_operation_id("capture")
         previous = self._current_debug_id
         self._current_debug_id = operation_id
@@ -425,12 +487,37 @@ class ShotquillApp(QObject):
 
     @Slot()
     def _capture_smart(self) -> None:
+        if self._scroll is not None:
+            self._cancel_scrolling(notify=False)
+        self._open_smart_overlay(scrolling=False)
+
+    @Slot()
+    def _capture_scrolling(self) -> None:
+        """Long screenshot: frame a region, then sample while the user scrolls."""
+        if self._scroll is not None:
+            self._finish_scrolling()
+            return
+        if self._uninstall_interaction_suspended:
+            return
+        if self._is_wayland_platform() or not getattr(
+            self._capturer, "supports_repeated_region_capture", True
+        ):
+            reason = (
+                "the Wayland Screenshot portal provides only one still; continuous "
+                "capture needs ScreenCast/PipeWire support"
+            )
+            self._notify(t("notify.scrolling_unavailable").format(reason=reason))
+            return
+        self._open_smart_overlay(scrolling=True)
+
+    def _open_smart_overlay(self, *, scrolling: bool) -> None:
         if self._uninstall_interaction_suspended:
             return
         operation_id = debug_log.new_operation_id("capture")
         self._current_debug_id = operation_id
         self._smart_debug_id = operation_id
-        _LOG.debug("op=%s capture_smart start", operation_id)
+        mode = "scrolling" if scrolling else "smart"
+        _LOG.debug("op=%s capture_%s start", operation_id, mode)
         self._shelve_settings_dialog()
         blocklist = self._load_blocklist_or_abort()
         if blocklist is None:
@@ -494,16 +581,22 @@ class ShotquillApp(QObject):
             screenshot,
             geometry,
             windows,
-            window_preview=self._window_preview_image,
+            window_preview=None if scrolling else self._window_preview_image,
             hover_switch_delay_ms=self._config.hover_switch_delay_ms(),
+            region_only=scrolling,
         )
         # Region captures carry the full screenshot along so the editor can
         # keep the crop adjustable (arrow-key nudging) until annotation starts.
         # Region and full-screen go through guarded handlers that refuse the
         # grab when the allowlist is on (only specific apps may be captured).
-        overlay.region_selected.connect(self._smart_region_selected)
-        overlay.window_selected.connect(self._capture_window_image)
-        overlay.fullscreen_selected.connect(self._smart_fullscreen_selected)
+        if scrolling:
+            # The overlay itself is region-only: clicks stay in place and its
+            # persistent prompt explains that releasing a drag starts the run.
+            overlay.region_selected.connect(self._scrolling_region_selected)
+        else:
+            overlay.region_selected.connect(self._smart_region_selected)
+            overlay.window_selected.connect(self._capture_window_image)
+            overlay.fullscreen_selected.connect(self._smart_fullscreen_selected)
         self._track(overlay)
         # After _track: _forget must drop the overlay from _windows first, so
         # the unshelve check doesn't still count the dying overlay as alive.
@@ -605,6 +698,196 @@ class ShotquillApp(QObject):
             return
         _LOG.debug("op=%s smart_fullscreen deliver", self._smart_debug_id)
         self._deliver_capture(self._smart_screenshot, self._smart_geometry)
+
+    def _scrolling_needs_region(self, *args) -> None:
+        """A window / full-screen pick can't frame a scroll; ask for a drag.
+
+        Accepts ``*args`` so it can serve both overlay signals (``window_selected``
+        carries id + rect, ``fullscreen_selected`` carries nothing)."""
+        self._notify(t("notify.scrolling_needs_region"))
+
+    def _scrolling_region_selected(self, image: QImage, rect: QRect) -> None:
+        """Begin sampling a framed region while the user scrolls it manually."""
+        # A stale timer must not survive a second selection, but Settings should
+        # remain hidden while the replacement session is prepared.
+        self._end_scrolling(restore_settings=False)
+        if self._allowlist:
+            self._notify(t("notify.allowlist_whole_screen"))
+            return
+        if not getattr(self._capturer, "supports_repeated_region_capture", True):
+            self._notify(
+                t("notify.scrolling_unavailable").format(
+                    reason="the capture backend only provides isolated still images"
+                )
+            )
+            return
+        blocklist = self._load_blocklist_or_abort()
+        if blocklist is None:
+            return
+        operation_id = self._smart_debug_id or debug_log.new_operation_id("scrolling")
+        timer = QTimer(self)
+        timer.setInterval(int(headless.SCROLL_INTERVAL_DEFAULT * 1000))
+        timer.timeout.connect(self._scrolling_tick)
+        status = ScrollingStatus(QRect(rect))
+        self._scroll = _ScrollSession(
+            timer=timer,
+            accumulator=ScrollAccumulator(
+                max_height=self._config.scrolling_max_height(),
+                max_pixels=headless.SCROLL_MAX_PIXELS,
+                settle=None,
+                max_frames=headless.SCROLL_MAX_FRAMES_DEFAULT,
+                start_frames=None,
+            ),
+            status=status,
+            rect=Rect(rect.x(), rect.y(), rect.width(), rect.height()),
+            blocklist=blocklist,
+            operation_id=operation_id,
+        )
+        status.finish_requested.connect(self._finish_scrolling)
+        self._app.installEventFilter(self)
+        self._set_scrolling_action(True)
+        status.present()
+        # The first tick waits one interval, which also lets the overlay tear down
+        # so the grab sees the page rather than the dimmed overlay.
+        timer.start()
+
+    def _scrolling_tick(self) -> None:
+        """Sample, policy-check, stitch, and advance one live scroll frame."""
+        session = self._scroll
+        if session is None:
+            return
+        previous = self._current_debug_id
+        self._current_debug_id = session.operation_id
+        status_hidden = False
+        try:
+            status_hidden = session.status.suspend_for_capture()
+            if status_hidden:
+                # Flush the hide to the window server before either enumerating
+                # windows or grabbing pixels. User input processed here may
+                # cancel the run, so re-check the session before continuing.
+                self._app.processEvents()
+                if self._scroll is not session:
+                    return
+            # Enforce the blocklist before raw pixels are grabbed. None means
+            # enumeration failed and _blocked_on_screen already notified the user.
+            blocked = self._blocked_on_screen(session.blocklist)
+            if blocked is None:
+                self._end_scrolling()
+                return
+            result = self._capturer.capture_region(session.rect)
+            if blocked:
+                result, _ = redact.redact_bounds(
+                    result,
+                    (session.rect.x, session.rect.y),
+                    [window.bounds for window in blocked],
+                )
+            keep_going = session.accumulator.add(result_to_qimage(result))
+            session.status.set_progress(session.accumulator.frame_count)
+            self._set_scrolling_action(True)
+            if keep_going:
+                return
+            # Manual capture must never finish on its own. The accumulator still
+            # enforces bounded memory/time, so pause its timer at the limit and
+            # leave the partial result plus Finish/Cancel controls in place.
+            session.timer.stop()
+            session.status.set_limit_reached(session.accumulator.frame_count)
+            _LOG.debug(
+                "op=%s scrolling paused safety_limit frames=%s",
+                session.operation_id,
+                session.accumulator.frame_count,
+            )
+            return
+        except ScrollAlignmentError as exc:
+            # A large wheel step can temporarily leave no shared rows. Keep the
+            # last valid frame and continue sampling so scrolling back restores
+            # alignment instead of discarding the entire manual session.
+            _LOG.debug("op=%s scrolling alignment pending error=%s", session.operation_id, exc)
+            session.status.set_alignment_lost(session.accumulator.frame_count)
+            self._set_scrolling_action(True)
+            return
+        except NoScrollingDetected:
+            _LOG.exception("op=%s scrolling did not start", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_no_motion"))
+            return
+        except StitchError as exc:
+            _LOG.exception("op=%s scrolling stitch failed", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_failed").format(error=exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - GUI boundary reports runtime failures
+            _LOG.exception("op=%s scrolling capture failed", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_failed").format(error=exc))
+            return
+        finally:
+            # Keep an overlapping HUD out of the sampled pixels.
+            if status_hidden and self._scroll is session:
+                session.status.resume_after_capture()
+            self._current_debug_id = previous
+
+    def _finish_scrolling(self) -> None:
+        """Finish a manually scrolled session and deliver the stitched image."""
+        session = self._scroll
+        if session is None:
+            return
+        previous = self._current_debug_id
+        self._current_debug_id = session.operation_id
+        try:
+            stitched = session.accumulator.finish()
+        except NoScrollingDetected:
+            _LOG.exception("op=%s scrolling did not start", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_no_motion"))
+            return
+        except StitchError as exc:
+            _LOG.exception("op=%s scrolling stitch failed", session.operation_id)
+            self._end_scrolling()
+            self._notify(t("notify.scrolling_failed").format(error=exc))
+            return
+        finally:
+            self._current_debug_id = previous
+
+        self._end_scrolling()
+        self._current_debug_id = session.operation_id
+        try:
+            self._deliver_capture(stitched)
+        finally:
+            self._current_debug_id = previous
+
+    def _cancel_scrolling(self, *, notify: bool = True) -> None:
+        """Cancel an active long screenshot through the same teardown path."""
+        if self._scroll is None:
+            return
+        self._end_scrolling()
+        if notify:
+            self._notify(t("notify.scrolling_cancelled"))
+
+    def _end_scrolling(self, *, restore_settings: bool = True) -> None:
+        """Tear down the timer and restore the long-capture UI state."""
+        session = self._scroll
+        if session is None:
+            return
+        self._scroll = None
+        session.timer.stop()
+        session.timer.deleteLater()
+        self._app.removeEventFilter(self)
+        session.status.close()
+        session.status.deleteLater()
+        self._set_scrolling_action(False)
+        if restore_settings:
+            self._unshelve_settings_dialog()
+
+    def eventFilter(self, watched, event) -> bool:
+        if (
+            self._scroll is not None
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+        ):
+            self._cancel_scrolling()
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
 
     def _capture_window_image(self, window_id: int, origin: QRect) -> None:
         operation_id = self._smart_debug_id or debug_log.new_operation_id("capture")
@@ -1307,6 +1590,7 @@ class ShotquillApp(QObject):
         self._smart_geometry = None
 
     def shutdown(self) -> None:
+        self._end_scrolling(restore_settings=False)  # stop any in-flight timer
         self._hotkeys.stop()
 
 

@@ -161,6 +161,7 @@ def test_pkg_builder_replaces_the_dmg_container():
     assert 'MACOS_MIN_VERSION="13.0"' in script
     assert '-mmacosx-version-min="$MACOS_MIN_VERSION"' in script
     assert "LSMinimumSystemVersion" in script
+    assert "NSAccessibilityUsageDescription" not in script
     assert 'codesign --force --sign - "$cli_scripts/postinstall"' in script
 
 
